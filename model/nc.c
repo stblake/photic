@@ -20,7 +20,6 @@ void write_nc(char *file, float **grid, int ncols, int nrows,
 	float add_offset, scale_factor, spval_float = spval;
 	static char data_type[] = "regular gridded data",
 		datum[] = "geographical coordinates, WGS84 projection",
-		copyright[] = "(C) Neptune Remote Sensing, 2017.",
 		lon_name[] = "longitude", 
 		lat_name[] = "latitude",
 		lon_units[] = "degrees_east",
@@ -49,8 +48,6 @@ void write_nc(char *file, float **grid, int ncols, int nrows,
 	retval = nc_put_att_text(ncid, NC_GLOBAL, "filename", strlen(file), file);
 	if (retval) ERR(retval);
 	retval = nc_put_att_text(ncid, NC_GLOBAL, "data_type", strlen(data_type), data_type);
-	if (retval) ERR(retval);
-	retval = nc_put_att_text(ncid, NC_GLOBAL, "copyright", strlen(copyright), copyright);
 	if (retval) ERR(retval);
 
 // Define dimensions. 
