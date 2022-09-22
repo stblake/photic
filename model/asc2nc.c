@@ -20,9 +20,6 @@ int main(int argc, char **argv) {
   float **grid, *lons, *lats;
   char inputfile[MXFILE], outputfile[MXFILE];
 
-  printf("\n\n      -- DigiCharts PTY LTD -- \n\n\n");
-  printf("This program is the property of DigiCharts PTY LTD.\n\n");
-
 
 // Read command line inputs. 
 
