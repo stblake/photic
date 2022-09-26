@@ -1,9 +1,9 @@
-# A Physics-Based Satellite-Derived Bathymetry Model
+# A Physics-Based, Satellite-Derived Bathymetry Model
 
 
 ## About
 
-_photic_ is a C implementation of the model as described in (Blake, 2020). 
+_photic_ is a C implementation of the physics-based, satellite-derived bathymetry model as described in (Blake, 2020). 
 
 ## Installation & Dependencies 
 
