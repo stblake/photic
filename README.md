@@ -14,8 +14,6 @@ https://github.com/antirez/linenoise
 ## Features 
 
 
-## Model 
-
 
 ## References
 
