@@ -2905,8 +2905,6 @@ void samodel_Rrs(
 
 	bb = b_bw + b_p;
 
-#if 0
-
 	// Model of Lee et al.
 
 	// Compute u and K. 
@@ -2935,35 +2933,6 @@ void samodel_Rrs(
 
 	M = sec_theta_sun + DuB*sec_theta_view;
 	rrs_B = rho/PI*exp(-M*K*H); // Contribution of the bottom. 
-
-#else 
-
-	// Model of Albert and Mobley 
-
-	// Compute downward and upward diffuse attenutation coefficients. 
-
-	u = bb/(a + bb);
-	kd = 1.0546*(a + bb)*sec_theta_sun;
-	// kd = (a + bb)*sec_theta_sun;
-
-	md->K[k_scene][k_band] = kd;
-
-	kup_water  = (a + bb)*pow(1.0 + u, 3.5421)*(1.0 - 0.2786*sec_theta_sun)*sec_theta_view;
-	kup_bottom = (a + bb)*pow(1.0 + u, 2.2658)*(1.0 + 0.0577*sec_theta_sun)*sec_theta_view;
-
-	// Compute rrs_dp - the remote sensing reflectance for optically deep water.
-
-	f  = 0.0512*(1.0 + 4.6659*u - 7.8387*pow(u,2) + 5.4571*pow(u,3)); // neglecting wind speed. 
-	f *= (1.0 + 0.1098*sec_theta_sun)*(1.0 + 0.4021*sec_theta_view);
-	rrs_dp = u*f;
-	md->rrs_dp[k_region][k_scene][k_band] = rrs_dp;
-
-	rrs_C = rrs_dp*(1.0 - 1.1576*exp(-(kd + kup_water)*H));
-	// rrs_C = rrs_dp*(1.0 - exp(-(kd + kup_water)*H));
-
-	rrs_B = 1.0389*rho/PI*exp(-(kd + kup_bottom)*H);
-	// rrs_B = rho/PI*exp(-(kd + kup_bottom)*H);
-#endif
 
 	md->rrs_bottom[k_region][k_scene][k_band] = rrs_B;
 	// printf("\nrrs_bottom = %.7f\n", md->rrs_bottom[k_region][k_scene][k_band]);
