@@ -3,6 +3,7 @@
 
 ## About
 
+_photic_ is a C implementation of the model as described in (Blake, 2020). 
 
 ## Installation & Dependencies 
 
