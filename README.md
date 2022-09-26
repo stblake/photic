@@ -4,13 +4,17 @@
 ## About
 
 
-## Installation 
+## Installation & Dependencies 
 
+https://sites.astro.caltech.edu/~tjp/pgplot/
+
+https://github.com/antirez/linenoise
 
 ## Features 
 
 
 ## Model 
+
 
 ## References
 
