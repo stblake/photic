@@ -1,4 +1,4 @@
-# A Physics-Based, Satellite-Derived Bathymetry Model
+# _photic_ - A Physics-Based, Satellite-Derived Bathymetry Model
 
 
 ## About
@@ -16,6 +16,21 @@ https://github.com/acolite/acolite
 ## Features 
 
 
+## Open Data from _photic_
+
+### Western Australia - Exmouth to Whim Creek 
+
+### Western Australia - Exmouth Gulf
+
+### Western Australia - Murion Island
+
+### UAE - Abu Dhabi to Dubai
+
+### UAE - Mubarraz Island to Abu Dhabi 
+
+### Qatar - Eastern Qatar to Sir Baniyas Island
+
+### Qatar, Bahrain and Saudi Arabia
 
 ## References
 
