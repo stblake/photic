@@ -13,11 +13,19 @@ _photic_ is a C implementation of the physics-based, satellite-derived bathymetr
 
 ## Installation & Dependencies 
 
+PGPLOT can be installed via macports with `port install pgplot`, or compiled from source, which can be downloaded from
+
 https://sites.astro.caltech.edu/~tjp/pgplot/
+
+Alternatively, Giza can be used as a drop-in replacement for the ageing PGPLOT library:
 
 https://github.com/danieljprice/giza
 
+_photic_ uses the _linenoise_ library:
+
 https://github.com/antirez/linenoise
+
+
 
 https://github.com/acolite/acolite
 
