@@ -9,6 +9,8 @@ _photic_ is a C implementation of the physics-based, satellite-derived bathymetr
 
 https://sites.astro.caltech.edu/~tjp/pgplot/
 
+https://github.com/danieljprice/giza
+
 https://github.com/antirez/linenoise
 
 https://github.com/acolite/acolite
