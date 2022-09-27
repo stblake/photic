@@ -5,6 +5,12 @@
 
 _photic_ is a C implementation of the physics-based, satellite-derived bathymetry model as described in (Blake, 2020). 
 
+## Model
+
+
+## Features 
+
+
 ## Installation & Dependencies 
 
 https://sites.astro.caltech.edu/~tjp/pgplot/
@@ -14,9 +20,6 @@ https://github.com/danieljprice/giza
 https://github.com/antirez/linenoise
 
 https://github.com/acolite/acolite
-
-## Features 
-
 
 ## Open Data from _photic_
 
