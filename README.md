@@ -13,6 +13,8 @@ _photic_ is a C implementation of the physics-based, satellite-derived bathymetr
 
 ## Installation & Dependencies 
 
+NetCDF developer libraries can be installed via brew with `brew install netcdf`. 
+
 PGPLOT can be installed via macports with `port install pgplot`, or compiled from source, which can be downloaded from
 
 https://sites.astro.caltech.edu/~tjp/pgplot/
