@@ -21,11 +21,15 @@ Alternatively, Giza can be used as a drop-in replacement for the ageing PGPLOT l
 
 https://github.com/danieljprice/giza
 
-_photic_ uses the _linenoise_ library:
+_photic_ uses the _linenoise_ library for the repl:
 
 https://github.com/antirez/linenoise
 
+For interactive graphics (on a mac) we need to install XQuartz:
 
+https://www.xquartz.org/
+
+All experiments with _photic_ have used the excellent atmospheric correction software, ACOLITE: 
 
 https://github.com/acolite/acolite
 
