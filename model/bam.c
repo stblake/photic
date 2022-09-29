@@ -1,14 +1,13 @@
 /*
  *
  *
- *                                   B A M
- *                                   -----
+ *                              P H O T I C
+ *                              -----------
  *
  *
  *    A Multi-Spectral, Semi-Analytical, Shallow Water, Bathymetry Model.
  * 
  *
- *                    (c) 2017 - 2019 by Sam Blake 
  *
  *
  * 
@@ -134,22 +133,6 @@
 /*
 
   TODOs: 
-
-        Version 1.x
-        -----------
-          * Update documentation. 
-          * Help menu. 
-          * COMPUTE LSM and LSB should return histograms. 
-          * Add READ LANDSAT METADATA /file/. This routine reads in SUN_AZIMUTH, SUN_ELEVATION, 
-              EARTH_SUN_DISTANCE, RADIANCE_MULT_BAND_1, RADIANCE_MULT_BAND_2, ..., RADIANCE_ADD_BAND_1, 
-              RADIANCE_ADD_BAND_2, ..., QUANTIZE_CAL_MIN_BAND_1, QUANTIZE_CAL_MIN_BAND_2, ..., 
-              QUANTIZE_CAL_MAX_BAND_1, QUANTIZE_CAL_MAX_BAND_2, ...RADIANCE_MAXIMUM_BAND_1, RADIANCE_MAXIMUM_BAND_2, 
-              ..., RADIANCE_MINIMUM_BAND_1, RADIANCE_MINIMUM_BAND_2, ... . Thus far just the base code has been 
-              setup. The actual io code is still missing. 
-
-        Version 2.0
-        -----------
-          * SA (Lee et al) model. 
           * Store arrays (internally within memory of BAM) as short 
               ints with scale_factor and add_offset. This will decrease RAM
               consumption by 50%. Then arrays are accessed with something like: 
@@ -159,13 +142,6 @@
 
               Furthermore, they could be stored at 8-bit ints (unsigned char or uint8_t with -std=c99) with further 
               significant reductions in memory. 
-
-        Version 3.0
-        -----------
-          * HYDROLIGHT radiative transfer model (RTM). 
-          * Reverse table lookup from RTM (a la "Interpretation of hyperspectral remote-sensing imagery by 
-              spectrum matching and look-up tables", Mobley et al, 10 June 2005   Vol. 44, No. 17   APPLIED OPTICS). 
-          * Open source graphics (move away from PGPLOT to Giza (developed at Monash!!)). 
 
 */
 
@@ -212,7 +188,6 @@ void run_model_mueller();
 void run_model_mueller_secchi();
 void run_model_lee_semi_analytical();
 void run_model_morel();
-void run_model_stat_analytical();
 void run_model_lee_kd();
 void run_model_lee_zsd();
 void random_search();
@@ -259,9 +234,8 @@ int main(int argc, char **argv) {
 
   int n, ret_code;
 
-  printf("\n\n                               --    B A M    -- \n\n\n");
-  printf("      A Multi-Spectral, Semi-Analytical, Shallow Water, Bathymetry Model.\n\n\
-                     (c) 2017 - 2019 by Sam Blake \n\n");
+  printf("\n\n                                   --    P H O T I C    -- \n\n\n");
+  printf("      A Multi-Spectral, Multi-Temporal, Semi-Analytical, Shallow Water, Bathymetry Model.\n\n");
   printf("Version %s (%s)\n\n", BAM_VERSION, __TIMESTAMP__);
 
   printf("\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR \n\
@@ -3338,223 +3312,10 @@ void run_model() {
     run_model_lee_zsd();
   } else if (strcmp(parsed[1], "Lee_Semi_Analytical") == 0) {
     run_model_lee_semi_analytical();
-  } else if (strcmp(parsed[1], "Statistical_Analytical") == 0) {
-    run_model_stat_analytical();
   } else {
     printf("\nERROR: unknown model name '%s'.\n", parsed[1]);
     return ;    
   }
-}
-
-
-
-// MODEL Statistical_Analytical IN /scene 1/ /scene 2/ ... OUT /bathymetry grid/ /bathymetry error grid/ 
-//    /bottom type grid/ /model error grid/ RATIO N /numerator band 1/ /numerator band 2/ ... D /denominator band 1/ 
-//    /denominator band 2/ ...  [optional] THRESHOLD /bottom match threshold/
-
-
-void run_model_stat_analytical() {
-
-  int k, n, m, nrows, ncols, nscenes, nbands, ps_in[MAX_GRIDS], ps_z, ps_dz, ps_mink,
-    ps_bottom, ps_error, numerator_indexes[MAX_GRIDS], denominator_indexes[MAX_GRIDS], 
-    n_numerator_indexes, n_denominator_indexes;
-  float threshold;
-  bool success; 
-
-  // Has the bottom spectra been specified? 
-
-  if (n_bottom_spectra == 0) {
-    printf("\n\nWARNING: bottom spectra not specified! \n\n");
-    return ;
-  }
-
-  // Can we allocate the 3 new grids? 
-
-  if (n_grids_in_use + 3 >= MAX_GRIDS) {
-    printf("\nERROR: unable to store grids.\n");
-    return ;
-  }    
-
-  // Input scenes. 
-
-  if (strcmp(parsed[2], "IN") != 0) {
-    printf("\nERROR: MODEL Statistical_Analytical IN /scene 1/ /scene 2/ ... OUT /bathymetry grid/ \
-/bathymetry error grid/ /bottom type grid/ /model error grid/ RATIO N /numerator band 1/ /numerator band 2/ ... D \
-/denominator band 1/ /denominator band 2/ ... \n");
-    return ;
-  }  
-
-  nscenes = 0;
-  k = 3;
-
-  while (k < MAX_SCENES && strcmp(parsed[k], "OUT") != 0) {
-
-    success = parse_old_scene(&ps_in[nscenes++], k++);
-    if (! success) return ;
-  }
-
-  // Check input scenes are spatially commensurate. 
-
-  for (n = 0; n < nscenes; n++) {
-    for (m = 0; m < nscenes; m++) {
-      if (! commensurate_grids(
-              gridded_data[scene_data[ps_in[n]].band_indexes[0]], 
-              gridded_data[scene_data[ps_in[m]].band_indexes[0]])) {
-        printf("\nERROR: input grids are not commensurate.\n");
-        return ; 
-      }
-    }
-  }
-
-  // Output grids. 
-
-  if (strcmp(parsed[k], "OUT") != 0) {
-    printf("\nERROR: MODEL Statistical_Analytical IN /scene 1/ /scene 2/ ... OUT /bathymetry grid/ \
-/bathymetry error grid/ /min K grid/ /bottom type grid/ /model error grid/ RATIO N /numerator band 1/ /numerator band 2/ ... D \
-/denominator band 1/ /denominator band 2/ ... \n");
-    return ;
-  }
-
-  success = parse_new_grid(&ps_z, ++k);
-  if (! success) return ;
-
-  success = parse_new_grid(&ps_dz, ++k);
-  if (! success) return ;
-
-  success = parse_new_grid(&ps_mink, ++k);
-  if (! success) return ;
-
-  success = parse_new_grid(&ps_bottom, ++k);
-  if (! success) return ;
-
-  success = parse_new_grid(&ps_error, ++k);
-  if (! success) return ;
-
-  k++;
-
-  // Read RATIO N and D. 
-
-  if (strcmp(parsed[k], "RATIO") != 0) {
-    printf("\nERROR: MODEL Statistical_Analytical IN /scene 1/ /scene 2/ ... OUT /bathymetry grid/ \
-/bathymetry error grid/ /bottom type grid/ /model error grid/ RATIO N /numerator band 1/ /numerator band 2/ ... D \
-/denominator band 1/ /denominator band 2/ ... \n");
-    return ; 
-  }
-
-  if (strcmp(parsed[++k], "N") != 0) {
-    printf("\nERROR: MODEL Statistical_Analytical IN /scene 1/ /scene 2/ ... OUT /bathymetry grid/ \
-/bathymetry error grid/ /bottom type grid/ /model error grid/ RATIO N /numerator band 1/ /numerator band 2/ ... D \
-/denominator band 1/ /denominator band 2/ ... \n");
-    return ; 
-  }
-
-  printf("\nN = ");
-  k++;
-  n_numerator_indexes = 0;
-  while (parsed[k][0] != '\0' && strcmp(parsed[k], "D") != 0) {
-    numerator_indexes[n_numerator_indexes++] = atoi(parsed[k++]);
-    printf("%d ", numerator_indexes[n_numerator_indexes - 1]);
-  }
-
-  if (strcmp(parsed[k], "D") != 0) {
-    printf("\nERROR: MODEL Statistical_Analytical IN /scene 1/ /scene 2/ ... OUT /bathymetry grid/ \
-/bathymetry error grid/ /bottom type grid/ /model error grid/ RATIO N /numerator band 1/ /numerator band 2/ ... D \
-/denominator band 1/ /denominator band 2/ ...\n");
-    return ; 
-  }
-
-  printf("\nD = ");
-  k++;
-  n_denominator_indexes = 0;
-  while (parsed[k][0] != '\0') {
-    denominator_indexes[n_denominator_indexes++] = atoi(parsed[k++]);
-    printf("%d ", denominator_indexes[n_denominator_indexes - 1]);
-  }
-
-  printf("\n");
-
-  // Allocate memory for output grids. 
-
-  float **z, **dz, **minK, **bottom, **model_error;
-
-  nrows = gridded_data[scene_data[ps_in[0]].band_indexes[0]].nrows;
-  ncols = gridded_data[scene_data[ps_in[0]].band_indexes[0]].ncols;
-
-  allocate_float_array_2d(&z, nrows, ncols);
-  meminuse += 1.0e-6*((float) nrows*ncols)*((float) sizeof(float));
-
-  allocate_float_array_2d(&dz, nrows, ncols);
-  meminuse += 1.0e-6*((float) nrows*ncols)*((float) sizeof(float));
-
-  allocate_float_array_2d(&minK, nrows, ncols);
-  meminuse += 1.0e-6*((float) nrows*ncols)*((float) sizeof(float));
-
-  allocate_float_array_2d(&bottom, nrows, ncols);
-  meminuse += 1.0e-6*((float) nrows*ncols)*((float) sizeof(float));  
-
-  allocate_float_array_2d(&model_error, nrows, ncols);
-  meminuse += 1.0e-6*((float) nrows*ncols)*((float) sizeof(float)); 
-
-  gridded_data[ps_z].array = z;
-  gridded_data[ps_z].ncols = ncols;
-  gridded_data[ps_z].nrows = nrows;
-  gridded_data[ps_z].wlon = gridded_data[scene_data[ps_in[0]].band_indexes[0]].wlon;
-  gridded_data[ps_z].elon = gridded_data[scene_data[ps_in[0]].band_indexes[0]].elon;
-  gridded_data[ps_z].slat = gridded_data[scene_data[ps_in[0]].band_indexes[0]].slat;
-  gridded_data[ps_z].nlat = gridded_data[scene_data[ps_in[0]].band_indexes[0]].nlat;
-  gridded_data[ps_z].cellsize = gridded_data[scene_data[ps_in[0]].band_indexes[0]].cellsize;
-  gridded_data[ps_z].nodata_value = gridded_data[scene_data[ps_in[0]].band_indexes[0]].nodata_value;  
-
-  gridded_data[ps_dz].array = dz;
-  gridded_data[ps_dz].ncols = ncols;
-  gridded_data[ps_dz].nrows = nrows;
-  gridded_data[ps_dz].wlon = gridded_data[scene_data[ps_in[0]].band_indexes[0]].wlon;
-  gridded_data[ps_dz].elon = gridded_data[scene_data[ps_in[0]].band_indexes[0]].elon;
-  gridded_data[ps_dz].slat = gridded_data[scene_data[ps_in[0]].band_indexes[0]].slat;
-  gridded_data[ps_dz].nlat = gridded_data[scene_data[ps_in[0]].band_indexes[0]].nlat;
-  gridded_data[ps_dz].cellsize = gridded_data[scene_data[ps_in[0]].band_indexes[0]].cellsize;
-  gridded_data[ps_dz].nodata_value = gridded_data[scene_data[ps_in[0]].band_indexes[0]].nodata_value;  
-
-  gridded_data[ps_mink].array = minK;
-  gridded_data[ps_mink].ncols = ncols;
-  gridded_data[ps_mink].nrows = nrows;
-  gridded_data[ps_mink].wlon = gridded_data[scene_data[ps_in[0]].band_indexes[0]].wlon;
-  gridded_data[ps_mink].elon = gridded_data[scene_data[ps_in[0]].band_indexes[0]].elon;
-  gridded_data[ps_mink].slat = gridded_data[scene_data[ps_in[0]].band_indexes[0]].slat;
-  gridded_data[ps_mink].nlat = gridded_data[scene_data[ps_in[0]].band_indexes[0]].nlat;
-  gridded_data[ps_mink].cellsize = gridded_data[scene_data[ps_in[0]].band_indexes[0]].cellsize;
-  gridded_data[ps_mink].nodata_value = gridded_data[scene_data[ps_in[0]].band_indexes[0]].nodata_value;  
-
-
-  gridded_data[ps_bottom].array = bottom;
-  gridded_data[ps_bottom].ncols = ncols;
-  gridded_data[ps_bottom].nrows = nrows;
-  gridded_data[ps_bottom].wlon = gridded_data[scene_data[ps_in[0]].band_indexes[0]].wlon;
-  gridded_data[ps_bottom].elon = gridded_data[scene_data[ps_in[0]].band_indexes[0]].elon;
-  gridded_data[ps_bottom].slat = gridded_data[scene_data[ps_in[0]].band_indexes[0]].slat;
-  gridded_data[ps_bottom].nlat = gridded_data[scene_data[ps_in[0]].band_indexes[0]].nlat;
-  gridded_data[ps_bottom].cellsize = gridded_data[scene_data[ps_in[0]].band_indexes[0]].cellsize;
-  gridded_data[ps_bottom].nodata_value = gridded_data[scene_data[ps_in[0]].band_indexes[0]].nodata_value; 
-
-  gridded_data[ps_error].array = model_error;
-  gridded_data[ps_error].ncols = ncols;
-  gridded_data[ps_error].nrows = nrows;
-  gridded_data[ps_error].wlon = gridded_data[scene_data[ps_in[0]].band_indexes[0]].wlon;
-  gridded_data[ps_error].elon = gridded_data[scene_data[ps_in[0]].band_indexes[0]].elon;
-  gridded_data[ps_error].slat = gridded_data[scene_data[ps_in[0]].band_indexes[0]].slat;
-  gridded_data[ps_error].nlat = gridded_data[scene_data[ps_in[0]].band_indexes[0]].nlat;
-  gridded_data[ps_error].cellsize = gridded_data[scene_data[ps_in[0]].band_indexes[0]].cellsize;
-  gridded_data[ps_error].nodata_value = gridded_data[scene_data[ps_in[0]].band_indexes[0]].nodata_value; 
-
-  // Call the model. 
-
-  rte_invert(
-    scene_data, gridded_data, ps_in, nscenes,
-    bottom_spectra, n_bottom_spectra, 
-    numerator_indexes, n_numerator_indexes, denominator_indexes, n_denominator_indexes,  
-    z, dz, minK, bottom, model_error);
-
-  return ;
 }
 
 
