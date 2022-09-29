@@ -31,6 +31,8 @@ For interactive graphics (on a mac) we need to install XQuartz:
 
 https://www.xquartz.org/
 
+Converting from LANDSAT and Sentinel-2 imagery into a _photic_-readable gridded file requires gdal, which can be installed via brew with `brew install gdal`. 
+
 All experiments with _photic_ have used the excellent atmospheric correction software, ACOLITE: 
 
 https://github.com/acolite/acolite
