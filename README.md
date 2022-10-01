@@ -58,6 +58,8 @@ DISCLAIMER! This should be obvious, but these data from _photic_ should not be u
 
 ### UAE - Mubarraz Island to Abu Dhabi 
 
+This study comprised $11408 \text{km}^2$ of optically shallow water. 
+
 ![Screenshot](abu_dhabi_to_mubarraz_island_viridis.jpg)
 
 ### Qatar - Eastern Qatar to Sir Baniyas Island
