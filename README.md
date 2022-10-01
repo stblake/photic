@@ -58,6 +58,10 @@ Each of these studies used multiple LANDSAT 8 images.
 
 ### UAE - Abu Dhabi to Dubai
 
+The modelled SDB comprised $3138$ $\text{km}^2$ at a horizontal resolution of 30m. 
+
+![Screenshot](dubai_to_abu_dhabi_viridis.jpg)
+
 ### UAE - Mubarraz Island to Abu Dhabi 
 
 The modelled SDB comprised $11408$ $\text{km}^2$ at a horizontal resolution of 30m. 
