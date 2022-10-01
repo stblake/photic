@@ -67,7 +67,7 @@ The modelled satellite-derived bathymetry comprised $4175$ $\text{km}^2$ at a ho
 The modelled satellite-derived bathymetry comprised $3138$ $\text{km}^2$ at a horizontal resolution of 30m. 
 
 <p align="center">
-  <img src="dubai_to_abu_dhabi_viridis.jpg" width="1200" title="UAE - Abu Dhabi to Dubai Satellite-Derived Bathymetry">
+  <img src="dubai_to_abu_dhabi_viridis.jpg" width="1000" title="UAE - Abu Dhabi to Dubai Satellite-Derived Bathymetry">
 </p>
 
 ### UAE - Mubarraz Island to Abu Dhabi 
