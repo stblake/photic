@@ -61,7 +61,7 @@ DISCLAIMER! This should be obvious, but these data from _photic_ should not be u
 ![Screenshot](abu_dhabi_to_mubarraz_island_viridis.jpg)
 
 <p align="center">
-  <img src="abu_dhabi_to_mubarraz_island_viridis.jpg" width="350" title="Abu Dhabi to Mubarraz Island">
+  <img src="abu_dhabi_to_mubarraz_island_viridis.jpg" width="800" title="Abu Dhabi to Mubarraz Island">
 </p>
 
 ### Qatar - Eastern Qatar to Sir Baniyas Island
