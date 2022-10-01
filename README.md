@@ -58,7 +58,7 @@ DISCLAIMER! This should be obvious, but these data from _photic_ should not be u
 
 ### UAE - Mubarraz Island to Abu Dhabi 
 
-![Screenshot](abu_dhabi_to_mubarraz_island_viridis)
+![Screenshot](abu_dhabi_to_mubarraz_island_viridis.jpg)
 
 ### Qatar - Eastern Qatar to Sir Baniyas Island
 
