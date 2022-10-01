@@ -46,6 +46,8 @@ https://github.com/acolite/acolite
 
 ## Open Data from _photic_
 
+DISCLAIMER! This should be obvious, but these data from _photic_ should not be used for navigation or for any other purpose relating to safety at sea or where commercial losses could occur.
+
 ### Western Australia - Exmouth to Whim Creek 
 
 ### Western Australia - Exmouth Gulf
