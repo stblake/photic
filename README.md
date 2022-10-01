@@ -48,6 +48,8 @@ https://github.com/acolite/acolite
 
 DISCLAIMER! This should be obvious, but these data from _photic_ should not be used for navigation or for any other purpose relating to safety at sea or where commercial losses could occur.
 
+Each of these studies used multiple LANDSAT 8 images.  
+
 ### Western Australia - Exmouth to Whim Creek 
 
 ### Western Australia - Exmouth Gulf
@@ -58,7 +60,7 @@ DISCLAIMER! This should be obvious, but these data from _photic_ should not be u
 
 ### UAE - Mubarraz Island to Abu Dhabi 
 
-This study used multiple LANDSAT 8 images. The modelled SDB comprised $11408$ $\text{km}^2$ at a horizontal resolution of 30m. 
+The modelled SDB comprised $11408$ $\text{km}^2$ at a horizontal resolution of 30m. 
 
 ![Screenshot](abu_dhabi_to_mubarraz_island_viridis.jpg)
 
