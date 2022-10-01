@@ -59,6 +59,12 @@ The modelled satellite-derived bathymetry comprised $11408$ $\text{km}^2$ at a h
 
 ### Qatar - Eastern Qatar to Sir Baniyas Island
 
+The modelled satellite-derived bathymetry comprised $14716$ $\text{km}^2$ at a horizontal resolution of 30m. 
+
+<p align="center">
+  <img src="H_qatar_east_viridis.jpg" width="1000" title="Eastern Qatar to Sir Baniyas Island Satellite-Derived Bathymetry">
+</p>
+
 ### Qatar, Bahrain and Saudi Arabia
 
 
