@@ -74,7 +74,9 @@ The modelled satellite-derived bathymetry comprised $3138$ $\text{km}^2$ at a ho
 
 The modelled satellite-derived bathymetry comprised $11408$ $\text{km}^2$ at a horizontal resolution of 30m. 
 
-![Screenshot](abu_dhabi_to_mubarraz_island_viridis.jpg)
+<p align="center">
+  <img src="abu_dhabi_to_mubarraz_island_viridis.jpg" width="1000" title="UAE - Abu Dhabi to Mubarraz Island Satellite-Derived Bathymetry">
+</p>
 
 ### Qatar - Eastern Qatar to Sir Baniyas Island
 
