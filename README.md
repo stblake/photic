@@ -58,7 +58,7 @@ DISCLAIMER! This should be obvious, but these data from _photic_ should not be u
 
 ### UAE - Mubarraz Island to Abu Dhabi 
 
-This study used multiple LANDSAT 8 images. The modelled optically shallow water comprised $11408$ $\text{km}^2$ at a horizontal resolution of 30m. 
+This study used multiple LANDSAT 8 images. The modelled SDB comprised $11408$ $\text{km}^2$ at a horizontal resolution of 30m. 
 
 ![Screenshot](abu_dhabi_to_mubarraz_island_viridis.jpg)
 
