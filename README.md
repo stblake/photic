@@ -68,6 +68,12 @@ The modelled satellite-derived bathymetry comprised $4175$ $\text{km}^2$ at a ho
 
 ### Western Australia - Murion Island
 
+The modelled satellite-derived bathymetry comprised $257$ $\text{km}^2$ at a horizontal resolution of 30m. (The image below has been rotated 90 degrees.)
+
+<p align="center">
+  <img src="murion_island_viridis.jpg" width="1000" title="Murion Island Satellite-Derived Bathymetry">
+</p>
+
 ### UAE - Abu Dhabi to Dubai
 
 The modelled satellite-derived bathymetry comprised $3138$ $\text{km}^2$ at a horizontal resolution of 30m. 
