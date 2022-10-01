@@ -22,7 +22,7 @@ Each of these studies used multiple LANDSAT 8 images.
 The modelled satellite-derived bathymetry comprised $17060$ $\text{km}^2$ at a horizontal resolution of 30m. 
 
 <p align="center">
-  <img src="pilbara_coast_viridis.jpg" width="1000" title="Pilbara Coast - Exmouth to Whim Creek Satellite-Derived Bathymetry">
+  <img src="pilbara_coast_viridis.jpg" width="800" title="Pilbara Coast - Exmouth to Whim Creek Satellite-Derived Bathymetry">
 </p>
 
 ### Western Australia - Exmouth Gulf
@@ -38,7 +38,7 @@ The modelled satellite-derived bathymetry comprised $4175$ $\text{km}^2$ at a ho
 The modelled satellite-derived bathymetry comprised $257$ $\text{km}^2$ at a horizontal resolution of 30m. (The image below has been rotated 90 degrees.)
 
 <p align="center">
-  <img src="murion_island_viridis.jpg" width="1000" title="Murion Island Satellite-Derived Bathymetry">
+  <img src="murion_island_viridis.jpg" width="800" title="Murion Island Satellite-Derived Bathymetry">
 </p>
 
 ### UAE - Abu Dhabi to Dubai
@@ -46,7 +46,7 @@ The modelled satellite-derived bathymetry comprised $257$ $\text{km}^2$ at a hor
 The modelled satellite-derived bathymetry comprised $3138$ $\text{km}^2$ at a horizontal resolution of 30m. 
 
 <p align="center">
-  <img src="dubai_to_abu_dhabi_viridis.jpg" width="1000" title="UAE - Abu Dhabi to Dubai Satellite-Derived Bathymetry">
+  <img src="dubai_to_abu_dhabi_viridis.jpg" width="800" title="UAE - Abu Dhabi to Dubai Satellite-Derived Bathymetry">
 </p>
 
 ### UAE - Mubarraz Island to Abu Dhabi 
@@ -54,7 +54,7 @@ The modelled satellite-derived bathymetry comprised $3138$ $\text{km}^2$ at a ho
 The modelled satellite-derived bathymetry comprised $11408$ $\text{km}^2$ at a horizontal resolution of 30m. 
 
 <p align="center">
-  <img src="abu_dhabi_to_mubarraz_island_viridis.jpg" width="1000" title="UAE - Abu Dhabi to Mubarraz Island Satellite-Derived Bathymetry">
+  <img src="abu_dhabi_to_mubarraz_island_viridis.jpg" width="800" title="UAE - Abu Dhabi to Mubarraz Island Satellite-Derived Bathymetry">
 </p>
 
 ### Qatar - Eastern Qatar to Sir Baniyas Island
@@ -62,7 +62,7 @@ The modelled satellite-derived bathymetry comprised $11408$ $\text{km}^2$ at a h
 The modelled satellite-derived bathymetry comprised $14716$ $\text{km}^2$ at a horizontal resolution of 30m. 
 
 <p align="center">
-  <img src="H_qatar_east_viridis.jpg" width="1000" title="Eastern Qatar to Sir Baniyas Island Satellite-Derived Bathymetry">
+  <img src="H_qatar_east_viridis.jpg" width="800" title="Eastern Qatar to Sir Baniyas Island Satellite-Derived Bathymetry">
 </p>
 
 ### Qatar, Bahrain and Saudi Arabia
@@ -70,7 +70,7 @@ The modelled satellite-derived bathymetry comprised $14716$ $\text{km}^2$ at a h
 The modelled satellite-derived bathymetry comprised $12232$ $\text{km}^2$ at a horizontal resolution of 30m. 
 
 <p align="center">
-  <img src="qatar_west_30m_viridis.jpg" width="1000" title="Qatar, Bahrain, Saudi Arabia Satellite-Derived Bathymetry">
+  <img src="qatar_west_30m_viridis.jpg" width="800" title="Qatar, Bahrain, Saudi Arabia Satellite-Derived Bathymetry">
 </p>
 
 ## Installation & Dependencies 
