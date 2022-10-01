@@ -52,6 +52,12 @@ Each of these studies used multiple LANDSAT 8 images.
 
 ### Western Australia - Exmouth to Whim Creek 
 
+The modelled satellite-derived bathymetry comprised $17060$ $\text{km}^2$ at a horizontal resolution of 30m. 
+
+<p align="center">
+  <img src="pilbara_coast_viridis.jpg" width="1000" title="Pilbara Coast - Exmouth to Whim Creek Satellite-Derived Bathymetry">
+</p>
+
 ### Western Australia - Exmouth Gulf
 
 The modelled satellite-derived bathymetry comprised $4175$ $\text{km}^2$ at a horizontal resolution of 30m. 
