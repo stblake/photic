@@ -57,7 +57,7 @@ Each of these studies used multiple LANDSAT 8 images.
 The modelled satellite-derived bathymetry comprised $4175$ $\text{km}^2$ at a horizontal resolution of 30m. 
 
 <p align="center">
-  <img src="exmouth_gulf_30m_viridis.jpg" width="600" title="Exmouth Gulf Satellite-Derived Bathymetry">
+  <img src="exmouth_gulf_30m_viridis.jpg" width="550" title="Exmouth Gulf Satellite-Derived Bathymetry">
 </p>
 
 ### Western Australia - Murion Island
