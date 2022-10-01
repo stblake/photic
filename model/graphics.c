@@ -424,6 +424,10 @@ void plot_array(geogrid gr, char *title, float pagesize, float textsize, float p
 
   cpgslw(line_width);
 
+// Set the text size.
+
+  cpgsch(textsize);
+  
 // Set size of plotting window. 
 
   if (xmin == 0.0 && xmax == 0.0 && ymin == 0.0 && ymax == 0.0) {
@@ -438,7 +442,7 @@ void plot_array(geogrid gr, char *title, float pagesize, float textsize, float p
   for (i = 0; i < strlen(title); i++)
     if (title[i] == '_') title[i] = ' ';
 
-  cpglab("B A M", " ", trim(title));
+  cpglab("photic", " ", trim(title));
 
 // Draw colour ramp. 
 
