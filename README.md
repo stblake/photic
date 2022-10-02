@@ -18,7 +18,7 @@ DISCLAIMER! This should be obvious, but these data from _photic_ should not be u
 
 Each of these studies used multiple LANDSAT 8 images.  
 
-### Western Australia - Exmouth to Whim Creek 
+### Western Australia - Pilbara Coast from Exmouth to Whim Creek 
 
 The modelled satellite-derived bathymetry comprised $17060$ $\text{km}^2$ at a horizontal resolution of 30m. The modelled gridded dataset has dimensions 12662 by 16077 and is projected in the WGS84 (EPSG:4326) coordinate system. The dataset is a 60 Mb compressed geotiff, which can be downloaded [here](https://drive.google.com/file/d/1bmgpVht8NhCzgVcrFxv0umlSzyGk7NlD/view?usp=sharing). 
 
