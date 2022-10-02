@@ -60,7 +60,7 @@ The modelled satellite-derived bathymetry comprised $11408$ $\text{km}^2$ at a h
 
 ### Qatar - Eastern Qatar to Sir Baniyas Island
 
-The modelled satellite-derived bathymetry comprised $14716$ $\text{km}^2$ at a horizontal resolution of 30m. 
+The modelled satellite-derived bathymetry comprised $14716$ $\text{km}^2$ at a horizontal resolution of 30m. The modelled gridded dataset has dimensions 5774 by 6905 and is projected in the WGS84 (EPSG:4326) coordinate system. The dataset is a 47 MB compressed geotiff.
 
 <p align="center">
   <img src="H_qatar_east_viridis.jpg" width="900" title="Eastern Qatar to Sir Baniyas Island Satellite-Derived Bathymetry">
