@@ -44,7 +44,7 @@ The modelled satellite-derived bathymetry comprised $257$ $\text{km}^2$ at a hor
 
 ### UAE - Abu Dhabi to Dubai
 
-The modelled satellite-derived bathymetry comprised $3138$ $\text{km}^2$ at a horizontal resolution of 30m. 
+The modelled satellite-derived bathymetry comprised $3138$ $\text{km}^2$ at a horizontal resolution of 30m. The modelled gridded dataset has dimensions 3370 by 4700 and is projected in the WGS84 (EPSG:4326) coordinate system. The dataset is a 11.5 MB compressed geotiff, which can be downloaded here.
 
 <p align="center">
   <img src="dubai_to_abu_dhabi_viridis.jpg" width="900" title="UAE - Abu Dhabi to Dubai Satellite-Derived Bathymetry">
