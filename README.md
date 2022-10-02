@@ -68,7 +68,7 @@ The modelled satellite-derived bathymetry comprised $14716$ $\text{km}^2$ at a h
 
 ### Qatar, Bahrain and Saudi Arabia
 
-The modelled satellite-derived bathymetry comprised $12232$ $\text{km}^2$ at a horizontal resolution of 30m. 
+The modelled satellite-derived bathymetry comprised $12232$ $\text{km}^2$ at a horizontal resolution of 30m. The modelled gridded dataset has dimensions 7361 by 7344 and is projected in the WGS84 (EPSG:4326) coordinate system. The dataset is a 43 MB compressed geotiff.
 
 <p align="center">
   <img src="qatar_west_30m_viridis.jpg" width="800" title="Qatar, Bahrain, Saudi Arabia Satellite-Derived Bathymetry">
