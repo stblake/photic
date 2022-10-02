@@ -52,7 +52,7 @@ The modelled satellite-derived bathymetry comprised $3138$ $\text{km}^2$ at a ho
 
 ### UAE - Mubarraz Island to Abu Dhabi 
 
-The modelled satellite-derived bathymetry comprised $11408$ $\text{km}^2$ at a horizontal resolution of 30m. 
+The modelled satellite-derived bathymetry comprised $11408$ $\text{km}^2$ at a horizontal resolution of 30m. The modelled gridded dataset has dimensions 4535 by 7476 and is projected in the WGS84 (EPSG:4326) coordinate system. The dataset is a 38 MB compressed geotiff.
 
 <p align="center">
   <img src="abu_dhabi_to_mubarraz_island_viridis.jpg" width="900" title="UAE - Abu Dhabi to Mubarraz Island Satellite-Derived Bathymetry">
