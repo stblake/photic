@@ -28,7 +28,7 @@ The modelled satellite-derived bathymetry comprised $17060$ $\text{km}^2$ at a h
 
 ### Western Australia - Exmouth Gulf
 
-The modelled satellite-derived bathymetry comprised $4175$ $\text{km}^2$ at a horizontal resolution of 30m. 
+The modelled satellite-derived bathymetry comprised $4175$ $\text{km}^2$ at a horizontal resolution of 30m. The modelled gridded dataset has dimensions 3930 by 2858 and is projected in the WGS84 (EPSG:4326) coordinate system. The dataset is a 14 Mb compressed geotiff, which can be downloaded [here](https://drive.google.com/file/d/10xRTwMh0dvOyOHNgeuCu6dTsOyj10Qw5/view?usp=sharing). 
 
 <p align="center">
   <img src="exmouth_gulf_30m_viridis.jpg" width="550" title="Exmouth Gulf Satellite-Derived Bathymetry">
