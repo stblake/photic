@@ -2988,8 +2988,8 @@ void run_history() {
 //
 
 // REFINE GRID IN /input grid name/ OUT /output grid name/ LAND /land grid name/ ... 
-// SHALLOW /shallow water grid name/ [optional] CLIP /clipped min/ /clipped max/ ... 
-// SCALE /rescaled min/ /rescaled max/ POWER /power scale/
+// SHALLOW /shallow water grid name/ [optional] SCRAP /scrap min/ /scrap max/ ...
+// CLIP /clipped min/ /clipped max/ SCALE /rescaled min/ /rescaled max/ POWER /power scale/
 
 void run_refine() {
 
@@ -3009,7 +3009,7 @@ void run_refine() {
 
 	if (strcmp(parsed[1], "IN") != 0) {
     printf("\nERROR: REFINE IN /input grid name/ OUT /output grid name/ [optional] LAND \
-/land grid name/ SHALLOW /shallow water grid name/ \
+/land grid name/ SHALLOW /shallow water grid name/ SCRAP /scrap min/ /scrap max/\
 CLIP /clipped min/ /clipped max/ SCALE /rescaled min/ /rescaled max/ POWER /exponent/\n");
 		return ;
 	}
@@ -3031,7 +3031,7 @@ CLIP /clipped min/ /clipped max/ SCALE /rescaled min/ /rescaled max/ POWER /expo
 
   if (strcmp(parsed[3], "OUT") != 0) {
     printf("\nERROR: REFINE IN /input grid name/ OUT /output grid name/ [optional] LAND \
-/land grid name/ SHALLOW /shallow water grid name/ \
+/land grid name/ SHALLOW /shallow water grid name/ SCRAP /scrap min/ /scrap max/\
 CLIP /clipped min/ /clipped max/ SCALE /rescaled min/ /rescaled max/ POWER /exponent/\n");
     return ;
   }
