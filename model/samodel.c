@@ -1,5 +1,5 @@
 //
-//	BAM -- A Multi-spectral, Multi-temporal, Multi-spatial, Remote Sensing Model for Shallow Waters
+//	photic -- A Multi-spectral, Multi-temporal, Multi-spatial, Remote Sensing Model for Shallow Waters
 //	
 
 
@@ -29,7 +29,7 @@
 
 // In regards to optimisation, the simplex algorithm takes ~20m^2 iterations to converge. The 
 // original Lee algorithm for hyperspectral data only had 5 parameters (P, G, X, B, H). 
-// Incorporating multiple bottom types requires rho_i (i = 1 .. n_bottoms). The BAM
+// Incorporating multiple bottom types requires rho_i (i = 1 .. n_bottoms). The _photic_
 // model models a region around a given pixel (of n_regions pixels) and multiple 
 // scenes (n_scenes). This increases the number of unknown parameters in the model to 
 // n_regions + n_regions*n_bottoms + 4*n_scenes. Consequently, this model requires significantly 
@@ -75,7 +75,7 @@
 // 2001 on a 400Mhz processor using a "predictor-corrector" optimisation scheme. In 2009 
 // It could process ~157 pixels per second. 
 
-// In 2019, BAM can process ~600 pixels per second per core, where on average 96% of pixels 
+// In 2019, _photic_ can process ~600 pixels per second per core, where on average 96% of pixels 
 // are modelled using the LUT (using the configuration n_regions = 9, n_scenes = 2, n_bottoms = 2.) 
 // 
 
