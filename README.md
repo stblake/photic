@@ -81,6 +81,10 @@ The modelled satellite-derived bathymetry comprised $12232$ $\text{km}^2$ at a h
 ### NetCDF
 NetCDF developer libraries can be installed via brew with `brew install netcdf`. 
 
+### OpenMP
+
+The semi-analytical model at the core of _photic_ uses [OpenMP](https://www.openmp.org/) for parallelisation, and can be installed via brew with `brew install libomp`. 
+
 ### PGPLOT
 PGPLOT can be installed (on a mac) via macports with `port install pgplot`, or compiled from source, which can be downloaded from
 
