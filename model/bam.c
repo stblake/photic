@@ -172,7 +172,6 @@ void run_copy_lsm();
 void run_read_commands();
 void run_read_grid();
 void run_read_soundings();
-void run_read_landsat();
 void run_read_bottom();
 void run_delete();
 void run_plot_grid();
@@ -5864,8 +5863,6 @@ void run_read() {
 		run_read_grid();
 	} else if (strcmp(parsed[1], "SOUNDINGS") == 0) {
 		run_read_soundings();
-  } else if (strcmp(parsed[1], "LANDSAT") == 0) {
-    run_read_landsat();
   } else if (strcmp(parsed[1], "BOTTOM") == 0) {
     run_read_bottom();
 	} else {
@@ -5906,58 +5903,6 @@ void run_read_bottom() {
   n_bottom_spectra = nrows; 
 }
 
-
-
-
-// READ LANDSAT METADATA /file/
-
-void run_read_landsat() {
-
-  int i;
-  bool success;
-
-// Read METADATA.
-
-  if (strcmp(parsed[2], "METADATA") != 0) {
-    printf("\nERROR: READ LANDSAT METADATA /file/\n");
-    return ;
-  }
-
-// Read file name. 
-
-  if (! file_exists(parsed[3])) {
-    printf("\nERROR: missing file '%s'\n", parsed[3]);
-    return ;
-  }
-
-// Read landsat metadata. 
-
-#if 0
-  success = read_landsat_metadata(parsed[3], &sun_azimuth, &sun_elevation, &earth_sun_distance, 
-      radiance_mult_band, radiance_add_band, quantize_cal_min_band, quantize_cal_max_band,
-      radiance_minimum_band, radiance_maximum_band, MAX_GRIDS);
-
-  if (! success) {
-    printf("\nERROR: cannot read LANDSAT metadata from %s.\n", parsed[3]);
-
-    // Clear metadata variables. 
-
-    sun_azimuth = BAM_NODATA;
-    sun_elevation = BAM_NODATA;
-    earth_sun_distance = BAM_NODATA;
-
-    for (i = 0; i < MAX_GRIDS; i++) {
-      radiance_mult_band[i] = BAM_NODATA;
-      radiance_add_band[i] = BAM_NODATA;
-      quantize_cal_min_band[i] = BAM_NODATA;
-      quantize_cal_max_band[i] = BAM_NODATA;
-      radiance_minimum_band[i] = BAM_NODATA;
-      radiance_maximum_band[i] = BAM_NODATA;
-    }
-  }
-
-#endif
-}
 
 
 void run_read_commands() {
