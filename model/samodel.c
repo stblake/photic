@@ -2,7 +2,6 @@
 //	BAM -- A Multi-spectral, Multi-temporal, Multi-spatial, Remote Sensing Model for Shallow Waters
 //	
 
-// (c) 2017 - 2019 by Sam Blake 
 
 // Written by Sam Blake.
 
