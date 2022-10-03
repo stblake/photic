@@ -163,7 +163,6 @@ void run_write_points();
 void run_set();
 void run_print();
 void run_plot();
-void run_process();
 void run_model();
 void run_history();
 void run_copy();
@@ -7976,99 +7975,6 @@ PALETTE /palette name/ LAND /land grid name/\n");
 
 }
 
-//
-//    PROCESS
-//
-
-// PROCESS INTERPOLATE IN /input grid/ OUT /output grid/ ... 
-//		[optional] REGION /xmin/ /ymin/ /xmax/ /ymax/ RESOLUTION /resolution/
-
-// PROCESS SMOOTH IN /input grid/ OUT /output grid/
-
-// PROCESS SHALLOW IN /input grid name/ OUT /output grid name/ ...
-//		THRESHOLD /min radiance level/ /max radiance level/
-
-// PROCESS PANSHARPEN IN /input grid name/ OUT /output grid name/ ...
-//    SPECTRAL /spectral band name 1/ /spectral band name 2/ ... 
-//    PAN /panchromatic band grid name/
-
-// PROCESS DEGLINT IN /input grid name/ OUT /output grid name/ SPECTRAL ...
-//    /spectral band name 1/ /spectral band name 2/ ... NIR ... 
-//    /nir band grid name/ LAND /land grid name/
-
-// PROCESS NOISE IN /input grid name/ OUT /output grid name/ ...
-//    MAXPOINTS /maximum number of noise points/ FILTER NODATA
-
-// PROCESS IMAGE COASTAL /coastal band grid name/ BLUE /blue band grid name/ ...
-//    GREEN /green band grid name/ RED /red band grid name/ OUT /output grid name/ ... 
-//    [optional] WEIGHTS /coastal weight/ /blue weight/ /green weight/ /red weight/ ... 
-//    CONTRAST /c/ BRIGHTNESS /b/ GAMMA /gamma/ BATHYMETRY /bathymetry grid name/ ... 
-//    PALETTE /palette name/
-
-// PROCESS UNITE IN /input grid name 1/ /input grid name 2/ ... OUT /output grid name/ ...
-//    [optional] REGION /wlon/ /slat/ /elon/ /nlat/ RESOLUTION /resolution/ ...
-//    METHOD MIN || MAX || MEAN
-
-// PROCESS OVERLAY IN /input grid name/ OUT /output grid name/ LAYERS /layer 1/ /layer 2/ ...
-
-// PROCESS CLOUD IN /input grid name/ OUT /output grid name/ CLOUD /cloud mask grid name/ ...
-//     [optional] RADIUS /integer radius/ 
-
-// PROCESS MASK IN /input grid name/ OUT /output grid name/ MASK /mask grid/
-
-// PROCESS POLYGONS IN /input grid name/ OUT /output grid name/ [optional] POLYGONS /file name 1/ /file name 2/ ... 
-//    FILL /fill value 1/ /fill value 2/ ... 
-
-// PROCESS ERROR IN /bathymetry grid name/ OUT /output grid name/ ERROR /error grid name/ 
-//    THRESHOLD /error threshold/
-
-// PROCESS RELATIVEERROR IN /input bathymetry grid/ OUT /output relative error grid/ ERROR /absolute error grid/ 
-
-// PROCESS MEDIAN IN /input grid name/ OUT /output grid name/ [optional] WINDOWSIZE /window size/ NSIGMA /n sigma threshold/
-
-void run_process() {
-	
-  if (strcmp(parsed[1], "INTERPOLATE") == 0) {
-  	run_process_interpolate();
-  } else if (strcmp(parsed[1], "SMOOTH") == 0) {
-  	run_process_smooth();
-  } else if (strcmp(parsed[1], "SHALLOW") == 0) {
-  	run_process_shallow();
-  } else if (strcmp(parsed[1], "PANSHARPEN") == 0) {
-    run_process_pansharpen();
-  } else if (strcmp(parsed[1], "NOISE") == 0) {
-    run_process_noise();
-  } else if (strcmp(parsed[1], "DEGLINT") == 0) {
-    run_process_deglint();
-  } else if (strcmp(parsed[1], "UNITE") == 0) {
-    run_process_unite();
-  } else if (strcmp(parsed[1], "CLOUD") == 0) {
-    run_process_cloud();
-  } else if (strcmp(parsed[1], "MASK") == 0) {
-    run_process_mask();
-  } else if (strcmp(parsed[1], "LAND") == 0) {
-    run_process_land();
-  } else if (strcmp(parsed[1], "OVERLAY") == 0) {
-    run_process_overlay();
-  } else if (strcmp(parsed[1], "POLYGONS") == 0) {
-    run_process_polygons();
-  } else if (strcmp(parsed[1], "ERROR") == 0) {
-    run_process_error();
-  } else if (strcmp(parsed[1], "RELATIVEERROR") == 0) {
-    run_process_relativeerror();
-  } else if (strcmp(parsed[1], "MNDWI") == 0) {
-    run_process_mndwi();
-  } else if (strcmp(parsed[1], "FILL") == 0) {
-    run_process_fill();
-  } else if (strcmp(parsed[1], "ADD") == 0) {
-    run_process_add();
-  } else if (strcmp(parsed[1], "MEDIAN") == 0) {
-    run_process_median();
-  } else {
-  	printf("\nERROR: unknown command '%s'\n", parsed[1]);
-  	return ;
-  }
-}
 
 //
 //    GEODETIC COMPUTATIONS

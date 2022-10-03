@@ -30,3 +30,4 @@ void run_process_mndwi();
 void run_process_fill();
 void run_process_add();
 void run_process_median();
+void run_process();
