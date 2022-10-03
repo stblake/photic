@@ -212,7 +212,6 @@ void run_compute_bottom();
 void run_compute_k();
 void run_compute_percentile();
 void compute_weights(float **weights, float **soundings, int nsoundings);
-bool point_in_polygon(float *x, float *y, int n, float pt_x, float pt_y);
 void run_compare();
 void run_combine();
 // void run_create_empirical();
