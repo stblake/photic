@@ -214,7 +214,6 @@ void run_compute_percentile();
 void compute_weights(float **weights, float **soundings, int nsoundings);
 void run_compare();
 void run_combine();
-// void run_create_empirical();
 
 
 int main(int argc, char **argv) {
@@ -470,33 +469,11 @@ void run_command() {
     run_combine();
   } else if (strcmp(parsed[0], "ALIGN") == 0) {
     run_align();
-  } else if (strcmp(parsed[0], "CREATE") == 0) {
-    // run_create_empirical();
 	} else if (strcmp(parsed[0], "") != 0) {
 		printf("\nERROR: unknown command '%s'\n", parsed[0]);
 	}
 }
 
-
-
-//
-//  CREATE 
-//
-
-// CREATE /blue/ /green/ /red/ /bathy/
-
-// M1 = max(Rblue/Rgreen, Rgreen/Rblue)
-// M2 = max(Rblue/Rred, Rred/Rblue)
-
-// z == c[0] log(M1) + c[1] log(M2) + c[2] log(M3)
-
-#if 0
-void run_create_empirical() {
-
-
-
-}
-#endif
 
 
 //
@@ -7241,9 +7218,6 @@ float geodistance(float lon1, float lat1, float lon2, float lat2) {
 	c = 2.0*asin(sqrt(a));
 	return c*radius;
 }
-
-
-
 
 
 //
