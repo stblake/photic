@@ -9,6 +9,8 @@ _photic_ is a C implementation of the physics-based, satellite-derived bathymetr
 
 _photic_ is a semi-analytical model for bathymetry, water turbidity and bottom composition; which is primarily based on the physics-based model, HOPE, of (Lee, 1998)(Lee, 1999). Unlike the model of Lee, which was originally designed to use hyperspectral imagery, our model is specifically designed to use multispectral satellite imagery. In particular, we adapt to the greatly decreased spectral resolution by introducing temporal and spatial assumptions on the depth and water turbidity.
 
+The model is described in detail [here](https://arxiv.org/abs/2002.02298). 
+
 ## Features 
 
 
