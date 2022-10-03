@@ -13,8 +13,8 @@
 #include "secchi.h"
 #include "samodel.h"
 #include "process.h"
-#include "rte.h"
 #include "align.h"
+#include "refine.h"
 #if PGPLOT
 #include "cpgplot.h"
 #endif
