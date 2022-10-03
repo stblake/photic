@@ -14,7 +14,7 @@ clean:
 	rm photic xyz2nc
 
 photic:
-	$(cc) $(netcdf) $(pgplot) common.c nc.c io.c graphics.c colours.c interp.c filllakesutils.c smoothutils.c jerlov.c secchi.c linenoise.c asa047.c samodelgraphics.c samodel.c align.c process.c refine.c bam.c -o photic
+	$(cc) $(netcdf) $(pgplot) common.c nc.c io.c graphics.c colours.c interp.c filllakesutils.c smoothutils.c jerlov.c secchi.c linenoise.c asa047.c samodelgraphics.c samodel.c align.c process.c refine.c write.c bam.c -o photic
 
 xyz2nc:
 	$(cc) $(netcdf) common.c nc.c io.c xyz2nc.c -o xyz2nc

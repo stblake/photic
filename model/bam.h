@@ -15,6 +15,7 @@
 #include "process.h"
 #include "align.h"
 #include "refine.h"
+#include "write.h"
 #if PGPLOT
 #include "cpgplot.h"
 #endif

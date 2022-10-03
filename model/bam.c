@@ -133,6 +133,9 @@
 /*
 
   TODOs: 
+
+          * Use simplex-based optimisation in empirical model. 
+
           * Store arrays (internally within memory of BAM) as short 
               ints with scale_factor and add_offset. This will decrease RAM
               consumption by 50%. Then arrays are accessed with something like: 
@@ -149,17 +152,16 @@
 
 #define BAM_VERSION "1.95"
 
-
-void interpreter();
 int parse_input(char line[MAX_LINE]);
 void tokenize(char line[MAX_LINE]);
+void run_read_grid();
+void run_read_soundings();
+void run_read_commands();
+void run_read_bottom();
+void run_read();
+void interpreter();
 void run_help();
 void run_command();
-void run_read();
-void run_write();
-void run_write_grid();
-void run_write_line();
-void run_write_points();
 void run_set();
 void run_print();
 void run_plot();
@@ -169,10 +171,6 @@ void run_copy();
 void run_scene();
 void run_copy_lsb();
 void run_copy_lsm();
-void run_read_commands();
-void run_read_grid();
-void run_read_soundings();
-void run_read_bottom();
 void run_delete();
 void run_plot_grid();
 void run_plot_line();
@@ -219,13 +217,6 @@ void run_compare();
 void run_combine();
 // void run_create_empirical();
 
-
-#define OK 1000 
-#define COMMENT 1001
-#define EXIT 1002
-#define READ 1003
-#define WRITE 1004
-#define STOP 1005
 
 int main(int argc, char **argv) {
 
@@ -5846,692 +5837,6 @@ void run_help() {
 
 
 //
-//    READ
-//
-
-// READ COMMANDS /command file/
-// READ GRID /grid name/ /file/ SCALE /scale/ OFFSET /offset/
-// READ SOUNDINGS /file/ CHARTDATUM /chart datum/
-// READ LANDSAT METADATA /file/
-
-
-void run_read() {
-
-	if (strcmp(parsed[1], "COMMANDS") == 0) {
-		run_read_commands();
-	} else if (strcmp(parsed[1], "GRID") == 0) {
-		run_read_grid();
-	} else if (strcmp(parsed[1], "SOUNDINGS") == 0) {
-		run_read_soundings();
-  } else if (strcmp(parsed[1], "BOTTOM") == 0) {
-    run_read_bottom();
-	} else {
-		printf("\nERROR: unknown command '%s'\n", parsed[1]);
-	}
-}
-
-
-// READ BOTTOM /bottom spectra file/
-
-void run_read_bottom() {
-
-  int nrows, ncols; 
-
-// Check bottom spectra has not been read in already. 
-
-  if (n_bottom_spectra > 0) {
-    printf("\n\nERROR: bottom spectra already specified.\n\n");
-    return ;
-  }
-
-// Read file name. 
-
-  if (! file_exists(parsed[2])) {
-    printf("\nERROR: missing file '%s'\n", parsed[2]);
-    return ;
-  }
-
-// Check csv file. 
-
-  if (strstr(parsed[2], ".csv") == NULL) { // Crude check.
-    printf("\nERROR: output file should have the extension .csv\n");
-    return ;
-  }
-
-  read_csv(parsed[2], &bottom_spectra, &nrows, &ncols);
-
-  n_bottom_spectra = nrows; 
-}
-
-
-
-void run_read_commands() {
-	
-	FILE *fp;
-  char line[MAX_LINE];
-  int code;
-
-	// Read command file name. 
-
-	if (parsed[2][0] == '\0') {
-		printf("\nERROR: READ COMMANDS /command file/\n");
-		return ;
-	}
-
-	if (! file_exists(parsed[2])) {
-  	printf("\nERROR: missing file '%s'\n", parsed[2]);
-  	return ;
-  }
-
-  // Run commands. 
-
-  fp = fopen(parsed[2], "r");
-
-  while (!feof(fp)) {
-
-    // Read line.
-
-    fgets(line, sizeof(line), fp);
-
-    trim(line);
-
-    // Check for %, %n.
-
-    if (line[0] == '%') {
-      if (line[1] == '\0' || line[1] == '1')
-        strcpy(line, prev1);
-      else if (line[1] == '2')
-        strcpy(line, prev2);
-      else if (line[1] == '3')
-        strcpy(line, prev3);
-      else if (line[1] == '4')
-        strcpy(line, prev4);
-      else if (line[1] == '5')
-        strcpy(line, prev5);
-      else if (line[1] == '6')
-        strcpy(line, prev6);
-      else if (line[1] == '7')
-        strcpy(line, prev7);
-      else if (line[1] == '8')
-        strcpy(line, prev8);
-      else if (line[1] == '9')
-        strcpy(line, prev9);
-    }
-
-    strcpy(prev9, prev8);
-    strcpy(prev8, prev7);
-    strcpy(prev7, prev6);
-    strcpy(prev6, prev5);
-    strcpy(prev5, prev4);
-    strcpy(prev4, prev3);
-    strcpy(prev3, prev2);
-    strcpy(prev2, prev1);
-    strcpy(prev1, line);
-
-    // Display input. 
-
-  	printf(">> %s\n", line);
-    fflush(stdout);
-
-    // Add to history. 
-
-    linenoiseHistoryAdd(line);
-    linenoiseHistorySave("history.bam");
-
-    // Parse input.
-
-  	code = parse_input(line);
-
-  	switch (code) {
-      case STOP:
-        goto finish;
-        break ;
-  		case COMMENT:
-  			break ;
-  		case EXIT:
-        // goto finish;
-        exit(0);
-#if 0
-  			printf("\nAre you sure you want to exit? (yes/no) ");
-  			fgets(line, sizeof(line), stdin);
- 		 		if (strncmp(line, "yes", 3) == 0) {
-  				goto finish; 
-        }
-#endif
-  			break ;
-  		default:
- 				run_command();
- 		}
-
-    fflush(stdout);
- 	}
-
-finish:
-
-  fclose(fp);
-}
-
-
-
-void run_read_soundings() {
-
-  int i, k;
-  float *x, *y, *z, scale = 1.0, chart_datum = 0.0, offsetX = 0.0, offsetY = 0.0;
-
-// Check if we have previously read in sounding data. 
-
-  if (read_soundings) {
-  	free_float_array_2d(soundings, nsoundings);
-  	meminuse -= (1.0e-6*(float) 3*nsoundings)*((float) sizeof(float));
-  }
-
-// Check file exists.  
-
-  if (! file_exists(parsed[2])) {
-  	printf("\nERROR: missing file '%s'\n", parsed[2]);
-  	return ;
-  }
-
-// Read SCALE. 
-
-  k = 3;
-
-  if (strcmp(parsed[k], "SCALE") == 0) {
-    scale = atof(parsed[++k]);
-    k++;
-  }  
-
-
-// Check for chart datum.
-
-  if (strcmp(parsed[k], "CHARTDATUM") == 0) {
-  	chart_datum = atof(parsed[++k]);
-    k++;
-  }
-
-// Check for offsets. 
-
-  if (strcmp(parsed[k], "OFFSET") == 0) {
-    offsetX = atof(parsed[++k]);
-    offsetY = atof(parsed[++k]);
-    k++;
-  }
-
-// Read sounding data. 
-
-  read_xyz(parsed[2], &x, &y, &z, &nsoundings);
-
-  allocate_float_array_2d(&soundings, nsoundings, 3);
-
-  sounding_errors = (float*) malloc(nsoundings*sizeof(float));
-  model_depths = (float*) malloc(nsoundings*sizeof(float));
-  sounding_depths = (float*) malloc(nsoundings*sizeof(float));
-
-  for (i = 0; i < nsoundings; i++) {
-  	soundings[i][0] = x[i] + offsetX;
-  	soundings[i][1] = y[i] + offsetY;
-  	z[i] = (z[i] + chart_datum)*scale;
-  	soundings[i][2] = z[i];
-  	sounding_errors[i] = 0.0;
-  }
-
-  read_soundings = true;
-
-// Display simple stats. 
-
-  float soundmin = vec_min(z, nsoundings);
-  float soundmax = vec_max(z, nsoundings);
-  float soundmean = vec_mean(z, nsoundings);
-
-  printf("\n  READ %d SOUNDINGS.\n", nsoundings);
-  printf("  MINIMUM DEPTH = %f\n", soundmin);
-  printf("  MAXIMUM DEPTH = %f\n", soundmax);
-  printf("  MEAN DEPTH    = %f\n", soundmean);
-
-// Update memory usage (in units of megabytes). 
-
-  meminuse += (1.0e-6*(float) 3*nsoundings)*((float) sizeof(float));
-
-// Free memory. 
-
-  free(x);
-  free(y);
-  free(z);
-}
-
-
-void run_read_grid() {
-
-  int i, j, k, n, ps, ncols, nrows;
-  double wlon, slat, cellsize, spval;
-  float **array, scale, offset;
-  geogrid grid;
-  bool convert2reflectance = false;
-
-// Can we allocate another grid?
-
-  if (n_grids_in_use == MAX_GRIDS) {
-  	printf("\nERROR: unable to store grid.\n");
-  	return ;
-  }
-
-// Allocate grid into the first empty slot. 
-
-  for (n = 0; n < MAX_GRIDS; n++) {
-  	if (! allocated_grids[n]) {
-  		ps = n;
-  		break;
-  	}
-  }
-
-// Set name. 
-
-  if (parsed[2][0] == '\0' || parsed[3][0] == '\0') {
-  	printf("\nERROR: READ GRID /name/ /file/ [optional] SCALE /scale factor/ \
-OFFSET /add offset/ THETA /sun elevation angle/\n");
-  	return ;
-  } else {
-
-	// Do we already have a grid with this name? 
-
-  	for (n = 0; n < MAX_GRIDS; n++) {
-  		if (strcmp(grid_names[n], parsed[2]) == 0) {
-  			printf("\nERROR: grid '%s' already in use.\n", parsed[2]);
-  			return ;
-  		}
-  	}
-
-  	strcpy(grid_names[ps], parsed[2]);
-  }
-
-// Check file exists.  
-
-  if (! file_exists(parsed[3])) {
-  	printf("\nERROR: missing file '%s'\n", parsed[3]);
-  	return ;
-  }
-
-// Read in gridded data. 
-
-  read_grid(parsed[3], &array, &ncols, &nrows, &wlon, 
-              &slat, &cellsize, &spval);
-
-  grid.ncols = ncols;
-  grid.nrows = nrows;
-  grid.cellsize = (float) cellsize;
-  grid.wlon = (float) wlon;
-  grid.slat = (float) slat;
-  grid.elon = wlon + cellsize*((float) ncols - 1);
-  grid.nlat = slat + cellsize*((float) nrows - 1);
-  grid.nodata_value = (float) spval;
-  grid.array = array;
-
-// Check for SCALE. 
-
-  k = 4; 
-
-  if (strcmp(parsed[k], "SCALE") == 0) {
-    scale = atof(parsed[++k]);
-    k++;
-  } else {
-    scale = 1.0;
-  }
-
-// Check for OFFSET. 
-
-  if (strcmp(parsed[k], "OFFSET") == 0) {
-    offset = atof(parsed[++k]);
-    k++;
-  } else {
-    offset = 0.0;
-  }
-
-// Set allocated. 
-
-  allocated_grids[ps] = true;
-
-// Transform array. 
-
-  for (i = 0; i < nrows; i++) {
-  	for (j = 0; j < ncols; j++) {
-  		if (grid.array[i][j] == grid.nodata_value) {
-  		  grid.array[i][j] = grid.nodata_value;
-  		} else {
-  		  grid.array[i][j] = grid.array[i][j]*scale + offset;  // radiance scale and offset. 
-      }
-  	}
-  }
-
-#if 0
-  printf("\nmin, max = %f, %f\n", 
-  	array_min(grid.array, nrows, ncols), 
-  	array_max(grid.array, nrows, ncols));
-#endif
-
-  gridded_data[ps] = grid;
-
-// Update memory usage (in units of megabytes). 
-
-  meminuse += 1.0e-6*((float) nrows*ncols)*((float) sizeof(float));
-
-// Update number of bands in use. 
-
-  n_grids_in_use++;
-}
-
-
-
-//
-//    WRITE
-//
-
-// WRITE GRID /grid name/ /output file name/ REGION /xmin/ /ymin/ /xmax/ /ymax/
-
-// WRITE LINE /grid name/ /output file name/ COORDINATES /xa/ /ya/ /xb/ /yb/
-
-// WRITE POINTS /grid name/ /output file name/
-
-void run_write() {
-
-  if (strcmp(parsed[1], "GRID") == 0) {
-    run_write_grid();
-  } else if (strcmp(parsed[1], "LINE") == 0) {
-    run_write_line();
-  } else if (strcmp(parsed[1], "POINTS") == 0) {
-    run_write_points();
-  } else {
-    printf("\nERROR: unknown command '%s'\n", parsed[1]);
-  }
-}
-
-// WRITE POINTS /grid name/ /output file name/
-
-void run_write_points() {
-
-  int n, ps;
-  float *xpts, *ypts, *zpts;
-  bool present = false; 
-
-  // Get position of grid name.
-      
-  for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[2]) == 0) {
-      present = true;
-      ps = n;
-      break;
-    }
-  }
-
-  if (! present) {
-    printf("\nERROR: unknown grid '%s'.\n", parsed[2]);
-    return ;
-  }
-
-  // Check soundings are already in memory. 
-
-  if (! read_soundings) {
-    printf("\nERROR: soundings have not been read into memory.\n");
-    return ;
-  }
-
-  // Interpolate grid at soundings. 
-
-  xpts = malloc(nsoundings*sizeof(float));
-  ypts = malloc(nsoundings*sizeof(float));
-  zpts = malloc(nsoundings*sizeof(float));
-
-  for (n = 0; n < nsoundings; n++) {
-    xpts[n] = soundings[n][0];
-    ypts[n] = soundings[n][1];
-
-    if (xpts[n] > gridded_data[ps].wlon && 
-    xpts[n] < gridded_data[ps].elon && 
-    ypts[n] > gridded_data[ps].slat && 
-    ypts[n] < gridded_data[ps].nlat) {
-      zpts[n] = interp_bicubic(gridded_data[ps].array, 
-              gridded_data[ps].ncols,
-              gridded_data[ps].nrows, 
-              gridded_data[ps].wlon, 
-              gridded_data[ps].slat, 
-              gridded_data[ps].cellsize, 
-              gridded_data[ps].nodata_value, 
-              xpts[n], 
-              ypts[n]);
-    } else {
-      zpts[n] = gridded_data[ps].nodata_value;
-    }
-  }
-
-  // Write points to file. 
-
-  write_xyz(parsed[3], xpts, ypts, zpts, nsoundings);
-
-  free(xpts);
-  free(ypts);
-  free(zpts);
-}
-
-// WRITE LINE /grid name/ /output line/ COORDINATES /xa/ /ya/ /xb/ /yb/ FILE //
-
-void run_write_line() {
-
-  int n, ps, npoints, i, j, ii, jj, np;
-  float xa, ya, xb, yb, rad, grad, del, *xpts, *ypts, *radiance;
-  bool present = false;
-
-  if (parsed[2][0] == '\0'){
-    printf("\nERROR: WRITE LINE /grid name/ /output line/ COORDINATES /xa/ /ya/ /xb/ /yb/\n");
-    return ;
-  }
-
-  // Get position of grid name.
-      
-  for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[2]) == 0) {
-      present = true;
-      ps = n;
-      break;
-    }
-  }
-
-  if (! present) {
-    printf("\nERROR: unknown grid '%s'.\n", parsed[2]);
-    return ;
-  }
-
-  // Read output file name. 
-
-  if (parsed[3][0] == '\0'){
-    printf("\nERROR: WRITE LINE /grid name/ /output line/ COORDINATES /xa/ /ya/ /xb/ /yb/\n");
-    return ;
-  }
-
-  // Check output grid name is a netCDF (.nc or .nc4 extension)
-
-  if (strstr(parsed[3], ".csv") == NULL && strstr(parsed[3], ".xyz") == NULL) { // Crude check.
-    printf("\nERROR: output file should have the extension .csv or .xyz\n");
-    return ;
-  }
-
-  // Read LINE.
-
-  if (strcmp(parsed[4], "COORDINATES") != 0) {
-    printf("\nERROR: WRITE LINE /grid name/ /output line/ COORDINATES /xa/ /ya/ /xb/ /yb/\n");
-    return ;
-  }
-
-  if (strcmp(parsed[5], "SAND") == 0) {
-    xa = sand_lon;
-    ya = sand_lat;
-    if (strcmp(parsed[6], "DEEP") == 0) {
-      xb = deep_lon;
-      yb = deep_lat;
-      n = 7;
-    } else {
-      xb = atof(parsed[6]);
-      yb = atof(parsed[7]);
-      n = 8;
-    }
-  } else if (strcmp(parsed[5], "DEEP") == 0) {
-    xa = deep_lon;
-    ya = deep_lat;
-    if (strcmp(parsed[6], "SAND") == 0) {
-      xb = sand_lon;
-      yb = sand_lat;
-      n = 7;
-    } else {
-      xb = atof(parsed[6]);
-      yb = atof(parsed[7]);
-      n = 8;
-    }
-  } else {
-    xa = atof(parsed[5]);
-    ya = atof(parsed[6]);
-    xb = atof(parsed[7]);
-    yb = atof(parsed[8]);
-    n = 9;
-  }
-
-// Extract points on the line from the grid. 
-
-  float dist = sqrt(pow(xb - xa, 2) + pow(yb - ya, 2));
-  npoints = 1 + floor(dist/gridded_data[ps].cellsize);
-
-  xpts = (float*) malloc(npoints*sizeof(float));
-  ypts = (float*) malloc(npoints*sizeof(float));
-  radiance = (float*) malloc(npoints*sizeof(float));
-
-// Gradient of line. 
-
-  grad = (yb - ya)/(xb - xa); // TODO: check for vertical line.
-
-  for (n = 0; n < npoints; n++) {
-    // Compute the point on the line. 
-    del = ((float)n)/((float) npoints);
-    xpts[n] = xa + del*(xb - xa);
-    ypts[n] = ya + grad*del*(xb - xa);
-    // Compute grid coordinates of point. 
-    // i = (ypts[n] - gridded_data[ps].slat)/gridded_data[ps].cellsize;
-    // j = (xpts[n] - gridded_data[ps].wlon)/gridded_data[ps].cellsize;
-    i = round( ((float) gridded_data[ps].nrows)*(ypts[n] - gridded_data[ps].slat)/
-          (gridded_data[ps].nlat - gridded_data[ps].slat) );
-    j = round( ((float) gridded_data[ps].ncols)*(xpts[n] - gridded_data[ps].wlon)/
-          (gridded_data[ps].elon - gridded_data[ps].wlon) );
-    // Radiance at i,j.
-    rad = 0.0; 
-    np = 0;
-    for (ii = 1 - depth_radius; ii < depth_radius; ii++) {
-      for (jj = 1 - depth_radius; jj < depth_radius; jj++) {
-        if (gridded_data[ps].array[i + ii][j + jj] != gridded_data[ps].nodata_value) {
-          rad += gridded_data[ps].array[i + ii][j + jj];
-          np++;
-        }
-      }
-    }
-    if (np == 0)
-      radiance[n] = 0.0;
-    else
-      radiance[n] = rad/((float) np);
-  }
-
-//  Write line to xyz file. 
-
-  write_xyz(parsed[3], xpts, ypts, radiance, npoints);
-
-// Free memory.
-
-  free(xpts);
-  free(ypts);
-  free(radiance);
-}
-
-// WRITE GRID /grid name/ /output file name/ REGION /xmin/ /ymin/ /xmax/ /ymax/
-
-void run_write_grid() {
-
-  int n, ps;
-  float *lats, *lons, xmin, ymin, xmax, ymax;
-  bool present = false, region = false;
-
-  if (parsed[2][0] == '\0'){
-    printf("\nERROR: WRITE GRID /grid name/ /output file name/\n");
-    return ;
-  }
-  	
-  // Get position of grid name.
-  	  
-	for (n = 0; n < MAX_GRIDS; n++) {
-	 	if (strcmp(grid_names[n], parsed[2]) == 0) {
-    	present = true;
-			ps = n;
-			break;
-	 	}
-	}
-
-	if (! present) {
-	  printf("\nERROR: unknown grid '%s'.\n", parsed[2]);
-	  return ;
-	}
-
-  // Read output file name. 
-
-  if (parsed[3][0] == '\0'){
-    printf("\nERROR: WRITE GRID /grid name/ /output file name/\n");
-    return ;
-  }
-
-  // Check output grid name is a netCDF (.nc or .nc4 extension)
-
-  if (strstr(parsed[3], ".nc") == NULL && strstr(parsed[3], ".asc") == NULL) { // Crude check.
-    printf("\nERROR: output file should have the extension .nc, .nc4 or .asc\n");
-    return ;
-  }
-
-  if (strcmp(parsed[4], "REGION") == 0) {
-  	region = true;
-  	xmin = atof(parsed[5]);
-  	ymin = atof(parsed[6]);
-  	xmax = atof(parsed[7]);
-  	ymax = atof(parsed[8]);
-  }
-
-  // Write output grid. 
-
-  if (region) {
-  	int ncols = (xmax - xmin)/gridded_data[ps].cellsize;
-  	int nrows = (ymax - ymin)/gridded_data[ps].cellsize;
-  	lons = (float*) malloc(ncols*sizeof(float));
-  	lats = (float*) malloc(nrows*sizeof(float));
-
-  	for (n = 0; n < ncols; n++)
-  		lons[n] = xmin + ((float) n)*gridded_data[ps].cellsize;
-
-  	for (n = 0; n < nrows; n++)
-  		lats[n] = ymin + ((float) n)*gridded_data[ps].cellsize;
-  } else {
-  	lons = (float*) malloc(gridded_data[ps].ncols*sizeof(float));
-  	lats = (float*) malloc(gridded_data[ps].nrows*sizeof(float));
-
-  	for (n = 0; n < gridded_data[ps].ncols; n++)
-  		lons[n] = gridded_data[ps].wlon + ((float) n)*gridded_data[ps].cellsize;
-
-  	for (n = 0; n < gridded_data[ps].nrows; n++)
-  		lats[n] = gridded_data[ps].slat + ((float) n)*gridded_data[ps].cellsize;
-
-  	write_nc(parsed[3], 
-  		gridded_data[ps].array, 
-  		gridded_data[ps].ncols,
-  		gridded_data[ps].nrows,
-  		lons, lats, 
-  		gridded_data[ps].nodata_value);
-  }
-
-  free(lons);
-  free(lats);
-}
-
-
-//
 //    SET
 //
 
@@ -7938,49 +7243,431 @@ float geodistance(float lon1, float lat1, float lon2, float lat2) {
 	return c*radius;
 }
 
+
+
+
+
+//
+//    READ
+//
+
+// READ COMMANDS /command file/
+// READ GRID /grid name/ /file/ SCALE /scale/ OFFSET /offset/
+// READ SOUNDINGS /file/ CHARTDATUM /chart datum/
+
+
+void run_read() {
+
+  if (strcmp(parsed[1], "COMMANDS") == 0) {
+    run_read_commands();
+  } else if (strcmp(parsed[1], "GRID") == 0) {
+    run_read_grid();
+  } else if (strcmp(parsed[1], "SOUNDINGS") == 0) {
+    run_read_soundings();
+  } else if (strcmp(parsed[1], "BOTTOM") == 0) {
+    run_read_bottom();
+  } else {
+    printf("\nERROR: unknown command '%s'\n", parsed[1]);
+  }
+}
+
+
+// READ BOTTOM /bottom spectra file/
+
+void run_read_bottom() {
+
+  int nrows, ncols; 
+
+// Check bottom spectra has not been read in already. 
+
+  if (n_bottom_spectra > 0) {
+    printf("\n\nERROR: bottom spectra already specified.\n\n");
+    return ;
+  }
+
+// Read file name. 
+
+  if (! file_exists(parsed[2])) {
+    printf("\nERROR: missing file '%s'\n", parsed[2]);
+    return ;
+  }
+
+// Check csv file. 
+
+  if (strstr(parsed[2], ".csv") == NULL) { // Crude check.
+    printf("\nERROR: output file should have the extension .csv\n");
+    return ;
+  }
+
+  read_csv(parsed[2], &bottom_spectra, &nrows, &ncols);
+
+  n_bottom_spectra = nrows; 
+}
+
+
+
+void run_read_commands() {
+  
+  FILE *fp;
+  char line[MAX_LINE];
+  int code;
+
+  // Read command file name. 
+
+  if (parsed[2][0] == '\0') {
+    printf("\nERROR: READ COMMANDS /command file/\n");
+    return ;
+  }
+
+  if (! file_exists(parsed[2])) {
+    printf("\nERROR: missing file '%s'\n", parsed[2]);
+    return ;
+  }
+
+  // Run commands. 
+
+  fp = fopen(parsed[2], "r");
+
+  while (!feof(fp)) {
+
+    // Read line.
+
+    fgets(line, sizeof(line), fp);
+
+    trim(line);
+
+    // Check for %, %n.
+
+    if (line[0] == '%') {
+      if (line[1] == '\0' || line[1] == '1')
+        strcpy(line, prev1);
+      else if (line[1] == '2')
+        strcpy(line, prev2);
+      else if (line[1] == '3')
+        strcpy(line, prev3);
+      else if (line[1] == '4')
+        strcpy(line, prev4);
+      else if (line[1] == '5')
+        strcpy(line, prev5);
+      else if (line[1] == '6')
+        strcpy(line, prev6);
+      else if (line[1] == '7')
+        strcpy(line, prev7);
+      else if (line[1] == '8')
+        strcpy(line, prev8);
+      else if (line[1] == '9')
+        strcpy(line, prev9);
+    }
+
+    strcpy(prev9, prev8);
+    strcpy(prev8, prev7);
+    strcpy(prev7, prev6);
+    strcpy(prev6, prev5);
+    strcpy(prev5, prev4);
+    strcpy(prev4, prev3);
+    strcpy(prev3, prev2);
+    strcpy(prev2, prev1);
+    strcpy(prev1, line);
+
+    // Display input. 
+
+    printf(">> %s\n", line);
+    fflush(stdout);
+
+    // Add to history. 
+
+    linenoiseHistoryAdd(line);
+    linenoiseHistorySave("history.bam");
+
+    // Parse input.
+
+    code = parse_input(line);
+
+    switch (code) {
+      case STOP:
+        goto finish;
+        break ;
+      case COMMENT:
+        break ;
+      case EXIT:
+        // goto finish;
+        exit(0);
+#if 0
+        printf("\nAre you sure you want to exit? (yes/no) ");
+        fgets(line, sizeof(line), stdin);
+        if (strncmp(line, "yes", 3) == 0) {
+          goto finish; 
+        }
+#endif
+        break ;
+      default:
+        run_command();
+    }
+
+    fflush(stdout);
+  }
+
+finish:
+
+  fclose(fp);
+}
+
+
+// READ SOUNDINGS /file/ CHARTDATUM /chart datum/
+
+void run_read_soundings() {
+
+  int i, k;
+  float *x, *y, *z, scale = 1.0, chart_datum = 0.0, offsetX = 0.0, offsetY = 0.0;
+
+// Check if we have previously read in sounding data. 
+
+  if (read_soundings) {
+    free_float_array_2d(soundings, nsoundings);
+    meminuse -= (1.0e-6*(float) 3*nsoundings)*((float) sizeof(float));
+  }
+
+// Check file exists.  
+
+  if (! file_exists(parsed[2])) {
+    printf("\nERROR: missing file '%s'\n", parsed[2]);
+    return ;
+  }
+
+// Read SCALE. 
+
+  k = 3;
+
+  if (strcmp(parsed[k], "SCALE") == 0) {
+    scale = atof(parsed[++k]);
+    k++;
+  }  
+
+
+// Check for chart datum.
+
+  if (strcmp(parsed[k], "CHARTDATUM") == 0) {
+    chart_datum = atof(parsed[++k]);
+    k++;
+  }
+
+// Check for offsets. 
+
+  if (strcmp(parsed[k], "OFFSET") == 0) {
+    offsetX = atof(parsed[++k]);
+    offsetY = atof(parsed[++k]);
+    k++;
+  }
+
+// Read sounding data. 
+
+  read_xyz(parsed[2], &x, &y, &z, &nsoundings);
+
+  allocate_float_array_2d(&soundings, nsoundings, 3);
+
+  sounding_errors = (float*) malloc(nsoundings*sizeof(float));
+  model_depths = (float*) malloc(nsoundings*sizeof(float));
+  sounding_depths = (float*) malloc(nsoundings*sizeof(float));
+
+  for (i = 0; i < nsoundings; i++) {
+    soundings[i][0] = x[i] + offsetX;
+    soundings[i][1] = y[i] + offsetY;
+    z[i] = (z[i] + chart_datum)*scale;
+    soundings[i][2] = z[i];
+    sounding_errors[i] = 0.0;
+  }
+
+  read_soundings = true;
+
+// Display simple stats. 
+
+  float soundmin = vec_min(z, nsoundings);
+  float soundmax = vec_max(z, nsoundings);
+  float soundmean = vec_mean(z, nsoundings);
+
+  printf("\n  READ %d SOUNDINGS.\n", nsoundings);
+  printf("  MINIMUM DEPTH = %f\n", soundmin);
+  printf("  MAXIMUM DEPTH = %f\n", soundmax);
+  printf("  MEAN DEPTH    = %f\n", soundmean);
+
+// Update memory usage (in units of megabytes). 
+
+  meminuse += (1.0e-6*(float) 3*nsoundings)*((float) sizeof(float));
+
+// Free memory. 
+
+  free(x);
+  free(y);
+  free(z);
+}
+
+
+// READ GRID /grid name/ /file/ SCALE /scale/ OFFSET /offset/
+
+void run_read_grid() {
+
+  int i, j, k, n, ps, ncols, nrows;
+  double wlon, slat, cellsize, spval;
+  float **array, scale, offset;
+  geogrid grid;
+  bool convert2reflectance = false;
+
+// Can we allocate another grid?
+
+  if (n_grids_in_use == MAX_GRIDS) {
+    printf("\nERROR: unable to store grid.\n");
+    return ;
+  }
+
+// Allocate grid into the first empty slot. 
+
+  for (n = 0; n < MAX_GRIDS; n++) {
+    if (! allocated_grids[n]) {
+      ps = n;
+      break;
+    }
+  }
+
+// Set name. 
+
+  if (parsed[2][0] == '\0' || parsed[3][0] == '\0') {
+    printf("\nERROR: READ GRID /name/ /file/ [optional] SCALE /scale factor/ \
+OFFSET /add offset/ THETA /sun elevation angle/\n");
+    return ;
+  } else {
+
+  // Do we already have a grid with this name? 
+
+    for (n = 0; n < MAX_GRIDS; n++) {
+      if (strcmp(grid_names[n], parsed[2]) == 0) {
+        printf("\nERROR: grid '%s' already in use.\n", parsed[2]);
+        return ;
+      }
+    }
+
+    strcpy(grid_names[ps], parsed[2]);
+  }
+
+// Check file exists.  
+
+  if (! file_exists(parsed[3])) {
+    printf("\nERROR: missing file '%s'\n", parsed[3]);
+    return ;
+  }
+
+// Read in gridded data. 
+
+  read_grid(parsed[3], &array, &ncols, &nrows, &wlon, 
+              &slat, &cellsize, &spval);
+
+  grid.ncols = ncols;
+  grid.nrows = nrows;
+  grid.cellsize = (float) cellsize;
+  grid.wlon = (float) wlon;
+  grid.slat = (float) slat;
+  grid.elon = wlon + cellsize*((float) ncols - 1);
+  grid.nlat = slat + cellsize*((float) nrows - 1);
+  grid.nodata_value = (float) spval;
+  grid.array = array;
+
+// Check for SCALE. 
+
+  k = 4; 
+
+  if (strcmp(parsed[k], "SCALE") == 0) {
+    scale = atof(parsed[++k]);
+    k++;
+  } else {
+    scale = 1.0;
+  }
+
+// Check for OFFSET. 
+
+  if (strcmp(parsed[k], "OFFSET") == 0) {
+    offset = atof(parsed[++k]);
+    k++;
+  } else {
+    offset = 0.0;
+  }
+
+// Set allocated. 
+
+  allocated_grids[ps] = true;
+
+// Transform array. 
+
+  for (i = 0; i < nrows; i++) {
+    for (j = 0; j < ncols; j++) {
+      if (grid.array[i][j] == grid.nodata_value) {
+        grid.array[i][j] = grid.nodata_value;
+      } else {
+        grid.array[i][j] = grid.array[i][j]*scale + offset;  // radiance scale and offset. 
+      }
+    }
+  }
+
+#if 0
+  printf("\nmin, max = %f, %f\n", 
+    array_min(grid.array, nrows, ncols), 
+    array_max(grid.array, nrows, ncols));
+#endif
+
+  gridded_data[ps] = grid;
+
+// Update memory usage (in units of megabytes). 
+
+  meminuse += 1.0e-6*((float) nrows*ncols)*((float) sizeof(float));
+
+// Update number of bands in use. 
+
+  n_grids_in_use++;
+}
+
+
 //
 //    INPUT PARSER
 //
 
 int parse_input(char line[MAX_LINE]) {
 
-	int n, m;
+  int n, m;
 
 // Reset parsed. 
 
-	for (n = 0; n < MAX_ARGS; n++)
-		for (m = 0; m < MAX_ARG_SIZE; m++)
-			parsed[n][m] = '\0';
+  for (n = 0; n < MAX_ARGS; n++)
+    for (m = 0; m < MAX_ARG_SIZE; m++)
+      parsed[n][m] = '\0';
 
 // Tokenize. 
 
-	tokenize(line);
+  tokenize(line);
 
 // Check for high priority commands. 
 
-	if (strncmp(parsed[0], "//", 2) == 0)
-		return COMMENT;
-	else if (strncmp(parsed[0], "EXIT", 4) == 0)
-		return EXIT;
+  if (strncmp(parsed[0], "//", 2) == 0)
+    return COMMENT;
+  else if (strncmp(parsed[0], "EXIT", 4) == 0)
+    return EXIT;
   else if (strncmp(parsed[0], "STOP", 4) == 0)
     return STOP;
-	else
-		return OK;
+  else
+    return OK;
 }
 
 void tokenize(char line[MAX_LINE]) {
 
-	int n, m = 0, tok = 0; 
+  int n, m = 0, tok = 0; 
 
-	for (n = 0; n < strlen(line); n++) {
-//		printf("\n'%c' ", line[n]);
-		if (line[n] == ' ' || line[n] == '\0' || line[n] == '\n') {
-			parsed[tok][m++] = '\0';
-			tok++;
-			m = 0;
-//			printf("%s\n", parsed[tok - 1]);
-		} else {
-			parsed[tok][m++] = line[n];
-		}
-	}
+  for (n = 0; n < strlen(line); n++) {
+//    printf("\n'%c' ", line[n]);
+    if (line[n] == ' ' || line[n] == '\0' || line[n] == '\n') {
+      parsed[tok][m++] = '\0';
+      tok++;
+      m = 0;
+//      printf("%s\n", parsed[tok - 1]);
+    } else {
+      parsed[tok][m++] = line[n];
+    }
+  }
 }
+
