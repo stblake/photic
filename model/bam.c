@@ -188,14 +188,12 @@ void pertubate_vec2(float *vec, int len, float scale);
 int run_input_command_file();
 void run_empirical_model();
 void simulated_annealing(int nparams);
-float zdepth_blake(int i, int j);
 float zdepth_polcyn_log_ratio(int i, int j);
 void lyzenga_log_linear();
 float zdepth_lyzenga_log_linear(int i, int j);
 void polcyn_log_ratio();
 float bottom_type(int i, int j);
 float geodistance(float lon1, float lat1, float lon2, float lat2);
-void blake_local();
 float radiance_min_cutoff(float **array, int nrows, int ncols, float spval,
     int i_min, int j_min, int i_max, int j_max);
 void run_compute();
@@ -2954,8 +2952,7 @@ void run_history() {
 void run_model() {
   if (strcmp(parsed[1], "lyzenga_log_linear") == 0 || 
       strcmp(parsed[1], "polcyn_log_ratio") == 0 || 
-      strcmp(parsed[1], "stumpf_log_ratio") == 0 || 
-      strcmp(parsed[1], "blake_local") == 0) {
+      strcmp(parsed[1], "stumpf_log_ratio") == 0) {
     run_empirical_model();
   } else if (strcmp(parsed[1], "Kd_490_Mueller") == 0) {
     run_model_mueller();
@@ -4002,8 +3999,7 @@ void run_empirical_model() {
 
 	if (! (strcmp(parsed[1], "lyzenga_log_linear") == 0 || 
 			strcmp(parsed[1], "polcyn_log_ratio") == 0 || 
-			strcmp(parsed[1], "stumpf_log_ratio") == 0 || 
-			strcmp(parsed[1], "blake_local") == 0) ) {
+			strcmp(parsed[1], "stumpf_log_ratio") == 0) ) {
 		printf("\nERROR: unknown model name '%s'.\n", parsed[1]);
 		return ; 
 	} else {
@@ -4447,8 +4443,6 @@ WEIGHTS /sounding weight/ /line weight/ BOTTOM /output bottom type grid name/ ER
 		polcyn_log_ratio();
   } else if (strcmp(model_name, "stumpf_log_ratio") == 0) {
   	// stumpf_log_ratio();
-  } else if (strcmp(model_name, "blake_local") == 0) {
-  	blake_local();
   } else {
   	printf("\nERROR: unknown model '%s'.\n", model_name);
   	return ;
@@ -5027,191 +5021,6 @@ float bottom_type(int i, int j) {
   return Yij;
 }
 
-
-/* Notes on my regionally-adaptive, sounding-directed model. We construct a global 
-model, Rm, which is composed on Nm local models (Nm is often set to the number of 
-soundings.) such that 
-
-		Rm(i,j) = sum(w_k(i,j)*m_k(i,j), k=1,Nm)/sum(w_k(i,j), k=1,Nm)
-
-where the weight function is given by 
-
-		w_k(i,j) = exp(-d^2/R)
-
-where d is the distance from (i,j) to the origin of the k-th local model. The local 
-model, m_k(i,j), can be any of the known global models. 
-
-*/
-
-void blake_local() {
-
-	int n, nparams, randindex;
-	float scalex, scaley;
-
-// Set model depth function.
-
-	zdepth = &zdepth_blake;
-
-// Set the number of local models. 
-
-	n_local_models = nsoundings;  // TODO: this should be adaptive
-
-// Set the number of model parameters.
-
-	nparams = n_local_models*(1 + n_model_bands);
-	mparams = (float*) malloc(nparams*sizeof(float));
-	
-// Set the origin of the model soundings. 
-
-	allocate_int_array_2d(&model_origins, n_local_models, 2);
-
-	for (n = 0; n < n_local_models; n++) {
-		randindex = random_in_range(0,nsoundings);
-		model_origins[n][0] = round( ((float) gridded_data[bands_indexes[0]].ncols)*
-				(soundings[randindex][0] - gridded_data[bands_indexes[0]].wlon)/
-				(gridded_data[bands_indexes[0]].elon - gridded_data[bands_indexes[0]].wlon) );
-
-		model_origins[n][1] = round( ((float) gridded_data[bands_indexes[0]].nrows)*
-				(soundings[randindex][1] - gridded_data[bands_indexes[0]].slat)/
-				(gridded_data[bands_indexes[0]].nlat - gridded_data[bands_indexes[0]].slat) );
-	}
-
-	scalex = geodistance(
-		gridded_data[bands_indexes[0]].wlon, gridded_data[bands_indexes[0]].slat, 
-		gridded_data[bands_indexes[0]].elon, gridded_data[bands_indexes[0]].slat);
-	scalex += geodistance(
-		gridded_data[bands_indexes[0]].wlon, gridded_data[bands_indexes[0]].nlat, 
-		gridded_data[bands_indexes[0]].elon, gridded_data[bands_indexes[0]].nlat);
-	scalex /= 2.0*gridded_data[bands_indexes[0]].ncols;
-
-	scaley = geodistance(
-		gridded_data[bands_indexes[0]].wlon, gridded_data[bands_indexes[0]].slat, 
-		gridded_data[bands_indexes[0]].wlon, gridded_data[bands_indexes[0]].nlat);
-	scaley += geodistance(
-		gridded_data[bands_indexes[0]].elon, gridded_data[bands_indexes[0]].slat, 
-		gridded_data[bands_indexes[0]].elon, gridded_data[bands_indexes[0]].nlat);
-	scaley /= 2.0*gridded_data[bands_indexes[0]].nrows;
-
-	map_scale = 0.5*(scalex + scaley);
-
-	// printf("\nmap resolution = %f\n", map_scale);
-
-// Run the optimisation strategy. 
-
-	simulated_annealing(nparams);
-}
-
-
-float zdepth_blake(int i, int j) {
-	int pin, n, m, ii, jj, iii, jjj, nobs, nrows, ncols;
-	float rad, Lm, depth = 0.0, weight, weightsum,
-		distx, disty, dist, local_depth;
-
-	nrows = gridded_data[bands_indexes[m]].nrows;
-	ncols = gridded_data[bands_indexes[m]].ncols;
-
-	weightsum = 0.0; // Total of all the weights.
-	pin = 0; // Model parameter index.
-
-	for (n = 0; n < n_local_models; n++) {
-	
-		// Compute the weight.
-
-		distx = j - model_origins[n][0];
-		disty = i - model_origins[n][1];
-		dist = 1.0e-3*map_scale*sqrt(pow(distx, 2) + pow(disty, 2));
-
-		weight = exp(-pow(dist, 2)/pow(falloff_param, 2));
-
-		// printf("\ndist = %f", dist);
-		// printf("\nweight = %f", weight);
-
-//		if (weight < model_weight_cutoff)
-//			continue ;
-
-		weightsum += weight;
-
-		// Compute the depth for this model component. 
-
-		local_depth = mparams[pin++];
-
-		for (m = 0; m < n_model_bands; m++) {
-
-			nobs = 0;
-			Lm = 0.0;
-
-			for (ii = 1 - depth_radius; ii < depth_radius; ii++) {
-
-				if (i + ii < 0)
-					iii = 0;
-				else if (i + ii > nrows - 1)
-					iii = nrows - 1;
-				else 
-					iii = i + ii;
-
-				for (jj = 1 - depth_radius; jj < depth_radius; jj++) {
-
-					if (j + jj < 0)	
-						jjj = 0;
-					else if (j + jj > ncols - 1)
-						jjj = ncols - 1;
-					else 
-						jjj = j + jj;
-
-					rad = gridded_data[bands_indexes[m]].array[iii][jjj];
-
-					if (rad != gridded_data[bands_indexes[m]].nodata_value) {
-						Lm += rad;
-						nobs++;
-					}
-				}
-			}
-		
-			if (nobs != 0)
-				Lm /= (float) nobs;
-
-			if (Lm > Lsm[bands_indexes[m]])
-				local_depth -= mparams[pin++]*log(Lm - Lsm[bands_indexes[m]] + log_epsilon); 
-		}
-
-		depth += weight*local_depth;
-	}
-
-	if (weightsum == 0.0)
-		return depth;
-	else
-		return depth/weightsum;
-}
-
-/* 
-
-Notes on my sounding directed implementation of Lyzenga's 1985 method: We construct 
-a depth function, z, which is a function of radiance, L, for the m-th 
-spectral band, at position i,j:
-
-		z_m_{i,j} = a_{m,0} + a_{m,1} log( L_m_{i,j} - L_sm )
-
-where L_sm is the radiance of deep water for band m. Then for a M-banded model: 
-
-		z_{i,j} = z_{m_0}_{i,j} + z_{m_1}_{i,j} + ... + z_{m_{M-1}}_{i,j}, 
-
-where the coefficients a_{m,0}, a_{m,1}, for each m, are found using a global 
-optimisation scheme (simulated annealing or random search with backtracking). The 
-error model for this scheme follows a weighted rms of the relative error: 
-
-		error(z) = sqrt( sum( (w_k (z_{i,j} - S_k)/S_k)^2, k=1,N)/N )
-
-where we have N soundings (obtained from nautical charts, lidar, side scan sonar, etc). 
-Generally the weights, w_k, are inversly proportional to the depth and can be set 
-and modified by the user. 
-
-An estimate, due to Lyzenga (1985 pp. 123), of the error due to combined system and 
-environmental noise is given by 
-
-  dz_{i,j} = sqrt(sum( (a_{k,1}*sqrt(L_sk)/(L_k_{i,j} - L_sk))^2, k=1,N ))
-
-
-*/
 
 void lyzenga_log_linear() {
 
