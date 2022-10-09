@@ -17,7 +17,6 @@ void run_process_shallow();
 void run_process_pansharpen();
 void run_process_noise();
 void run_process_deglint();
-void run_process_image();
 void run_process_unite();
 void run_process_cloud();
 void run_process_mask();
