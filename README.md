@@ -54,7 +54,7 @@ The modelled satellite-derived bathymetry comprised $3138$ $\text{km}^2$ at a ho
 
 ### UAE - Mubarraz Island to Abu Dhabi 
 
-The modelled satellite-derived bathymetry comprised $11408$ $\text{km}^2$ at a horizontal resolution of 30m. The modelled gridded dataset has dimensions 4535 by 7476 and is projected in the WGS84 (EPSG:4326) coordinate system. The dataset is a 38 MB compressed geotiff.
+The modelled satellite-derived bathymetry comprised $11408$ $\text{km}^2$ at a horizontal resolution of 30m. The modelled gridded dataset has dimensions 4535 by 7476 and is projected in the WGS84 (EPSG:4326) coordinate system. The dataset is a 38 MB compressed geotiff, which can be downloaded [here](https://drive.google.com/file/d/1mWg69JIYsgOr_mJbglDc9ZPhEC0tE6j3/view?usp=share_link).
 
 <p align="center">
   <img src="abu_dhabi_to_mubarraz_island_viridis.jpg" width="900" title="UAE - Abu Dhabi to Mubarraz Island Satellite-Derived Bathymetry">
@@ -62,7 +62,7 @@ The modelled satellite-derived bathymetry comprised $11408$ $\text{km}^2$ at a h
 
 ### Qatar - Eastern Qatar to Sir Baniyas Island
 
-The modelled satellite-derived bathymetry comprised $14716$ $\text{km}^2$ at a horizontal resolution of 30m. The modelled gridded dataset has dimensions 5774 by 6905 and is projected in the WGS84 (EPSG:4326) coordinate system. The dataset is a 47 MB compressed geotiff.
+The modelled satellite-derived bathymetry comprised $14716$ $\text{km}^2$ at a horizontal resolution of 30m. The modelled gridded dataset has dimensions 5774 by 6905 and is projected in the WGS84 (EPSG:4326) coordinate system. The dataset is a 47 MB compressed geotiff, which can be downloaded [here](https://drive.google.com/file/d/1whcQ1d_a5pJ0ev7Gs3T4BOujJQKmsHil/view?usp=share_link).
 
 <p align="center">
   <img src="H_qatar_east_viridis.jpg" width="900" title="Eastern Qatar to Sir Baniyas Island Satellite-Derived Bathymetry">
@@ -70,7 +70,7 @@ The modelled satellite-derived bathymetry comprised $14716$ $\text{km}^2$ at a h
 
 ### Qatar, Bahrain and Saudi Arabia
 
-The modelled satellite-derived bathymetry comprised $12232$ $\text{km}^2$ at a horizontal resolution of 30m. The modelled gridded dataset has dimensions 7361 by 7344 and is projected in the WGS84 (EPSG:4326) coordinate system. The dataset is a 43 MB compressed geotiff.
+The modelled satellite-derived bathymetry comprised $12232$ $\text{km}^2$ at a horizontal resolution of 30m. The modelled gridded dataset has dimensions 7361 by 7344 and is projected in the WGS84 (EPSG:4326) coordinate system. The dataset is a 43 MB compressed geotiff, which can be downloaded [here](https://drive.google.com/file/d/1Ygjxj7EN7TgvsJT3uUcDUX_kTXXNK9fc/view?usp=share_link).
 
 <p align="center">
   <img src="qatar_west_30m_viridis.jpg" width="800" title="Qatar, Bahrain, Saudi Arabia Satellite-Derived Bathymetry">
