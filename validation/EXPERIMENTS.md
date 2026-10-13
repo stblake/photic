@@ -200,6 +200,37 @@ Each enters the LM fit as a bound or a weighted residual (a soft prior, weight 1
 - **Lee's practice (Y4) sits between Y0 and Y2.**
 - **Decision:** benchmark Y2 as a second integrated candidate. Tier 3's control scenes are generated with Y0, so they will regress by construction; judge Y2 on the OSOAA scenarios and tier 4.
 
+### Error budget (2026-10-13, `error_budget.py`)
+
+photic's search (profile, then refine, by LM; Y fitted per scene) on tier 3's OSOAA pixels, with one component held at its true value. Depth bias (RMSE), m.
+
+Clear, no noise:
+
+| held true | 5–10 m | 10–15 | 15–20 | 20–30 |
+|---|---|---|---|---|
+| nothing | +0.59 (1.01) | +2.51 (2.53) | +3.25 (3.29) | +3.70 (3.73) |
+| Y | +0.42 (0.64) | +1.82 (1.85) | +2.85 (2.87) | +3.30 (3.31) |
+| water (P, G, X, Y) | +0.23 (0.25) | +0.52 (0.53) | +0.79 (0.83) | +1.31 (1.39) |
+| **bottom** | **+0.12 (0.13)** | **+0.07 (0.08)** | **+0.09 (0.10)** | +0.28 (0.30) |
+| Y + bottom | +0.08 (0.09) | +0.05 (0.06) | +0.08 (0.09) | +0.31 (0.32) |
+
+Moderate, noise 0.0005:
+
+| held true | 5–10 m | 10–15 | 15–20 |
+|---|---|---|---|
+| nothing | −1.43 (3.50) | −8.16 (8.40) | −12.85 (12.96) |
+| water | +0.94 (1.38) | −6.02 (6.31) | −9.08 (9.41) |
+| **bottom** | **−0.16 (0.52)** | **0.00 (0.90)** | +2.16 (5.10) |
+
+- **The residual bias is the depth–albedo trade-off.** Given the bottom, depth is right to 20–30 m in clear water and to 15 m in noisy moderate water.
+- **The fit absorbs the forward model's small error differently by water type:** in clear water as a brighter bottom placed deeper; in noisy moderate water as a darker bottom placed shallower.
+- **Y and the water matter much less.**
+- **Turbid water beyond about 5 m stays unresolvable whatever is given**, the information limit flagged by C2.
+- **Anomaly:** the 0–5 m bin with the bottom held true has one outlier pixel (+2.7 m mean), to check.
+- **Next:** constrain the bottom.
+  - **B16, bottom coherence:** a soft prior pulling a pixel's B_k towards the window mean (the seabed locally uniform at about 60 m).
+  - **B8, realistic albedo ranges per bottom type:** needs absolute library reflectances.
+
 ### Geometry constraints across scenes (planned 2026-10-13)
 
 Each scene sees the same seabed through a different light path, M_s = sec θ_w,s + D sec θ_v,s, and a different water column H + τ_s. The forward model already contains both, but P, G and X are free per scene, so a change in water can absorb most of the angular signal.
