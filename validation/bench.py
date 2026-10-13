@@ -43,7 +43,9 @@ def build_drivers():
     subprocess.run(["make", "-s", "-C", HERE], check=True)
 
 
-def run_tier(tier, quick):
+def run_tier(tier, quick, photic=None, cid=None, only=None):
+    photic = photic or os.path.join(REPO, "model", "photic")
+    cid = cid or commit_id()
     if tier == 1:
         import tier1
         return tier1.run(os.path.join(HERE, "drivers", "forward_dump"),
@@ -60,25 +62,30 @@ def run_tier(tier, quick):
         import tier3_scenes
         work = os.path.join(DATA, "runs", "tier3")
         os.makedirs(work, exist_ok=True)
-        return tier3_scenes.run(os.path.join(HERE, "drivers", "forward_dump"),
-                                os.path.join(REPO, "model", "photic"), DATA, work, quick=quick)
+        return tier3_scenes.run(os.path.join(HERE, "drivers", "forward_dump"), photic, DATA, work, quick=quick,
+                                photic_work=os.path.join(work, cid, "photic"), only=only)
     if tier == 4:
         import tier4_score
-        work = os.path.join(DATA, "runs", "tier4", commit_id())
+        work = os.path.join(DATA, "runs", "tier4", cid)
         os.makedirs(work, exist_ok=True)
-        return tier4_score.run(os.path.join(REPO, "model", "photic"), DATA, work)
+        return tier4_score.run(photic, DATA, work)
     raise SystemExit("tier %d is not implemented yet" % tier)
 
 
 def cmd_run(args):
     build_drivers()
-    cid = commit_id()
+    cid = args.cid or commit_id()
     for tier in args.tier:
         print("running tier %d for %s ..." % (tier, cid), flush=True)
-        result = run_tier(tier, args.quick)
-        result["_meta"] = dict(commit=cid, quick=args.quick,
-                               date=datetime.datetime.now().isoformat(timespec="seconds"))
+        result = run_tier(tier, args.quick, photic=args.photic, cid=cid, only=args.only)
         path = os.path.join(results_dir(cid), "tier%d.json" % tier)
+        if args.only and os.path.exists(path):
+            # Merge the selected scenarios into the existing results.
+            old = json.load(open(path))
+            old.setdefault("scenarios", {}).update(result.get("scenarios", {}))
+            result = old
+        result["_meta"] = dict(commit=cid, quick=args.quick, photic=args.photic, only=args.only,
+                               date=datetime.datetime.now().isoformat(timespec="seconds"))
         with open(path, "w") as f:
             json.dump(result, f, indent=1, sort_keys=True)
         print("  wrote %s" % path)
@@ -96,7 +103,7 @@ def flatten(d, prefix=""):
 
 
 def cmd_score(args):
-    cid = commit_id()
+    cid = args.cid or commit_id()
     rdir = results_dir(cid)
     card = dict(commit=cid, date=datetime.datetime.now().isoformat(timespec="seconds"))
     for name in sorted(os.listdir(rdir)):
@@ -147,7 +154,11 @@ def main():
     r = sub.add_parser("run")
     r.add_argument("--tier", type=int, action="append", required=True)
     r.add_argument("--quick", action="store_true")
-    sub.add_parser("score")
+    r.add_argument("--only", help="run only the tier 3 scenarios whose names contain this, and merge")
+    r.add_argument("--photic", help="photic binary to score (default ../model/photic)")
+    r.add_argument("--cid", help="name for the results (default: the commit)")
+    sc = sub.add_parser("score")
+    sc.add_argument("--cid", help="results to score (default: the commit)")
     c = sub.add_parser("compare")
     c.add_argument("a")
     c.add_argument("b")
