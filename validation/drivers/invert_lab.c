@@ -12,9 +12,8 @@
 //   RRS region scene Rrs_1 .. Rrs_n                   (one line per region and scene)
 //   END
 //
-// Commands follow, one per line. Parameter vectors use photic's internal layout and
-// scaling: [H (n_regions) | B (n_regions*n_bottoms, x100) | q (n_regions*n_bottoms) |
-// P, G, X per scene (x100)].
+// Commands follow, one per line. Parameter vectors use photic's internal (transformed)
+// layout; see samodel_n_params() and samodel_pack() in samodel.c.
 //
 //   EVAL p_1 .. p_m
 //       prints the total error, its components, K_min and the modelled Rrs.
@@ -26,8 +25,10 @@
 //       table and no carry-over from a previous pixel. h_empirical < 0 means no prior
 //       (h_empirical is then 0, as with a fresh allocation). Prints depth, albedo, K_min,
 //       errors, P, G, X per scene and the bottom type percentages.
-//   START h
-//       photic's starting vector and steps for depth h (as without start_at_previous).
+//   START h [albedo]
+//       photic's starting vector and steps for depth h (samodel_initial).
+//   PACK H.. albedo.. q.. P G X..
+//       the parameter vector for physical values (samodel_pack).
 //
 // Each command's output ends with a line DONE.
 
@@ -217,7 +218,7 @@ int main(void) {
   for (k = 0; k < n_bottoms; k++) {
     md->bottom_type_indexes[k] = k;
   }
-  n_params = n_regions + 2*n_regions*n_bottoms + 3*n_scenes;
+  n_params = samodel_n_params(md);
   md->n_params = n_params;
   if (n_params > MAX_P) { printf("ERROR: too many parameters\n"); return 1; }
 
@@ -264,43 +265,38 @@ int main(void) {
 
     } else if (strcmp(word, "START") == 0) {
 
-      // photic's starting point and steps for depth h, as in
-      // samodel_optimise_one_bottom_combination() without start_at_previous.
+      // photic's starting point and steps for depth h (and optionally albedo).
 
-      double m490, m550, m640;
-      int nr = n_regions, nb = n_bottoms, off = n_regions + 2*n_regions*n_bottoms;
-      if (sscanf(s, "%lf", &h) != 1) { printf("ERROR: bad START\n"); continue; }
-      m490 = 0.0;
-      for (k_region = 0; k_region < nr; k_region++)
-        for (k_scene = 0; k_scene < n_scenes; k_scene++) m490 += md->Rrs490[k_region][k_scene];
-      m490 /= (double) nr*n_scenes;
-      for (k_region = 0; k_region < nr; k_region++) {
-        v[k_region] = h;
-        step[k_region] = 1.25*h;
-        for (k = 0; k < nb; k++) {
-          v[nr + k_region*nb + k] = 100.0*4.0*m490;
-          step[nr + k_region*nb + k] = 1.5*v[nr + k_region*nb + k];
-          v[nr + nr*nb + k_region*nb + k] = 1.0;
-          step[nr + nr*nb + k_region*nb + k] = 0.5;
-        }
-      }
-      for (k_scene = 0; k_scene < n_scenes; k_scene++) {
-        m490 = m550 = m640 = 0.0;
-        for (k_region = 0; k_region < nr; k_region++) {
-          m490 += md->Rrs490[k_region][k_scene];
-          m550 += md->Rrs550[k_region][k_scene];
-          m640 += md->Rrs640[k_region][k_scene];
-        }
-        m490 /= nr; m550 /= nr; m640 /= nr;
-        v[off + 3*k_scene] = 100.0*0.072*pow(m490/m550, -1.7);
-        v[off + 3*k_scene + 1] = 1.5*v[off + 3*k_scene];
-        v[off + 3*k_scene + 2] = 100.0*30.0*md->a_w640*m640;
-        for (k = 0; k < 3; k++) step[off + 3*k_scene + k] = 2.0*v[off + 3*k_scene + k];
-      }
+      double albedo = 0.3;
+      if (sscanf(s, "%lf %lf", &h, &albedo) < 1) { printf("ERROR: bad START\n"); continue; }
+      md->n_bottoms = n_bottoms;
+      samodel_initial(md, h, albedo, v, step);
       printf("START");
       for (i = 0; i < n_params; i++) printf(" %.10g", v[i]);
       printf("\nSTEP");
       for (i = 0; i < n_params; i++) printf(" %.10g", step[i]);
+      printf("\n");
+
+    } else if (strcmp(word, "PACK") == 0) {
+
+      // Physical values to a parameter vector:
+      // PACK H_1..H_nr  albedo_1..albedo_nr  q_11..q_nr,nb  P_1 G_1 X_1 .. per scene
+
+      double pH[MAX_P], pA[MAX_P], pq[MAX_P], pP[MAX_P], pG[MAX_P], pX[MAX_P], pgx[3*MAX_P];
+      md->n_bottoms = n_bottoms;
+      if (! read_doubles(&s, pH, n_regions) || ! read_doubles(&s, pA, n_regions) ||
+          ! read_doubles(&s, pq, n_regions*n_bottoms) || ! read_doubles(&s, pgx, 3*n_scenes)) {
+        printf("ERROR: bad PACK\n");
+        continue;
+      }
+      for (k_scene = 0; k_scene < n_scenes; k_scene++) {
+        pP[k_scene] = pgx[3*k_scene];
+        pG[k_scene] = pgx[3*k_scene + 1];
+        pX[k_scene] = pgx[3*k_scene + 2];
+      }
+      samodel_pack(md, pH, pA, pq, pP, pG, pX, v);
+      printf("PACKED");
+      for (i = 0; i < n_params; i++) printf(" %.10g", v[i]);
       printf("\n");
 
     } else if (strcmp(word, "PHOTIC") == 0) {

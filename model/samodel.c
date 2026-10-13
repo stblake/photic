@@ -98,6 +98,24 @@
 #define RESTART 0
 #define DELTA 0
 
+#if DELTA
+#error "DELTA is not supported by the bounded parameterisation"
+#endif
+
+// Bounds of the water parameters (m^-1): phytoplankton absorption P = a_phi(440), gelbstoff
+// absorption G = a_g(440) and particle backscattering X = b_bp(440).
+
+#define P_MIN 0.0005
+#define P_MAX 1.0
+#define G_MIN 0.0005
+#define G_MAX 2.0
+#define X_MIN 0.0001
+#define X_MAX 0.5
+
+// Starting bottom albedo.
+
+#define ALBEDO_START 0.3
+
 // Reference wavelengths. 
 
 int n_ref_wlens = 41;
@@ -1765,13 +1783,165 @@ min/mean/max min(K) = %.4f %.4f %.4f\n",
 
 
 
+// The parameter vector. Nelder-Mead searches transformed values, which bounds the physical
+// parameters:
+//
+//   [H (n_regions) | albedo (n_regions) | mixing (n_regions*(n_bottoms - 1)) | P, G, X per scene]
+//
+// H = |h|; albedo = logistic(z) in (0, 1); the bottom-type fractions q are a softmax of
+// (0, z_1, .., z_{n_bottoms-1}); P, G and X are log-uniform between their bounds through
+// a logistic.
+
+int samodel_n_params(model_data *md) {
+	return md->n_regions*(1 + md->n_bottoms) + 3*md->n_scenes;
+}
+
+static double logistic(double z) {
+	return 1.0/(1.0 + exp(-z));
+}
+
+static double logit(double p) {
+	if (p < 1.0e-9) p = 1.0e-9;
+	if (p > 1.0 - 1.0e-9) p = 1.0 - 1.0e-9;
+	return log(p/(1.0 - p));
+}
+
+static double to_bounded(double z, double lo, double hi) {
+	return lo*pow(hi/lo, logistic(z));
+}
+
+static double from_bounded(double v, double lo, double hi) {
+	if (v < lo) v = lo;
+	if (v > hi) v = hi;
+	return logit(log(v/lo)/log(hi/lo));
+}
+
+void samodel_unpack_region(double *params, model_data *md, int k_region, double *H, double *albedo, double q[]) {
+
+	int k, n_regions = md->n_regions, n_bottoms = md->n_bottoms;
+	double z, z_max, sum;
+
+	*H = fabs(params[k_region]);
+	*albedo = logistic(params[n_regions + k_region]);
+
+	z_max = 0.0;
+	for (k = 1; k < n_bottoms; k++) {
+		z = params[2*n_regions + k_region*(n_bottoms - 1) + k - 1];
+		if (z > z_max) z_max = z;
+	}
+
+	q[0] = exp(-z_max);
+	sum = q[0];
+	for (k = 1; k < n_bottoms; k++) {
+		q[k] = exp(params[2*n_regions + k_region*(n_bottoms - 1) + k - 1] - z_max);
+		sum += q[k];
+	}
+	for (k = 0; k < n_bottoms; k++) {
+		q[k] /= sum;
+	}
+}
+
+void samodel_unpack_scene(double *params, model_data *md, int k_scene, double *P, double *G, double *X) {
+
+	int offset = md->n_regions*(1 + md->n_bottoms);
+
+	*P = to_bounded(params[offset + 3*k_scene], P_MIN, P_MAX);
+	*G = to_bounded(params[offset + 3*k_scene + 1], G_MIN, G_MAX);
+	*X = to_bounded(params[offset + 3*k_scene + 2], X_MIN, X_MAX);
+}
+
+// Pack physical values into a parameter vector. q holds n_bottoms fractions per region.
+
+void samodel_pack(model_data *md, double *H, double *albedo, double *q, double *P, double *G, double *X,
+	double *params) {
+
+	int k_region, k_scene, k, n_regions = md->n_regions, n_bottoms = md->n_bottoms,
+		offset = md->n_regions*(1 + md->n_bottoms);
+	double q0;
+
+	for (k_region = 0; k_region < n_regions; k_region++) {
+		params[k_region] = H[k_region];
+		params[n_regions + k_region] = logit(albedo[k_region]);
+		q0 = MAX(q[k_region*n_bottoms], 1.0e-9);
+		for (k = 1; k < n_bottoms; k++) {
+			params[2*n_regions + k_region*(n_bottoms - 1) + k - 1] = log(MAX(q[k_region*n_bottoms + k], 1.0e-9)/q0);
+		}
+	}
+
+	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+		params[offset + 3*k_scene]     = from_bounded(P[k_scene], P_MIN, P_MAX);
+		params[offset + 3*k_scene + 1] = from_bounded(G[k_scene], G_MIN, G_MAX);
+		params[offset + 3*k_scene + 2] = from_bounded(X[k_scene], X_MIN, X_MAX);
+	}
+}
+
+// Starting point and Nelder-Mead steps for depth h and bottom albedo: equal bottom fractions,
+// and P, G, X estimated from each scene's mean Rrs(490), Rrs(550) and Rrs(640). Requires
+// md->Rrs490, Rrs550 and Rrs640 (set in samodel_optimise).
+
+void samodel_initial(model_data *md, double h, double albedo, double *start, double *step) {
+
+	int k_region, k_scene, k, n_regions = md->n_regions, n_bottoms = md->n_bottoms,
+		offset = md->n_regions*(1 + md->n_bottoms);
+	double *H, *A, *q, P[MAX_SCENES], G[MAX_SCENES], X[MAX_SCENES], mean_Rrs490, mean_Rrs550, mean_Rrs640;
+
+	H = malloc(n_regions*sizeof(double));
+	A = malloc(n_regions*sizeof(double));
+	q = malloc(n_regions*n_bottoms*sizeof(double));
+
+	for (k_region = 0; k_region < n_regions; k_region++) {
+		H[k_region] = h;
+		A[k_region] = albedo;
+		for (k = 0; k < n_bottoms; k++) {
+			q[k_region*n_bottoms + k] = 1.0/n_bottoms;
+		}
+	}
+
+	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+		mean_Rrs490 = 0.0;
+		mean_Rrs550 = 0.0;
+		mean_Rrs640 = 0.0;
+		for (k_region = 0; k_region < n_regions; k_region++) {
+			mean_Rrs490 += md->Rrs490[k_region][k_scene];
+			mean_Rrs550 += md->Rrs550[k_region][k_scene];
+			mean_Rrs640 += md->Rrs640[k_region][k_scene];
+		}
+		mean_Rrs490 /= (double) n_regions;
+		mean_Rrs550 /= (double) n_regions;
+		mean_Rrs640 /= (double) n_regions;
+
+		P[k_scene] = 0.072*pow(mean_Rrs490/mean_Rrs550, -1.7);
+		G[k_scene] = 1.5*P[k_scene];
+		X[k_scene] = 30.0*md->a_w640*mean_Rrs640;
+	}
+
+	samodel_pack(md, H, A, q, P, G, X, start);
+
+	free(H);
+	free(A);
+	free(q);
+
+	for (k_region = 0; k_region < n_regions; k_region++) {
+		step[k_region] = 1.25*h;
+		step[n_regions + k_region] = 1.0;
+		for (k = 1; k < n_bottoms; k++) {
+			step[2*n_regions + k_region*(n_bottoms - 1) + k - 1] = 1.0;
+		}
+	}
+	for (k = 0; k < 3*md->n_scenes; k++) {
+		step[offset + k] = 1.0;
+	}
+}
+
+
+
 void samodel_optimise(model_data *md) {
 
-	int i, j, k_region, k_scene, k_band, k_bottom, max_n_params, max_bottom_types, best_single_bottom, 
+	int i, j, k_region, k_scene, k_band, k_bottom, max_n_params, max_bottom_types, best_single_bottom, offset,
 	best_double_bottom_A, best_double_bottom_B, best_single_iterations, best_double_iterations; 
 	double max_bottom_retrieval_depth, error, lowest_single_error, lowest_double_error, 
 	origin_weight, H, B_type, extinction_depth, nobs, env_system_noise,
-	*min, *best, *best_single, *best_double, largest_percentage, q_sum;
+	*min, *best, *best_single, *best_double, largest_percentage, albedo, q[MAX_BOTTOMS];
 	bool best_single_convergence, best_double_convergence;
 
 #if DEBUG
@@ -1830,14 +2000,7 @@ void samodel_optimise(model_data *md) {
 		md->n_bottoms = 1;
 		md->bottom_type_indexes[0] = 0;
 
-		md->n_params  = md->n_regions; // H
-		md->n_params += md->n_regions*md->n_bottoms; // B0, B1, ...
-		md->n_params += md->n_regions*md->n_bottoms; // q0, q1, ...
-#if DELTA
-		md->n_params += 4*md->n_scenes; // P,G,X,D
-#else
-		md->n_params += 3*md->n_scenes; // P,G,X
-#endif
+		md->n_params = samodel_n_params(md);
 
 	} else {
 
@@ -1845,14 +2008,7 @@ void samodel_optimise(model_data *md) {
 			md->bottom_type_indexes[i] = i;
 		}
 
-		md->n_params  = md->n_regions; // H
-		md->n_params += md->n_regions*md->n_bottoms; // B0, B1, ...
-		md->n_params += md->n_regions*md->n_bottoms; // q0, q1, ...
-#if DELTA
-		md->n_params += 4*md->n_scenes; // P,G,X,D
-#else
-		md->n_params += 3*md->n_scenes; // P,G,X
-#endif
+		md->n_params = samodel_n_params(md);
 	}
 
 	samodel_optimise_one_bottom_combination(md, best);
@@ -1869,14 +2025,7 @@ void samodel_optimise(model_data *md) {
 		md->n_bottoms = 1;
 		md->bottom_type_indexes[0] = 0;
 
-		md->n_params  = md->n_regions; // H
-		md->n_params += md->n_regions*md->n_bottoms; // B0, B1, ...
-		md->n_params += md->n_regions*md->n_bottoms; // q0, q1, ...
-#if DELTA
-		md->n_params += 4*md->n_scenes; // P,G,X,D
-#else
-		md->n_params += 3*md->n_scenes; // P,G,X
-#endif
+		md->n_params = samodel_n_params(md);
 
 		samodel_optimise_one_bottom_combination(md, best);
 	} else {
@@ -1890,14 +2039,7 @@ void samodel_optimise(model_data *md) {
 			md->n_bottoms = 1;
 			md->bottom_type_indexes[0] = i;
 
-			md->n_params  = md->n_regions; // H
-			md->n_params += md->n_regions*md->n_bottoms; // B0, B1, ...
-			md->n_params += md->n_regions*md->n_bottoms; // q0, q1, ...
-#if DELTA
-			md->n_params += 4*md->n_scenes; // P,G,X,D
-#else
-			md->n_params += 3*md->n_scenes; // P,G,X
-#endif
+			md->n_params = samodel_n_params(md);
 
 			samodel_optimise_one_bottom_combination(md, min);
 			// printf("\n... error is %.4f", md->model_error);
@@ -1923,14 +2065,7 @@ void samodel_optimise(model_data *md) {
 				md->bottom_type_indexes[0] = i;
 				md->bottom_type_indexes[1] = j;
 
-				md->n_params  = md->n_regions; // H
-				md->n_params += md->n_regions*md->n_bottoms; // B0, B1, ...
-				md->n_params += md->n_regions*md->n_bottoms; // q0, q1, ...
-#if DELTA
-				md->n_params += 4*md->n_scenes; // P,G,X,D
-#else
-				md->n_params += 3*md->n_scenes; // P,G,X
-#endif
+				md->n_params = samodel_n_params(md);
 
 				samodel_optimise_one_bottom_combination(md, min);
 				// printf("\n... error is %.4f", md->model_error);
@@ -1953,14 +2088,7 @@ void samodel_optimise(model_data *md) {
 			md->n_bottoms = 1;
 			md->bottom_type_indexes[0] = best_single_bottom;
 
-			md->n_params  = md->n_regions; // H
-			md->n_params += md->n_regions*md->n_bottoms; // B0, B1, ...
-			md->n_params += md->n_regions*md->n_bottoms; // q0, q1, ...
-#if DELTA
-			md->n_params += 4*md->n_scenes; // P,G,X,D
-#else
-			md->n_params += 3*md->n_scenes; // P,G,X
-#endif
+			md->n_params = samodel_n_params(md);
 			copy_double_vec(best_single, best, md->n_params);
 
 			md->n_iterations = best_single_iterations;
@@ -1970,14 +2098,7 @@ void samodel_optimise(model_data *md) {
 			md->bottom_type_indexes[0] = best_double_bottom_A;
 			md->bottom_type_indexes[1] = best_double_bottom_B;
 
-			md->n_params  = md->n_regions; // H
-			md->n_params += md->n_regions*md->n_bottoms; // B0, B1, ...
-			md->n_params += md->n_regions*md->n_bottoms; // q0, q1, ...
-#if DELTA
-			md->n_params += 4*md->n_scenes; // P,G,X,D
-#else
-			md->n_params += 3*md->n_scenes; // P,G,X
-#endif
+			md->n_params = samodel_n_params(md);
 			copy_double_vec(best_double, best, md->n_params);	
 
 			md->n_iterations = best_double_iterations;
@@ -2025,14 +2146,10 @@ void samodel_optimise(model_data *md) {
 		md->B_type_percent[k_bottom] = 0.0;
 	}
 
-	q_sum = 0.0;
-	for (k_bottom = 0; k_bottom < md->n_bottoms; k_bottom++) {
-		q_sum += fabs(best[md->n_regions + md->n_regions*md->n_bottoms + md->origin*md->n_bottoms + k_bottom]);
-	}
+	samodel_unpack_region(best, md, md->origin, &H, &albedo, q);
 
 	for (k_bottom = 0; k_bottom < md->n_bottoms; k_bottom++) {
-		md->B_type_percent[md->bottom_type_indexes[k_bottom]] = \
-			100.0*fabs(best[md->n_regions + md->n_regions*md->n_bottoms + md->origin*md->n_bottoms + k_bottom])/q_sum;
+		md->B_type_percent[md->bottom_type_indexes[k_bottom]] = 100.0*q[k_bottom];
 	}
 
 	// Compute bottom type. 
@@ -2063,37 +2180,14 @@ void samodel_optimise(model_data *md) {
 
 	md->index_optical_depth = 100.0*md->index_optical_depth/nobs; 
 
-	// Store P, G, X.
+	// Store P, G, X, and the transformed values in prev (start_at_previous).
 
+	offset = md->n_regions*(1 + md->n_bottoms);
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
-#if DELTA
-		md->P[k_scene] = 0.01*fabs(best[md->n_regions + 2*md->n_bottoms*md->n_regions + 4*k_scene]);
-		md->G[k_scene] = 0.01*fabs(best[md->n_regions + 2*md->n_bottoms*md->n_regions + 4*k_scene + 1]);
-		md->X[k_scene] = 0.01*fabs(best[md->n_regions + 2*md->n_bottoms*md->n_regions + 4*k_scene + 2]);
-		md->D[k_scene] = 0.001*fabs(best[md->n_regions + 2*md->n_bottoms*md->n_regions + 4*k_scene + 3]);
-#else
-		md->P[k_scene] = 0.01*fabs(best[md->n_regions + 2*md->n_bottoms*md->n_regions + 3*k_scene]);
-		md->G[k_scene] = 0.01*fabs(best[md->n_regions + 2*md->n_bottoms*md->n_regions + 3*k_scene + 1]);
-		md->X[k_scene] = 0.01*fabs(best[md->n_regions + 2*md->n_bottoms*md->n_regions + 3*k_scene + 2]);
-#endif
-	}
-
-	// Store P, G, X, D in prev. 
-
-	i = 0;
-	// printf("\nstart_at_previous = %d", md->start_at_previous);
-	// printf("\nprev = ");
-	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
-#if DELTA
-		md->prev[i++] = fabs(best[md->n_regions + 2*md->n_bottoms*md->n_regions + 4*k_scene]);
-		md->prev[i++] = fabs(best[md->n_regions + 2*md->n_bottoms*md->n_regions + 4*k_scene + 1]);
-		md->prev[i++] = fabs(best[md->n_regions + 2*md->n_bottoms*md->n_regions + 4*k_scene + 2]);
-		md->prev[i++] = fabs(best[md->n_regions + 2*md->n_bottoms*md->n_regions + 4*k_scene + 3]);
-#else
-		md->prev[i++] = fabs(best[md->n_regions + 2*md->n_bottoms*md->n_regions + 3*k_scene]);
-		md->prev[i++] = fabs(best[md->n_regions + 2*md->n_bottoms*md->n_regions + 3*k_scene + 1]);
-		md->prev[i++] = fabs(best[md->n_regions + 2*md->n_bottoms*md->n_regions + 3*k_scene + 2]);
-#endif
+		samodel_unpack_scene(best, md, k_scene, &md->P[k_scene], &md->G[k_scene], &md->X[k_scene]);
+		for (i = 0; i < 3; i++) {
+			md->prev[3*k_scene + i] = best[offset + 3*k_scene + i];
+		}
 	}
 
 	// Display all model outputs. 
@@ -2118,13 +2212,13 @@ void samodel_optimise(model_data *md) {
 
 void samodel_optimise_one_bottom_combination(model_data *md, double *params) { 
 
-	int i, j, k, n, k_region, k_scene, k_band, k_start, k_bottom, 
+	int i, j, k, n, k_band, k_start, 
 	  n_restarts, offset, best_start, k_hstart, n_hstarts;
-	double s, wd, w, error, delta,
+	double s, wd, w, error,
 	  Rrs_error, depth, K_min, bottom_albedo, bottom_blue, 
 	  bottom_green, bottom_red, nobs,
 	  *min, *start, *step, *best, lowest_error, 
-	  *PGXstart, *Hstart, mean_Rrs490, mean_Rrs550, mean_Rrs640;
+	  *PGXstart, *Hstart;
 
 #if DEBUG
 	printf("\nENTER samodel_optimise_one_bottom_combination\n");
@@ -2243,123 +2337,18 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 	for (k_hstart = 0; k_hstart < n_hstarts; k_hstart++) {
 		for (k_start = 0; k_start < n_restarts; k_start++) {
 
-			// Set starting points for P, G, X and B. (H and D are constant, but reset as nelmin modifies start)
+			// Starting point (reset each time, as nelmin modifies start). After a good fit at the
+			// previous pixel, start the water parameters from its optimum.
 
-			// H
-			delta = 1.25;
-			for (k_region = 0; k_region < md->n_regions; k_region++) {
-				start[k_region] = Hstart[k_hstart];
-				step[k_region]  = delta*start[k_region];
-			}
-#if 1
-			// Compute mean Rrs(490), Rrs(550) and Rrs(640).
-			  
-			mean_Rrs490 = 0.0;
-			for (k_region = 0; k_region < md->n_regions; k_region++) {
-				for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
-					mean_Rrs490 += md->Rrs490[k_region][k_scene];
-				}
-			}
-			mean_Rrs490 /= (double) md->n_regions*md->n_scenes;
-#endif
-			// B
-			delta = 1.5;
-			for (k_bottom = 0; k_bottom < md->n_bottoms; k_bottom++) {
-				for (k_region = 0; k_region < md->n_regions; k_region++) {
-					start[md->n_regions + k_region*md->n_bottoms + k_bottom] = 100.0*4.0*mean_Rrs490;
-					// start[md->n_regions + k_region*md->n_bottoms + k_bottom] = 100.0*(0.05 + 0.1*Bstart[k_start]);
-					step[md->n_regions + k_region*md->n_bottoms + k_bottom]  = delta*start[md->n_regions + k_region*md->n_bottoms + k_bottom];
-				}
-			}
+			samodel_initial(md, Hstart[k_hstart], ALBEDO_START, start, step);
 
-			// q
-			delta = 0.5;
-			for (k_bottom = 0; k_bottom < md->n_bottoms; k_bottom++) {
-				for (k_region = 0; k_region < md->n_regions; k_region++) {
-					start[md->n_regions + md->n_bottoms*md->n_regions + k_region*md->n_bottoms + k_bottom] = 1.0;  // q 
-					step[ md->n_regions + md->n_bottoms*md->n_regions + k_region*md->n_bottoms + k_bottom]  = delta*start[md->n_regions + md->n_bottoms*md->n_regions + k_region*md->n_bottoms + k_bottom];
-				}
-			}
-
-			// P, G, X, D
-			offset = md->n_regions + 2*md->n_bottoms*md->n_regions;
 			if (md->start_at_previous) {
-				delta = 2.0;
-				i = 0;
-				for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
-#if DELTA
-				  start[offset +     4*k_scene] = md->prev[i++];  // P
-				  start[offset + 1 + 4*k_scene] = md->prev[i++];  // G
-				  start[offset + 2 + 4*k_scene] = md->prev[i++];  // X
-				  start[offset + 3 + 4*k_scene] = md->prev[i++];  // D
-
-				  step[offset +     4*k_scene] = delta*start[offset +     4*k_scene]; // P
-				  step[offset + 1 + 4*k_scene] = delta*start[offset + 1 + 4*k_scene]; // G
-				  step[offset + 2 + 4*k_scene] = delta*start[offset + 2 + 4*k_scene]; // X
-				  step[offset + 3 + 4*k_scene] = delta*start[offset + 3 + 4*k_scene]; // D
-#else
-				  start[offset +     3*k_scene] = md->prev[i++];  // P
-				  start[offset + 1 + 3*k_scene] = md->prev[i++];  // G
-				  start[offset + 2 + 3*k_scene] = md->prev[i++];  // X
-
-				  step[offset +     3*k_scene] = delta*start[offset +     3*k_scene]; // P
-				  step[offset + 1 + 3*k_scene] = delta*start[offset + 1 + 3*k_scene]; // G
-				  step[offset + 2 + 3*k_scene] = delta*start[offset + 2 + 3*k_scene]; // X
-#endif		  
+				offset = md->n_regions*(1 + md->n_bottoms);
+				for (i = 0; i < 3*md->n_scenes; i++) {
+					start[offset + i] = md->prev[i];
 				}
-			} else {
-			  delta = 2.0;
-			  for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
-#if 1
-			  	// Compute mean Rrs(490), Rrs(550) and Rrs(640).
-				mean_Rrs490 = 0.0;
-				mean_Rrs550 = 0.0;
-				mean_Rrs640 = 0.0;
-				for (k_region = 0; k_region < md->n_regions; k_region++) {
-					mean_Rrs490 += md->Rrs490[k_region][k_scene];
-					mean_Rrs550 += md->Rrs550[k_region][k_scene];
-					mean_Rrs640 += md->Rrs640[k_region][k_scene];
-			  	}
-				mean_Rrs490 /= (double) md->n_regions;
-				mean_Rrs550 /= (double) md->n_regions;
-				mean_Rrs640 /= (double) md->n_regions;
-#endif
-
-#if DELTA
-			    start[offset +     4*k_scene] = 100.0*0.072*pow(mean_Rrs490/mean_Rrs550, -1.7); // P
-			    // start[offset +     4*k_scene] = 100.0*0.03*PGXstart[k_start];  // P
-			    start[offset + 1 + 4*k_scene] = 1.5*start[offset + 4*k_scene]; // G
-			    // start[offset + 1 + 4*k_scene] = 100.0*0.05*PGXstart[k_start];  // G
-			    start[offset + 2 + 4*k_scene] = 100.0*30.0*md->a_w640*mean_Rrs640;  // X
-			    // start[offset + 2 + 4*k_scene] = 100.0*0.03*PGXstart[k_start];  // X
-			    start[offset + 3 + 4*k_scene] = 1000.0*0.001; // D
-
-			    step[offset +     4*k_scene] = delta*start[offset +     4*k_scene]; // P
-			    step[offset + 1 + 4*k_scene] = delta*start[offset + 1 + 4*k_scene]; // G
-			    step[offset + 2 + 4*k_scene] = delta*start[offset + 2 + 4*k_scene]; // X
-			    step[offset + 3 + 4*k_scene] = delta*start[offset + 3 + 4*k_scene]; // D
-#else
-			    start[offset +     3*k_scene] = 100.0*0.072*pow(mean_Rrs490/mean_Rrs550, -1.7); // P
-			    // start[offset +     3*k_scene] = 100.0*0.03*PGXstart[k_start];  // P
-			    start[offset + 1 + 3*k_scene] = 1.5*start[offset + 3*k_scene]; // G
-			    // start[offset + 1 + 3*k_scene] = 100.0*0.05*PGXstart[k_start];  // G
-			    start[offset + 2 + 3*k_scene] = 100.0*30.0*md->a_w640*mean_Rrs640;  // X
-			    // start[offset + 2 + 3*k_scene] = 100.0*0.03*PGXstart[k_start];  // X
-
-			    step[offset +     3*k_scene] = delta*start[offset +     3*k_scene]; // P
-			    step[offset + 1 + 3*k_scene] = delta*start[offset + 1 + 3*k_scene]; // G
-			    step[offset + 2 + 3*k_scene] = delta*start[offset + 2 + 3*k_scene]; // X
-#endif
-			  }
 			}
 
-#if 0
-			printf("\nstart = ");
-			for (i = 0; i < md->n_params; i++) {
-				printf("%.6f\t", start[i]);
-			}
-			printf("\n\n");
-#endif
 			// Call Simplex optimisation. 
 
 			error = samodel_error(start, md);
@@ -2413,7 +2402,7 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 	error = samodel_error(best, md);
 
 	for (i = 0; i < md->n_params; i++) {
-		params[i] = fabs(best[i]);
+		params[i] = best[i];
 	}
 
 	free(start);
@@ -2431,13 +2420,13 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 
 double samodel_error(double *params, model_data *md) {
 
-	int i, k_region, k_scene, k_band, k_bottom, kb, n_total_bands, offset;
+	int i, k_region, k_scene, k_band, k_bottom, n_total_bands;
 	double P, G, X, H, B[12], q[12], Delta, error_Rrs, total_Rrs, error_depth, 
 		Rrs_modelled, Rrs_measured, Rrs_measured_mean,
 		depth_threshold, depth_mean, n_outliers, error_model, error_bottom, 
 		bottom, bottom_mean, bottom_total, bottom_threshold, 
 		Rrs_modelled_sum_sq, Rrs_measured_sum_sq, sam_error, 
-		error_spectrum, K_min, K_error, q_sum;
+		error_spectrum, K_min, K_error, albedo, H_region, q_region[12];
 
 #if WRITE_EPGXBHD
 	char filename[64];
@@ -2460,40 +2449,17 @@ double samodel_error(double *params, model_data *md) {
 	sam_error = 0.0;
 #endif
 
-	offset = md->n_regions + 2*md->n_bottoms*md->n_regions;
-
 	for (k_region = 0; k_region < md->n_regions; k_region++) {
+
+		samodel_unpack_region(params, md, k_region, &H, &albedo, q);
+		for (k_bottom = 0; k_bottom < md->n_bottoms; k_bottom++) {
+			B[k_bottom] = albedo;
+		}
+
 		for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 
-#if DELTA
-			H     = fabs(params[k_region]);
-			P     = 0.01*fabs(params[offset  +     4*k_scene]);
-			G     = 0.01*fabs(params[offset  + 1 + 4*k_scene]);
-			X     = 0.01*fabs(params[offset  + 2 + 4*k_scene]);
-			Delta = 0.001*fabs(params[offset + 3 + 4*k_scene]);
-#else
-			H     = fabs(params[k_region]);
-			P     = 0.01*fabs(params[offset  +     3*k_scene]);
-			G     = 0.01*fabs(params[offset  + 1 + 3*k_scene]);
-			X     = 0.01*fabs(params[offset  + 2 + 3*k_scene]); 
+			samodel_unpack_scene(params, md, k_scene, &P, &G, &X);
 			Delta = 0.0;
-#endif
-
-			for (k_bottom = 0; k_bottom < md->n_bottoms; k_bottom++) {
-			  B[k_bottom] = 0.01*fabs(params[md->n_regions + k_region*md->n_bottoms + k_bottom]);
-			}
-
-			// Normalise q. 
-
-			q_sum = 0.0;
-			for (k_bottom = 0; k_bottom < md->n_bottoms; k_bottom++) {
-			  q[k_bottom] = fabs(params[md->n_regions + md->n_regions*md->n_bottoms + k_region*md->n_bottoms + k_bottom]);
-			  q_sum += q[k_bottom];
-			}
-
-			for (k_bottom = 0; k_bottom < md->n_bottoms; k_bottom++) {
-				q[k_bottom] /= q_sum;
-			}
 
 #if WRITE_EPGXBHD
 			// P
@@ -2650,15 +2616,8 @@ double samodel_error(double *params, model_data *md) {
 
 		bottom_mean = 0.0;
 		for (k_region = 0; k_region < md->n_regions; k_region++) {
-
-			q_sum = 0.0;
-			for (kb = 0; kb < md->n_bottoms; kb++) {
-				q[kb] = fabs(params[md->n_regions + md->n_regions*md->n_bottoms + k_region*md->n_bottoms + kb]);
-				q_sum += q[kb];
-			}
-
-			bottom_mean += fabs(params[md->n_regions + k_region*md->n_bottoms + k_bottom])*\
-				fabs(params[md->n_regions + md->n_regions*md->n_bottoms + k_region*md->n_bottoms + k_bottom])/q_sum;
+			samodel_unpack_region(params, md, k_region, &H_region, &albedo, q_region);
+			bottom_mean += albedo*q_region[k_bottom];
 		}
 
 		bottom_mean /= (double) md->n_regions;
@@ -2668,14 +2627,8 @@ double samodel_error(double *params, model_data *md) {
 
 		for (k_region = 0; k_region < md->n_regions; k_region++) {
 
-			q_sum = 0.0;
-			for (kb = 0; kb < md->n_bottoms; kb++) {
-				q[kb] = fabs(params[md->n_regions + md->n_regions*md->n_bottoms + k_region*md->n_bottoms + kb]);
-				q_sum += q[kb];
-			}
-
-			bottom = fabs(params[md->n_regions + k_region*md->n_bottoms + k_bottom])*\
-				fabs(params[md->n_regions + md->n_regions*md->n_bottoms + k_region*md->n_bottoms + k_bottom])/q_sum;
+			samodel_unpack_region(params, md, k_region, &H_region, &albedo, q_region);
+			bottom = albedo*q_region[k_bottom];
 
 			if (bottom < (1.0 - bottom_threshold)*bottom_mean || bottom > (1.0 + bottom_threshold)*bottom_mean) {
 				error_bottom += pow(bottom - bottom_mean, 2.0);

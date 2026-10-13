@@ -80,17 +80,20 @@ def pixel_setup(water, n, i, j, H, bottom, grids, nspatial):
             lines.append("RRS %d %d %s" % (r, k, " ".join("%.12g" % grids[k][m][a, b]
                                                           for m in range(len(t3.BANDS)))))
     lines.append("END")
-    # Truth in photic's parameter layout.
-    truth = [H[a, b] for a, b in cells]
-    truth += [100.0*t3.B_ALBEDO]*(nr*N_BOTTOMS)
+    # Truth as physical values; packed into photic's layout by the driver (PACK).
+    q = []
     for a, b in cells:
-        q = [0.0]*N_BOTTOMS
-        q[t2.BOTTOMS[bottom[a, b]]] = 1.0
-        truth += q
+        row = [0.0]*N_BOTTOMS
+        row[t2.BOTTOMS[bottom[a, b]]] = 1.0
+        q += row
+    pgx = []
     for k in range(n):
-        P, G, X = t3.SCENE_SETS[water][k][:3]
-        truth += [100.0*P, 100.0*G, 100.0*X]
-    return "\n".join(lines) + "\n", np.array(truth), nr, origin
+        pgx += list(t3.SCENE_SETS[water][k][:3])
+    phys = [H[a, b] for a, b in cells] + [t3.B_ALBEDO]*nr + q + pgx
+    setup = "\n".join(lines) + "\n"
+    truth = lab(setup, ["PACK " + vec(phys)])[0]["PACKED"]
+    return setup, np.array(truth), nr, origin
+
 
 
 def lab(setup, commands):
@@ -104,7 +107,7 @@ def lab(setup, commands):
         if w[0] == "DONE":
             out.append(cur)
             cur = {}
-        elif w[0] in ("START", "STEP", "params", "PGX", "bottom_percent"):
+        elif w[0] in ("START", "STEP", "PACKED", "params", "PGX", "bottom_percent"):
             cur[w[0]] = [float(v) for v in w[1:]]
         elif w[0] == "Rrs_modelled":
             cur.setdefault("Rrs_modelled", []).append([float(v) for v in w[3:]])
@@ -140,8 +143,8 @@ def analyse_pixel(args):
     setup, truth, nr, origin = pixel_setup(water, n, i, j, H, bottom, grids, nspatial)
     nb = N_BOTTOMS
     iH = slice(0, nr)
-    iB = slice(nr, nr + 2*nr*nb)
-    iW = slice(nr + 2*nr*nb, len(truth))
+    iB = slice(nr, nr*(1 + nb))
+    iW = slice(nr*(1 + nb), len(truth))
     res = dict(i=i, j=j, H_true=float(H[i, j]), bottom=str(bottom[i, j]))
 
     # Starting points (photic's) for every depth start, and the truth's own error.

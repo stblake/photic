@@ -20,6 +20,17 @@ void samodel(
 
 void samodel_optimise(model_data *md);
 
+int samodel_n_params(model_data *md);
+
+void samodel_unpack_region(double *params, model_data *md, int k_region, double *H, double *albedo, double q[]);
+
+void samodel_unpack_scene(double *params, model_data *md, int k_scene, double *P, double *G, double *X);
+
+void samodel_pack(model_data *md, double *H, double *albedo, double *q, double *P, double *G, double *X,
+	double *params);
+
+void samodel_initial(model_data *md, double h, double albedo, double *start, double *step);
+
 void samodel_optimise_one_bottom_combination(model_data *md, double *params);
 
 double samodel_error(double *params, model_data *md);
