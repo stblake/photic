@@ -167,6 +167,7 @@ struct model_data_struct {
 	double *H;
 	double *D;
 	double *Y_scene; // Fitted backscattering slope per scene (Y_MODEL 3).
+	double **R_inf;  // Deep-water Rrs per scene and band (SCENE RINF), 0 if not given.
 	double *prev;
 	double ***Rrs_modelled; 
 	double ***rrs_modelled;
@@ -175,6 +176,7 @@ struct model_data_struct {
 	double **K;
 	double ***rho;
 	double depth;
+	double h0;            // Physics-based first estimate of depth (samodel_h0), -1 if none.
 	bool optically_deep;  // The bottom was not detected (EXPERIMENTS.md C2).
 	double deep_chi2;     // Fit improvement of the bottom over an optically deep model.
 	double depth_prev;

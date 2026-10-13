@@ -126,3 +126,98 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# Class-aware H0 with the water from the image's deep-water reflectance (QAA-style).
+
+CLASSES = {"sand": (0, 0.15, 0.75), "seagrass": (1, 0.03, 0.15), "coral": (2, 0.03, 0.25)}
+H_SCAN = np.exp(np.linspace(np.log(0.1), np.log(40.0), 120))
+
+
+def qaa_water(rrs_deep, tables, lam=(443.0, 490.0, 560.0, 665.0)):
+    """kappa = a + b_b at each band from deep-water rrs: u from rrs_dp = (g0 + g1 u) u; at
+    665 nm a ~ a_w, which fixes b_b; Y from QAA's ratio; then a = (1 - u) b_b/u."""
+    g0, g1 = 0.084, 0.170
+    u = (-g0 + np.sqrt(g0*g0 + 4*g1*np.asarray(rrs_deep)))/(2*g1)
+    i665 = lam.index(665.0)
+    t = {l: tables[(l, 0)] for l in lam}
+    bb665 = u[i665]*t[665.0]["aw"]/(1 - u[i665])
+    bbp665 = max(bb665 - t[665.0]["bbw"], 1e-6)
+    r443, r560 = rrs_deep[lam.index(443.0)], rrs_deep[lam.index(560.0)]
+    Y = np.clip(2.0*(1 - 1.2*np.exp(-0.9*r443/r560)), 0.0, 2.5)
+    kappa, uu = [], []
+    for k, l in enumerate(lam):
+        bb = t[l]["bbw"] + bbp665*(665.0/l)**Y
+        a = (1 - u[k])*bb/u[k]
+        kappa.append(a + bb)
+        uu.append(u[k])
+    return np.array(kappa), np.array(uu)
+
+
+def h0_class(rrs, rrs_deep, kappa, u, theta, shapes):
+    """Best (H, class, brightness) for one scene: for each class and depth, the brightness
+    solves a linear least-squares problem (clipped to the class range)."""
+    sec = 1.0/np.cos(np.radians(theta))
+    M = sec + 1.04*np.sqrt(1 + 5.4*u)
+    best = (np.inf, None, None, None)
+    for name, (b_idx, lo, hi) in CLASSES.items():
+        s = shapes[b_idx]
+        for H in H_SCAN:
+            T = np.exp(-M*kappa*H)
+            # rrs - rrs_deep (1 - T) = b (s/pi) T
+            y = rrs - rrs_deep*(1 - T)
+            x = s/np.pi*T
+            b = np.clip(np.dot(x, y)/max(np.dot(x, x), 1e-30), lo, hi)
+            err = np.sum((y - b*x)**2)
+            if err < best[0]:
+                best = (err, H, name, b)
+    return best[1], best[2], best[3]
+
+
+def main_class():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--realistic", action="store_true")
+    ap.add_argument("--noise", type=float, default=0.0)
+    ap.add_argument("--scenes", type=int, default=2)
+    ap.add_argument("--deep", choices=["image", "true"], default="image")
+    ap.add_argument("water", nargs="*", default=["clear", "moderate", "turbid"])
+    a = ap.parse_args()
+    if a.realistic:
+        t3.ALBEDO_BY_BOTTOM = REALISTIC
+    tables = t2.photic_tables(A.DRIVER, t3.BANDS)
+    shapes = {b: np.array([tables[(l, b)]["rho"] for l in t3.BANDS]) for b in (0, 1, 2)}
+    for w in a.water:
+        H, bottom, grids = A.scene_grids(w, a.scenes, True, a.noise)
+        sets = t3.SCENE_SETS[w][:a.scenes]
+        tides = [s[5] for s in sets]
+        thetas = [t3.theta_w(s[4]) for s in sets]
+        deep = []
+        for k, (s, th) in enumerate(zip(sets, thetas)):
+            if a.deep == "image":
+                Rd = np.array([np.median(grids[k][m][28:, :]) for m in range(len(t3.BANDS))])
+                rd = Rd/(0.5 + 1.5*Rd)
+            else:
+                rd = np.array([float(photic_ref.forward(l, *s[:3], 0.0, tables[(l, 0)]["rho"], 1e3, 0.0, th, 0.0,
+                               0.01, 0.01, 0.0, tables[(l, 0)]["a0"], tables[(l, 0)]["a1"], tables[(l, 0)]["aw"],
+                               tables[(l, 0)]["bbw"], Y=1.0)["rrs_dp"]) for l in t3.BANDS])
+            kap, uu = qaa_water(rd, tables)
+            deep.append((rd, kap, uu))
+        rows = []
+        for i in range(0, 32, 2):
+            for j in (8, 20, 28):
+                est, cls = [], []
+                for k in range(a.scenes):
+                    R = np.array([grids[k][m][i, j] for m in range(len(t3.BANDS))])
+                    Hs, c, b = h0_class(R/(0.5 + 1.5*R), *deep[k], thetas[k], shapes)
+                    est.append(Hs - tides[k])
+                    cls.append(c)
+                rows.append((H[i, j], float(np.median(est)), cls[0], str(bottom[i, j])))
+        print("%s, %d scenes, OSOAA%s, noise %g, deep water from %s: class-aware H0" % (
+            w, a.scenes, ", realistic bottoms" if a.realistic else "", a.noise, a.deep))
+        for lo, hi in ((0, 2), (2, 5), (5, 10), (10, 15), (15, 20), (20, 30)):
+            m = [r for r in rows if lo <= r[0] < hi]
+            e = np.array([r[1] - r[0] for r in m])
+            ok = np.mean([r[2] == r[3] for r in m])
+            print("   %2d-%2d bias %+6.2f rmse %6.2f within tol %.2f  class right %.2f" % (
+                lo, hi, e.mean(), np.sqrt((e**2).mean()),
+                np.mean([abs(r[1] - r[0]) <= 0.5 + 0.1*r[0] for r in m]), ok))

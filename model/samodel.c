@@ -193,6 +193,14 @@
 static const double bright_lo[8] = {0.15, 0.03, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0};
 static const double bright_hi[8] = {0.75, 0.15, 0.25, 1.0, 1.0, 1.0, 1.0, 1.0};
 
+// Seeding the depth search with a physics-based first estimate H0 (samodel_h0), which needs the
+// deep-water Rrs of each scene (SCENE RINF): 0 off; 1 H0 added to the depth grid; 2 the grid
+// replaced by {H0/2, H0, 2 H0, 30 m}.
+
+#ifndef SEED_MODE
+#define SEED_MODE 1
+#endif
+
 #ifndef Y_MODEL
 #define Y_MODEL 0
 #endif
@@ -772,6 +780,13 @@ void samodel(
 	prev = malloc(4*md->n_scenes*sizeof(double)); // P,G,X,D for each scene.
 	md->prev = prev;
 	md->Y_scene = calloc(md->n_scenes, sizeof(double));
+	allocate_double_array_2d(&md->R_inf, md->n_scenes, md->max_n_bands);
+	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+		for (k_band = 0; k_band < md->max_n_bands; k_band++) {
+			md->R_inf[k_scene][k_band] = k_band < md->n_bands[k_scene] ?
+				scene_data[scene_indexes[k_scene]].R_inf[k_band] : 0.0;
+		}
+	}
 
 	printf("\n\n");
 
@@ -2817,6 +2832,100 @@ void samodel_optimise(model_data *md) {
 
 
 
+// A first estimate of depth for region k_region from each scene's deep-water Rrs (R_inf), or
+// -1 if R_inf is not given. The water comes from R_inf alone (QAA-style): u from
+// rrs_dp = (g0 + g1 u) u; at the red band absorption is that of water, which fixes b_b there;
+// Y from QAA's ratio; then b_b at each band, a = (1 - u) b_b/u and kappa = a + b_b. With the
+// water fixed, rrs_i = rrs_dp,i + (b s_c,i/pi - rrs_dp,i) exp(-M_i kappa_i H) for each bottom
+// class c (shape s_c, brightness b within the class range): for each depth on a grid, b solves
+// a linear least-squares problem, and the best (depth, class) wins. A dark bottom (b s/pi <
+// rrs_dp) is handled naturally. The scenes' estimates, less their tides, are combined by the
+// median.
+
+static double median_small(double *v, int n) {
+	// Median of a short array (insertion sort of a copy).
+	double w[MAX_SCENES], t;
+	int i, j;
+	for (i = 0; i < n; i++) {
+		t = v[i];
+		for (j = i; j > 0 && w[j - 1] > t; j--) w[j] = w[j - 1];
+		w[j] = t;
+	}
+	return n % 2 ? w[n/2] : 0.5*(w[n/2 - 1] + w[n/2]);
+}
+
+double samodel_h0(model_data *md, int k_region) {
+
+	int k_scene, k_band, nb, k_type, n_types, k_h, red, n_est = 0;
+	double rd[64], rr[64], u[64], kap[64], M[64], est[MAX_SCENES], g0 = 0.084, g1 = 0.170,
+		bbp_red, Y, r443, r560, bb, a, H, T, x, y, sxx, sxy, b, err, best_err, best_H, sec_sun, sec_view;
+
+	if (md->R_inf == NULL) return -1.0;
+
+	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+		nb = md->n_bands[k_scene];
+		if (nb > 64) return -1.0;
+		red = 0;
+		for (k_band = 0; k_band < nb; k_band++) {
+			if (md->R_inf[k_scene][k_band] <= 0.0) return -1.0;
+			rd[k_band] = md->R_inf[k_scene][k_band]/(0.5 + 1.5*md->R_inf[k_scene][k_band]);
+			rr[k_band] = md->Rrs_measured[k_region][k_scene][k_band]/(0.5 + 1.5*md->Rrs_measured[k_region][k_scene][k_band]);
+			u[k_band] = (-g0 + sqrt(g0*g0 + 4.0*g1*rd[k_band]))/(2.0*g1);
+			if (md->a_w[k_scene][k_band] > md->a_w[k_scene][red]) red = k_band;
+		}
+		bbp_red = MAX(u[red]*md->a_w[k_scene][red]/(1.0 - u[red]) - md->b_bw[k_scene][red], 1.0e-6);
+		r443 = interp_1d(md->wavelengths[k_scene], rd, nb, 443.0);
+		r560 = interp_1d(md->wavelengths[k_scene], rd, nb, 560.0);
+		Y = 2.0*(1.0 - 1.2*exp(-0.9*r443/r560));
+		Y = Y < 0.0 ? 0.0 : (Y > 2.5 ? 2.5 : Y);
+		sec_sun = md->sec_theta_sun[k_scene];
+		sec_view = md->sec_theta_view[k_scene];
+		for (k_band = 0; k_band < nb; k_band++) {
+			bb = md->b_bw[k_scene][k_band] + bbp_red*pow(md->wavelengths[k_scene][red]/md->wavelengths[k_scene][k_band], Y);
+			a = (1.0 - u[k_band])*bb/u[k_band];
+			kap[k_band] = a + bb;
+			M[k_band] = sec_sun + 1.04*sqrt(1.0 + 5.4*u[k_band])*sec_view;
+		}
+
+		best_err = 1.0e30;
+		best_H = -1.0;
+		n_types = MIN(md->n_bottoms, 8);
+		for (k_type = 0; k_type < n_types; k_type++) {
+			for (k_h = 0; k_h < 120; k_h++) {
+				H = 0.1*pow(400.0, k_h/119.0);  // 0.1 to 40 m, log-spaced
+				sxx = sxy = 0.0;
+				for (k_band = 0; k_band < nb; k_band++) {
+					T = exp(-M[k_band]*kap[k_band]*(H + md->H_tide[k_scene]));
+					x = md->bottom_reflectance[md->bottom_type_indexes[k_type]][k_scene][k_band]/PI*T;
+					y = rr[k_band] - rd[k_band]*(1.0 - T);
+					sxx += x*x;
+					sxy += x*y;
+				}
+				b = sxx > 0.0 ? sxy/sxx : 0.0;
+				b = b < bright_lo[md->bottom_type_indexes[k_type]] ? bright_lo[md->bottom_type_indexes[k_type]] :
+					(b > bright_hi[md->bottom_type_indexes[k_type]] ? bright_hi[md->bottom_type_indexes[k_type]] : b);
+				err = 0.0;
+				for (k_band = 0; k_band < nb; k_band++) {
+					T = exp(-M[k_band]*kap[k_band]*(H + md->H_tide[k_scene]));
+					x = md->bottom_reflectance[md->bottom_type_indexes[k_type]][k_scene][k_band]/PI*T;
+					y = rr[k_band] - rd[k_band]*(1.0 - T);
+					err += (y - b*x)*(y - b*x);
+				}
+				if (err < best_err) {
+					best_err = err;
+					best_H = H;
+				}
+			}
+		}
+		if (best_H > 0.0) est[n_est++] = best_H;
+	}
+
+	if (n_est == 0) return -1.0;
+	return median_small(est, n_est);
+}
+
+
+
 // Search for the best parameters for one combination of bottom types, by bounded
 // Levenberg-Marquardt (samodel_lm) on the Rrs misfit.
 //
@@ -2841,8 +2950,22 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 	int i, k, k_h, n_h, offset, n_eval, total_count;
 	double error, lowest_error, *start, *is_free, *best, *profile, profile_error[N_REFINE];
 
-	double H_grid[] = {0.5, 1.0, 2.0, 3.5, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0};
-	int n_grid = sizeof(H_grid)/sizeof(H_grid[0]);
+	double H_grid[16] = {0.5, 1.0, 2.0, 3.5, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0};
+	int n_grid = 10;
+	double H0 = SEED_MODE ? samodel_h0(md, md->origin) : -1.0;
+
+	md->h0 = H0;
+	if (H0 > 0.0) {
+		if (SEED_MODE == 1) {
+			H_grid[n_grid++] = H0;
+		} else if (SEED_MODE == 2) {
+			H_grid[0] = MAX(0.5*H0, H_MIN);
+			H_grid[1] = H0;
+			H_grid[2] = MIN(2.0*H0, H_MAX);
+			H_grid[3] = 30.0;
+			n_grid = 4;
+		}
+	}
 	double H_refine[N_REFINE];
 
 #if DEBUG

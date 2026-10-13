@@ -22,6 +22,8 @@ void samodel_optimise(model_data *md);
 
 int samodel_n_params(model_data *md);
 
+double samodel_h0(model_data *md, int k_region);
+
 int samodel_water_offset(model_data *md);
 
 double samodel_unpack_bottom(double *params, model_data *md, int k_region, double B[], double q[]);

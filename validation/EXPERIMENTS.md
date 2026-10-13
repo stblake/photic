@@ -193,6 +193,41 @@ where the κ difference is dominated by known water absorption. A Stumpf-style r
   - use H0 to seed the search alongside the depth grid, not to replace it;
   - then measure the speed and accuracy gain.
 
+### Class-aware H0 and seeding the search (2026-10-13, `samodel_h0`, `SEED_MODE`)
+
+**Estimator.** The water comes from each scene's deep-water Rrs (SCENE RINF), QAA-style:
+1. u from rrs_dp;
+2. at the red band a ≈ a_w, which fixes b_b;
+3. Y from QAA's ratio;
+4. then κ = a + b_b at every band.
+
+For each bottom class (photic's shape, brightness within the measured class range) and each depth on a log grid, the brightness solves a linear least-squares problem: rrs_i = rrs_dp,i + (b s_i/π − rrs_dp,i) exp(−M κ_i H). The best (depth, class) wins, so dark bottoms (signal below deep water) are handled. Scenes are combined by the median after removing tides.
+
+Prototype (`h0_estimate.py main_class`, image deep rows as RINF), class-aware H0 alone:
+- realistic bottoms, 0–2 m: 0.11–0.57 m, with the class right in every case (the ratio method was off by 3 m or more);
+- 5–15 m: 2–5 m RMSE, with a negative bias at depth from the QAA κ.
+
+**Seeding.** `SEED_MODE` 1 adds H0 to the 10-depth grid; 2 uses {H0/2, H0, 2H0, 30 m}. Pixels use candidate 2's physics (Y2, bottom bounds), and RINF is the OSOAA no-bottom Rrs at 32 m. RMSE; coverage is unchanged across modes:
+
+| | no seed | grid + H0 | H0-centred |
+|---|---|---|---|
+| clear, default bottoms, noise | 3.59 | 3.00 | **1.97** |
+| moderate, default bottoms, noise | 4.71 | 4.67 | **2.82** |
+| clear, realistic bottoms, noise | 2.08 | **0.58** | 0.59 |
+| moderate, realistic bottoms, noise | 1.14 | 1.14 | **0.87** |
+| moderate, default bottoms, no noise | **1.52** | 3.47 | 1.40 |
+| moderate, realistic bottoms, no noise | **1.87** | 1.86 | 3.18 |
+| clear, realistic bottoms, no noise | 1.68 | **1.05** | 2.03 |
+| s/pixel | 0.34–0.64 | 0.39–0.61 | **0.24–0.41** |
+
+- **With noise, H0-centred seeding is consistently better, and about 30% faster.**
+- **Without noise it is mixed.** The misfit has several minima of similar size, because the forward model is slightly wrong; a different seed can reach a minimum with lower misfit but the wrong depth (grid + H0, moderate).
+- **Decision:** seeding stays off unless RINF is given.
+- **Next:**
+  - pass RINF in tier 3 (OSOAA no-bottom Rrs);
+  - estimate RINF in tier 4 from deep-water pixels (offshore of Ningaloo);
+  - judge mode 2 on the full benchmark.
+
 ### Physics constraints (planned 2026-10-13)
 
 Each enters the LM fit as a bound or a weighted residual (a soft prior, weight 1/σ), and is switchable. Each is tested alone: Phase A pixels with noise, then tier 3 by depth bin, then tier 4 held-out sites. Any σ is tuned on the training split only.
