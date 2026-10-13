@@ -212,6 +212,32 @@ Each scene sees the same seabed through a different light path, M_s = sec θ_w,s
 - **B13's closed-form angular-ratio depth is not pursued.** It needs the same water in both scenes, which B12 shows does not hold in general, so its consistency flag would mostly flag changes in water.
 - **B14 (direct and diffuse light) and B15 (glint offset)** need sky and glint, which tier 3 lacks, so they move to tier 4.
 
+### B14 and B15 results (2026-10-13)
+
+**B14, direct and diffuse light: not run (estimated effect ~1%).**
+- Skylight's mean underwater path is 1/μ̄_d ≈ 1.16, the same as direct sun at θ_w ≈ 31°.
+- Tier 4's scenes have θ_w = 24–36°, so splitting the downwelling light changes the path factor by about 2% at most, and depth by about 1%. That is well below the present errors.
+- It matters only for sun much lower than in these scenes; revisit if scenes with θ_w > 45° are used.
+
+**B15, residual glint as a per-scene flat offset (`GLINT_OFFSET`).**
+- Each scene gets an offset Δ_s in ±0.003 sr⁻¹, with a prior Δ_s/σ (σ = 5 × 10⁻⁴).
+- Test: noisy OSOAA pixels, with and without added flat offsets of +6, −3, +9 and 0 × 10⁻⁴ per scene.
+
+RMSE (coverage of 48):
+
+| | no offset fitted | offset fitted |
+|---|---|---|
+| clear, 2 scenes, with glint | 2.84 (31) | **2.03** (27) |
+| moderate, 2 scenes, with glint | 2.10 (21) | **1.62** (19) |
+| clear, 4 scenes, with glint | 3.20 (36) | **2.28** (34) |
+| moderate, 4 scenes, with glint | 2.60 (23) | **2.29** (21) |
+| clear, 2 scenes, no glint | 1.22 (31) | 1.18 (27) |
+| moderate, 2 scenes, no glint | 1.79 (21) | **1.25** (19) |
+| clear, 4 scenes, no glint | 1.32 (38) | 1.32 (35) |
+
+- **It absorbs residual glint and does no harm without it.** Coverage falls slightly, because the optically deep model gets the offset too.
+- **Decision:** candidate for tier 4, where residual glint is real. A Cox–Munk prior from each scene's sun–view azimuths could replace the fixed σ later.
+
 ### B3 result (2026-10-13, `Y_MODEL` switch in samodel.c)
 
 Phase A pixels, 2 scenes, noise-free, depth RMSE. Control scenes are generated with Y from the measured χ (`Y_MODEL 0`), so the other variants cannot reproduce them exactly; the OSOAA scenes are the real test.

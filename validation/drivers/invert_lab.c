@@ -156,7 +156,7 @@ int main(void) {
   md->X = calloc(n_scenes, sizeof(double));
   md->D = calloc(n_scenes, sizeof(double));
   md->Y_scene = calloc(n_scenes, sizeof(double));
-  md->prev = calloc(4*n_scenes, sizeof(double));
+  md->prev = calloc(8*n_scenes, sizeof(double));
   md->a_w640 = interp_1d(ref_wlens, aw_Pope_Fry1997, n_ref_wlens, 640.0);
 
   for (k = 0; k < N_TYPES; k++) {

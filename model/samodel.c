@@ -184,11 +184,22 @@
 #define Y_MIN 0.0
 #define Y_MAX 2.5
 
-#if Y_MODEL == 3
-#define N_WATER 4 // ln P, ln G, ln X, Y per scene.
-#else
-#define N_WATER 3 // ln P, ln G, ln X per scene.
-#endif // Penalise low K in shallow water and very high K (off: it excludes the truth, EXPERIMENTS.md A-2).
+// Residual glint as a per-scene, spectrally flat Rrs offset (EXPERIMENTS.md B15), within
+// +-GLINT_MAX and with a weak prior offset/GLINT_SIGMA (chi units).
+
+#ifndef GLINT_OFFSET
+#define GLINT_OFFSET 0
+#endif
+#ifndef GLINT_SIGMA
+#define GLINT_SIGMA 5.0e-4
+#endif
+#define GLINT_MAX 3.0e-3
+
+// Water parameters per scene: ln P, ln G, ln X, then Y (Y_MODEL 3), then the glint offset.
+
+#define Y_SLOT (Y_MODEL == 3 ? 1 : 0)
+#define GLINT_INDEX (3 + Y_SLOT)
+#define N_WATER (3 + Y_SLOT + GLINT_OFFSET) // Penalise low K in shallow water and very high K (off: it excludes the truth, EXPERIMENTS.md A-2).
 
 #if DELTA
 #error "DELTA is not supported by the bounded parameterisation"
@@ -754,7 +765,7 @@ void samodel(
 	md->X = XX;
 	md->D = DD;
 
-	prev = malloc(4*md->n_scenes*sizeof(double)); // P,G,X,D for each scene.
+	prev = malloc(MAX(4, N_WATER)*md->n_scenes*sizeof(double)); // P,G,X,D for each scene.
 	md->prev = prev;
 	md->Y_scene = calloc(md->n_scenes, sizeof(double));
 
@@ -1937,6 +1948,10 @@ void samodel_bounds(model_data *md, double *lo, double *hi) {
 		lo[offset + N_WATER*k_scene + 3] = Y_MIN;
 		hi[offset + N_WATER*k_scene + 3] = Y_MAX;
 #endif
+#if GLINT_OFFSET
+		lo[offset + N_WATER*k_scene + GLINT_INDEX] = -GLINT_MAX;
+		hi[offset + N_WATER*k_scene + GLINT_INDEX] = GLINT_MAX;
+#endif
 	}
 }
 
@@ -1973,6 +1988,9 @@ void samodel_unpack_scene(double *params, model_data *md, int k_scene, double *P
 #if Y_MODEL == 3
 	md->Y_scene[k_scene] = clamp(params[offset + N_WATER*k_scene + 3], Y_MIN, Y_MAX);
 #endif
+#if GLINT_OFFSET
+	md->D[k_scene] = clamp(params[offset + N_WATER*k_scene + GLINT_INDEX], -GLINT_MAX, GLINT_MAX);
+#endif
 }
 
 // Pack physical values into a parameter vector. q holds n_bottoms fractions per region.
@@ -1995,6 +2013,9 @@ void samodel_pack(model_data *md, double *H, double *albedo, double *q, double *
 		params[offset + N_WATER*k_scene + 2] = log(clamp(X[k_scene], X_MIN, X_MAX));
 #if Y_MODEL == 3
 		params[offset + N_WATER*k_scene + 3] = 1.0; // Starting Y.
+#endif
+#if GLINT_OFFSET
+		params[offset + N_WATER*k_scene + GLINT_INDEX] = 0.0;
 #endif
 	}
 }
@@ -2113,6 +2134,21 @@ static double chi_unit(model_data *md) {
 	return 100.0*sigma_rel/sqrt((double) (n*md->n_regions));
 }
 
+static int glint_count(model_data *md) {
+	return GLINT_OFFSET ? md->n_scenes : 0;
+}
+
+static void glint_residuals(double *params, model_data *md, double unit, double *r) {
+#if GLINT_OFFSET
+	int k_scene, offset = md->n_regions*(1 + md->n_bottoms);
+	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+		r[k_scene] = unit*params[offset + N_WATER*k_scene + GLINT_INDEX]/GLINT_SIGMA;
+	}
+#else
+	(void) params; (void) md; (void) unit; (void) r;
+#endif
+}
+
 static int tie_count(model_data *md) {
 #if WATER_TIE
 	return md->n_scenes > 1 ? 3*md->n_scenes : 0;
@@ -2180,7 +2216,7 @@ static void region_residuals(double *params, model_data *md, int k_region, doubl
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 		samodel_unpack_scene(params, md, k_scene, &P, &G, &X);
 		for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
-			samodel_Rrs(P, G, X, B, q, H, 0.0, md, k_scene, k_band, k_region);
+			samodel_Rrs(P, G, X, B, q, H, GLINT_OFFSET ? md->D[k_scene] : 0.0, md, k_scene, k_band, k_region);
 			r[n++] = scale*(md->Rrs_modelled[k_region][k_scene][k_band] - md->Rrs_measured[k_region][k_scene][k_band]);
 		}
 	}
@@ -2196,8 +2232,9 @@ int samodel_residuals(double *params, model_data *md, double *r) {
 	}
 	continuity_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region]);
 	tie_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region + continuity_count(md)]);
+	glint_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region + continuity_count(md) + tie_count(md)]);
 
-	return md->n_regions*n_region + continuity_count(md) + tie_count(md);
+	return md->n_regions*n_region + continuity_count(md) + tie_count(md) + glint_count(md);
 }
 
 // Bounded Levenberg-Marquardt on samodel_residuals, over the parameters with is_free[i] != 0
@@ -2249,7 +2286,7 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 
 	n = samodel_n_params(md);
 	n_region = residuals_per_region(md);
-	m = md->n_regions*n_region + continuity_count(md) + tie_count(md);
+	m = md->n_regions*n_region + continuity_count(md) + tie_count(md) + glint_count(md);
 	scale = residual_scale(md);
 	unit = chi_unit(md);
 	offset = md->n_regions*(1 + md->n_bottoms);
@@ -2979,7 +3016,7 @@ double samodel_error(double *params, model_data *md) {
 		for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 
 			samodel_unpack_scene(params, md, k_scene, &P, &G, &X);
-			Delta = 0.0;
+			Delta = GLINT_OFFSET ? md->D[k_scene] : 0.0;
 
 #if WRITE_EPGXBHD
 			// P
@@ -3677,7 +3714,7 @@ void partial_copy_md(model_data *md, model_data *md_out, bool allocate) {
 
 #if DELTA
 	if (allocate) {
-		prev = (double*) malloc(4*md->n_scenes*sizeof(double));
+		prev = (double*) malloc(MAX(4, N_WATER)*md->n_scenes*sizeof(double));
 		md_out->prev = prev;
 	}
 
@@ -3686,7 +3723,7 @@ void partial_copy_md(model_data *md, model_data *md_out, bool allocate) {
 	}
 #else
 	if (allocate) {
-		prev = (double*) malloc(4*md->n_scenes*sizeof(double));
+		prev = (double*) malloc(MAX(4, N_WATER)*md->n_scenes*sizeof(double));
 		md_out->prev = prev;
 	}
 
