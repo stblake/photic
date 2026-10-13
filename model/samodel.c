@@ -180,6 +180,19 @@
 #define COHERE_SIGMA 0.1
 #endif
 
+// Bottom brightness bounded by class (EXPERIMENTS.md B8). Each region has cover weights
+// w_k in [0, 1] and a brightness b_k per bottom type, rho = sum_k (w_k/sum w) b_k rho_k(lambda),
+// with b_k within the range measured in situ for its class (Heron Reef and Moreton Bay,
+// 10th-90th percentile at 560 nm, widened): sediment 0.15-0.75, seagrass 0.03-0.15,
+// coral 0.03-0.25. Without it (0), B_k in [0, 1] is linear and unbounded below.
+
+#ifndef BOTTOM_BOUNDS
+#define BOTTOM_BOUNDS 0
+#endif
+
+static const double bright_lo[8] = {0.15, 0.03, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0};
+static const double bright_hi[8] = {0.75, 0.15, 0.25, 1.0, 1.0, 1.0, 1.0, 1.0};
+
 #ifndef Y_MODEL
 #define Y_MODEL 0
 #endif
@@ -1899,33 +1912,53 @@ static double clamp(double v, double lo, double hi) {
 	return v < lo ? lo : (v > hi ? hi : v);
 }
 
+// Parameters per region for the bottom, and the start of the water parameters.
+
+static int bottom_block(model_data *md) {
+	return BOTTOM_BOUNDS ? 2*md->n_bottoms : md->n_bottoms;
+}
+
+int samodel_water_offset(model_data *md) {
+	return md->n_regions*(1 + bottom_block(md));
+}
+
 int samodel_n_params(model_data *md) {
-	return md->n_regions*(1 + md->n_bottoms) + N_WATER*md->n_scenes;
+	return samodel_water_offset(md) + N_WATER*md->n_scenes;
 }
 
 void samodel_bounds(model_data *md, double *lo, double *hi) {
 
-	int k, k_scene, k_band, k_bottom, n_regions = md->n_regions, offset = md->n_regions*(1 + md->n_bottoms);
+	int k, k_scene, k_band, k_bottom, n_regions = md->n_regions, nb = md->n_bottoms,
+		block = bottom_block(md), offset = samodel_water_offset(md), type;
 	double shape_max;
 
 	for (k = 0; k < n_regions; k++) {
 		lo[k] = H_MIN;
 		hi[k] = H_MAX;
 	}
+
 	// A bottom type's albedo is bounded so that its reflectance B_k rho_k(lambda) is at most 1 at
 	// every fitted band: the tabulated shapes are normalised near 550 nm, and the red edge of
 	// seagrass and coral exceeds 1 (3.3 and 2.9 at 705 nm).
 
-	for (k_bottom = 0; k_bottom < md->n_bottoms; k_bottom++) {
+	for (k_bottom = 0; k_bottom < nb; k_bottom++) {
+		type = md->bottom_type_indexes[k_bottom];
 		shape_max = 1.0;
 		for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 			for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
-				shape_max = MAX(shape_max, md->bottom_reflectance[md->bottom_type_indexes[k_bottom]][k_scene][k_band]);
+				shape_max = MAX(shape_max, md->bottom_reflectance[type][k_scene][k_band]);
 			}
 		}
 		for (k = 0; k < n_regions; k++) {
-			lo[n_regions + k*md->n_bottoms + k_bottom] = 0.0;
-			hi[n_regions + k*md->n_bottoms + k_bottom] = 1.0/shape_max;
+#if BOTTOM_BOUNDS
+			lo[n_regions + k*block + k_bottom] = 0.0;      // cover weight
+			hi[n_regions + k*block + k_bottom] = 1.0;
+			lo[n_regions + k*block + nb + k_bottom] = MIN(bright_lo[type], 1.0/shape_max);
+			hi[n_regions + k*block + nb + k_bottom] = MIN(bright_hi[type], 1.0/shape_max);
+#else
+			lo[n_regions + k*block + k_bottom] = 0.0;
+			hi[n_regions + k*block + k_bottom] = 1.0/shape_max;
+#endif
 		}
 	}
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
@@ -1946,28 +1979,42 @@ double samodel_depth(double *params, int k_region) {
 	return clamp(params[k_region], H_MIN, H_MAX);
 }
 
-void samodel_unpack_region(double *params, model_data *md, int k_region, double *H, double *albedo, double q[]) {
+// A region's bottom: fractions q_k (summing to 1) and the albedo B_k of each type, so that
+// rho(lambda) = sum_k q_k B_k rho_k(lambda). Returns the region's mean albedo sum_k q_k B_k.
 
-	int k, n_bottoms = md->n_bottoms;
-	double sum;
+double samodel_unpack_bottom(double *params, model_data *md, int k_region, double B[], double q[]) {
 
-	*H = samodel_depth(params, k_region);
+	int k, nb = md->n_bottoms, base = md->n_regions + k_region*bottom_block(md);
+	double sum = 0.0, albedo = 0.0;
 
-	sum = 0.0;
-	for (k = 0; k < n_bottoms; k++) {
-		q[k] = clamp(params[md->n_regions + k_region*n_bottoms + k], 0.0, 1.0);
+	for (k = 0; k < nb; k++) {
+		q[k] = clamp(params[base + k], 0.0, 1.0);
 		sum += q[k];
 	}
-	*albedo = sum;
-
-	for (k = 0; k < n_bottoms; k++) {
-		q[k] = sum > 0.0 ? q[k]/sum : 1.0/n_bottoms;
+	for (k = 0; k < nb; k++) {
+#if BOTTOM_BOUNDS
+		B[k] = clamp(params[base + nb + k], 0.0, 1.0);
+		q[k] = sum > 0.0 ? q[k]/sum : 1.0/nb;
+#else
+		B[k] = sum;                       // linear: B_k q_k = params, with a shared scale
+		q[k] = sum > 0.0 ? q[k]/sum : 1.0/nb;
+#endif
+		albedo += q[k]*B[k];
 	}
+	return albedo;
+}
+
+void samodel_unpack_region(double *params, model_data *md, int k_region, double *H, double *albedo, double q[]) {
+
+	double B[MAX_BOTTOMS];
+
+	*H = samodel_depth(params, k_region);
+	*albedo = samodel_unpack_bottom(params, md, k_region, B, q);
 }
 
 void samodel_unpack_scene(double *params, model_data *md, int k_scene, double *P, double *G, double *X) {
 
-	int offset = md->n_regions*(1 + md->n_bottoms);
+	int offset = samodel_water_offset(md);
 
 	*P = exp(clamp(params[offset + N_WATER*k_scene],     log(P_MIN), log(P_MAX)));
 	*G = exp(clamp(params[offset + N_WATER*k_scene + 1], log(G_MIN), log(G_MAX)));
@@ -1983,11 +2030,19 @@ void samodel_pack(model_data *md, double *H, double *albedo, double *q, double *
 	double *params) {
 
 	int k_region, k_scene, k, n_regions = md->n_regions, n_bottoms = md->n_bottoms,
-		offset = md->n_regions*(1 + md->n_bottoms);
+		block = bottom_block(md), offset = samodel_water_offset(md), type;
+
 	for (k_region = 0; k_region < n_regions; k_region++) {
 		params[k_region] = clamp(H[k_region], H_MIN, H_MAX);
 		for (k = 0; k < n_bottoms; k++) {
-			params[n_regions + k_region*n_bottoms + k] = clamp(albedo[k_region]*q[k_region*n_bottoms + k], 0.0, 1.0);
+#if BOTTOM_BOUNDS
+			type = md->bottom_type_indexes[k];
+			params[n_regions + k_region*block + k] = clamp(q[k_region*n_bottoms + k], 0.0, 1.0);
+			params[n_regions + k_region*block + n_bottoms + k] = clamp(albedo[k_region], bright_lo[type], bright_hi[type]);
+#else
+			(void) type;
+			params[n_regions + k_region*block + k] = clamp(albedo[k_region]*q[k_region*n_bottoms + k], 0.0, 1.0);
+#endif
 		}
 	}
 
@@ -2116,11 +2171,11 @@ static double chi_unit(model_data *md) {
 }
 
 static int coherence_count(model_data *md) {
-	return (COHERENCE && md->n_regions > 1) ? md->n_regions*md->n_bottoms : 0;
+	return (COHERENCE && !BOTTOM_BOUNDS && md->n_regions > 1) ? md->n_regions*md->n_bottoms : 0;
 }
 
 static void coherence_residuals(double *params, model_data *md, double unit, double *r) {
-#if COHERENCE
+#if COHERENCE && !BOTTOM_BOUNDS
 	int k_region, k_bottom, nr = md->n_regions, nb = md->n_bottoms;
 	double mean;
 	if (nr < 2) return;
@@ -2167,10 +2222,9 @@ static void region_residuals(double *params, model_data *md, int k_region, doubl
 	int k_scene, k_band, k_bottom, n = 0;
 	double P, G, X, H, albedo, B[MAX_BOTTOMS], q[MAX_BOTTOMS];
 
-	samodel_unpack_region(params, md, k_region, &H, &albedo, q);
-	for (k_bottom = 0; k_bottom < md->n_bottoms; k_bottom++) {
-		B[k_bottom] = albedo;
-	}
+	H = samodel_depth(params, k_region);
+	albedo = samodel_unpack_bottom(params, md, k_region, B, q);
+	(void) albedo; (void) k_bottom;
 
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 		samodel_unpack_scene(params, md, k_scene, &P, &G, &X);
@@ -2247,7 +2301,7 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 	m = md->n_regions*n_region + continuity_count(md) + coherence_count(md);
 	scale = residual_scale(md);
 	unit = chi_unit(md);
-	offset = md->n_regions*(1 + md->n_bottoms);
+	offset = samodel_water_offset(md);
 
 	lo     = malloc(n*sizeof(double));
 	hi     = malloc(n*sizeof(double));
@@ -2294,7 +2348,7 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 			if (x[i] + h > hi[i]) h = -h;
 			x_new[i] = x[i] + h;
 			if (i < offset) {
-				k_region = i < md->n_regions ? i : (i - md->n_regions)/md->n_bottoms;
+				k_region = i < md->n_regions ? i : (i - md->n_regions)/bottom_block(md);
 				for (k = 0; k < m; k++) J[k*n_free + j] = 0.0;
 				region_residuals(x_new, md, k_region, scale, &r_new[k_region*n_region]);
 				for (k = k_region*n_region; k < (k_region + 1)*n_region; k++) {
@@ -2735,7 +2789,7 @@ void samodel_optimise(model_data *md) {
 
 	// Store P, G, X, and the transformed values in prev (start_at_previous).
 
-	offset = md->n_regions*(1 + md->n_bottoms);
+	offset = samodel_water_offset(md);
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 		samodel_unpack_scene(best, md, k_scene, &md->P[k_scene], &md->G[k_scene], &md->X[k_scene]);
 		for (i = 0; i < N_WATER; i++) {
@@ -2799,7 +2853,7 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 	is_free = malloc(md->n_params*sizeof(double));
 	best    = malloc(md->n_params*sizeof(double));
 	profile = malloc(N_REFINE*md->n_params*sizeof(double));
-	offset  = md->n_regions*(1 + md->n_bottoms);
+	offset  = samodel_water_offset(md);
 	total_count = 0;
 
 	// Stage 1: profile over depth (keeps the N_REFINE lowest errors, in order).
@@ -2907,7 +2961,9 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 
 		sigma_rel = sqrt(pow(noise/mean, 2.0) + DEEP_MODEL_ERROR*DEEP_MODEL_ERROR);
 		md->deep_chi2 = n_resid*(deep_error*deep_error - lowest_error*lowest_error)/pow(100.0*sigma_rel, 2.0);
-		md->optically_deep = md->deep_chi2 < DEEP_PENALTY*offset*log((double) n_resid);
+		// k counts the bottom's degrees of freedom (depth and one amount per bottom type per
+		// region), whatever the parameterisation.
+		md->optically_deep = md->deep_chi2 < DEEP_PENALTY*md->n_regions*(1 + md->n_bottoms)*log((double) n_resid);
 	}
 #endif
 
@@ -2968,10 +3024,8 @@ double samodel_error(double *params, model_data *md) {
 
 	for (k_region = 0; k_region < md->n_regions; k_region++) {
 
-		samodel_unpack_region(params, md, k_region, &H, &albedo, q);
-		for (k_bottom = 0; k_bottom < md->n_bottoms; k_bottom++) {
-			B[k_bottom] = albedo;
-		}
+		H = samodel_depth(params, k_region);
+		albedo = samodel_unpack_bottom(params, md, k_region, B, q);
 
 		for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 

@@ -33,6 +33,13 @@ BANDS = [443.0, 490.0, 560.0, 665.0]
 DEPTH_NODES = [0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 15.0,
                18.0, 22.0, 27.0, 32.0]
 B_ALBEDO = 0.6
+# Optional albedo per bottom ({"sand": .., "seagrass": .., "coral": ..}) in place of B_ALBEDO,
+# for scenes with realistic bottoms (EXPERIMENTS.md B8). The benchmark's scenes use B_ALBEDO.
+ALBEDO_BY_BOTTOM = None
+
+
+def albedo_for(name):
+    return ALBEDO_BY_BOTTOM[name] if ALBEDO_BY_BOTTOM else B_ALBEDO
 ALBEDO_NODES = (0.0, 0.5, 1.0)
 BOTTOM_COLUMNS = [(0, 16, "sand"), (16, 24, "seagrass"), (24, 32, "coral")]
 DEPTH_BINS = [(0, 2), (2, 5), (5, 10), (10, 20), (20, 30)]
@@ -150,7 +157,7 @@ def scene_bands(water, k, H, bottom, tables, lut, control):
         for lam in BANDS:
             rho = np.zeros(H.shape)
             for name, b in t2.BOTTOMS.items():
-                rho[bottom == name] = B_ALBEDO*tables[(lam, b)]["rho"]
+                rho[bottom == name] = albedo_for(name)*tables[(lam, b)]["rho"]
             out[lam] = lut_rrs(lut, lam, H + tide, rho)
         return out
     # Control: photic's forward model with its own chi -> Y relation (fixed point, as in
@@ -165,7 +172,7 @@ def scene_bands(water, k, H, bottom, tables, lut, control):
             vals = {}
             for lam in BANDS:
                 t = tables[(lam, b)]
-                vals[lam] = photic_ref.forward(lam, P, G, X, B_ALBEDO, t["rho"], H[m], tide, tw, 0.0,
+                vals[lam] = photic_ref.forward(lam, P, G, X, albedo_for(name), t["rho"], H[m], tide, tw, 0.0,
                                                R440, R490, 0.0, t["a0"], t["a1"], t["aw"], t["bbw"])["Rrs"]
             spec = np.array([vals[l] for l in BANDS])
             # photic's interp_1d extrapolates linearly from the first two bands (440 < 443).

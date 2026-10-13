@@ -298,6 +298,32 @@ Both are stored in `raw/bottom/`.
   2. Parameterise photic's bottom as cover fractions and a brightness per type, bounded by the measured classes, with the shapes from the calibrated families or photic's tables.
   3. Test with `error_budget.py` and the pixel harness.
 
+### B8 step 3: bottom brightness bounded by class (2026-10-13, `BOTTOM_BOUNDS`)
+
+**Parameterisation.** Each region has cover weights w_k in [0, 1] and a brightness b_k per type, with ρ = Σ (w_k/Σw) b_k ρ_k(λ). b_k is bounded by the in situ classes (step 2, 10th–90th percentile at 560 nm, widened): sediment 0.15–0.75, seagrass 0.03–0.15, coral 0.03–0.25.
+- A pure type still lies on the bounds (the other weights 0), but "sand at albedo 0.07" is now impossible.
+- The default (0) is the linear B_k in [0, 1].
+- **Bug fixed:** the optically deep test's k now counts the bottom's degrees of freedom, n_regions(1 + n_bottoms), whatever the parameterisation; bounds had doubled it.
+
+**Realistic scenes.** `tier3_scenes.ALBEDO_BY_BOTTOM` sets each bottom's albedo from the medians of the measured classes (sand 0.5, seagrass 0.07, coral 0.10). The benchmark's default scenes still use 0.6 for every bottom, which is unrealistic for seagrass and coral.
+
+**Results** (Phase A OSOAA pixels, 2 scenes, noise 0 and 0.0005 pooled; depth and Δχ² recorded for every pixel, then thresholded). Coverage / RMSE / within tolerance:
+
+| | Training (clear + moderate) | Turbid (held out) |
+|---|---|---|
+| 1×BIC, no bounds | 41% / 2.20 m / 60% | 26% / 9.9 m / 28% |
+| 1×BIC, **bounds** | 41% / **1.33 m** / 73% | 26% / 9.9 m / 36% |
+| 2×BIC, no bounds | 29% / 2.23 m / 62% | 8% / 1.14 m / 62% |
+| 2×BIC, **bounds** | 29% / **1.21 m** / 77% | 8% / **0.55 m** / 88% |
+
+- **The bounds cut RMSE by 40–50% at equal coverage**, and the gain holds on held-out turbid water.
+- **DEEP_PENALTY stays 2.** 1×BIC adds training coverage but fails on turbid water.
+- **Coverage is limited by physics:** dark seagrass (R ≈ 0.07) has little contrast against the water column, so only 14% of seagrass pixels get a depth even at 1×BIC (RMSE 0.48 m). Sand is covered to 20 m.
+- **Decision:** adopt `BOTTOM_BOUNDS` in the next candidate.
+- **Caveats:**
+  - The class bounds come from two Australian sites; check them against Exmouth's real bottoms (tier 4).
+  - The tier 3 benchmark needs a realistic-albedo scene set, otherwise its 0.6 seagrass and coral make the bounds look like a regression.
+
 ### Geometry constraints across scenes (planned 2026-10-13)
 
 Each scene sees the same seabed through a different light path, M_s = sec θ_w,s + D sec θ_v,s, and a different water column H + τ_s. The forward model already contains both, but P, G and X are free per scene, so a change in water can absorb most of the angular signal.

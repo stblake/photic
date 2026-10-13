@@ -22,18 +22,20 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 import phaseA as A
+import tier3_scenes as t3
 
 H_GRID = [0.5, 1.0, 2.0, 3.5, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0]
 N_WATER = 4  # ln P, ln G, ln X, Y (Y_MODEL 3)
 NB = 3
 CONFIGS = ["none", "Y", "water", "bottom", "Y+bottom"]
+# Medians of the in situ classes (Heron Reef, Moreton Bay) at 560 nm, in photic's units.
+REALISTIC = {"sand": 0.5, "seagrass": 0.07, "coral": 0.10}
 
 
-def masks(nr, n, config):
-    """Indices held at the truth."""
-    n_par = nr*(1 + NB) + N_WATER*n
+def masks(nr, n, config, n_par):
+    """Indices held at the truth (n_par from the packed truth, so any bottom layout works)."""
     fixed = np.zeros(n_par, dtype=bool)
-    off = nr*(1 + NB)
+    off = n_par - N_WATER*n
     if config in ("Y", "Y+bottom"):
         fixed[[off + N_WATER*k + 3 for k in range(n)]] = True
     if config == "water":
@@ -69,8 +71,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--noise", type=float, default=0.0)
     ap.add_argument("--scenes", type=int, default=2)
+    ap.add_argument("--realistic", action="store_true", help="realistic albedo per bottom (B8)")
     ap.add_argument("water", nargs="*", default=["clear", "moderate", "turbid"])
     a = ap.parse_args()
+    if a.realistic:
+        t3.ALBEDO_BY_BOTTOM = REALISTIC
     for w in a.water:
         H, b, g = A.scene_grids(w, a.scenes, True, a.noise)
         pix = [(i, j) for i in range(0, 32, 2) for j in (8, 20, 28)]
@@ -78,11 +83,11 @@ def main():
         def one(ij):
             i, j = ij
             setup, truth, nr, origin, phys = A.pixel_setup(w, a.scenes, i, j, H, b, g, 2, noise=a.noise)
-            return [H[i, j]] + [search(setup, truth, nr, origin, masks(nr, a.scenes, c))[0] for c in CONFIGS]
+            return [H[i, j]] + [search(setup, truth, nr, origin, masks(nr, a.scenes, c, len(truth)))[0] for c in CONFIGS]
 
         with ThreadPoolExecutor(12) as ex:
             rows = np.array(list(ex.map(one, pix)))
-        print("%s, %d scenes, OSOAA, noise %g: depth bias (RMSE) by depth bin, m" % (w, a.scenes, a.noise))
+        print("%s, %d scenes, OSOAA%s, noise %g: depth bias (RMSE) by depth bin, m" % (w, a.scenes, ", realistic bottoms" if a.realistic else "", a.noise))
         print("  %-10s" % "held true" + "".join("%15s" % b for b in ("0-5", "5-10", "10-15", "15-20", "20-30")))
         for k, c in enumerate(CONFIGS):
             cells = []
