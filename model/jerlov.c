@@ -330,7 +330,7 @@ bool estimate_water_type(float ratio, float ratios[NJERLOVTYPES], float *water_t
 		}
 
 		if (ratio < ratios[i - 1] && ratio > ratios[i]) {
-			*water_type = ((float) i - 1) + (ratio - ratios[i])/(ratios[i - 1] - ratios[i]);
+			*water_type = ((float) i - 1) + (ratios[i - 1] - ratio)/(ratios[i - 1] - ratios[i]);
 			return true;
 		}
 	}
@@ -383,7 +383,7 @@ bool interp_jerlov_ratio(float ratio, float ratios[NJERLOVTYPES], float jerlov_i
 // Linear interpolation. 
 
 	alpha = (ratio - ratios[indx])/(ratios[indx + 1] - ratios[indx]);
-	*ki = alpha*jerlov_i[indx] + (1 - alpha)*jerlov_i[indx + 1];
+	*ki = (1 - alpha)*jerlov_i[indx] + alpha*jerlov_i[indx + 1];
 
 	return true; 
 }

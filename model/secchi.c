@@ -162,7 +162,7 @@ void Lee_Kd_LS8(float Rrs443, float Rrs481, float Rrs554, float Rrs656, float th
 
 	h0 = -1.146;
 	h1 = -1.366;
-	h2 = 0.469;
+	h2 = -0.469; // QAA v5/v6: a(555) = aw + 10^(-1.146 - 1.366 chi - 0.469 chi^2).
 
 	chi = log10((rrs443 + rrs481)/(rrs554 + 5.0*rrs656*rrs656/rrs481));
 

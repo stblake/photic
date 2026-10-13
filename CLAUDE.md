@@ -93,7 +93,7 @@ Main commands (dispatch in `bam.c:run_command`):
 - **Empty names match unused slots.** Unused grid and scene slots have name `""`, so a missing argument resolves to an unallocated slot (NULL array, use-after-free after `DELETE`). Lookups should also check `allocated_grids[n]`.
 - **`tokenize()` has no bounds checks** on `MAX_ARGS`/`MAX_ARG_SIZE`.
 - **The OpenMP design in `samodel()` is unsafe.** The whole function is one `omp parallel` region: setup, `rand()`, the depth-σ pass, `depth *= -1` and file writes all run on every thread. It is latent only because OpenMP is off.
-- **Tidal height (`HTIDE`) is parsed but has no effect** on the SA forward model (`samodel_Rrs` uses `H`, not `H + tide`).
+- **Tidal convention**: `H` (fitted and output) is depth below the common datum. In `samodel_Rrs`, each scene's water column is `H + HTIDE`, clamped at 0. `HTIDE` defaults to 0.
 - **`write_nc` packs to 16-bit**, and its max-finding is buggy (`compress_2d`: `grmax = FLT_MIN`, `else if`), so the first cell's value can wrap.
 - **`WRITE GRID … REGION` writes nothing**, and `.asc` output is silently NetCDF.
 - `REVIEW.md` (October 2026) lists every known defect with file:line references and severity. Consult it before changing a module, and update it when fixing items.

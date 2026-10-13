@@ -8,7 +8,7 @@
 - Small standalone test drivers for the I/O and numeric helpers, some run under AddressSanitizer.
 - Physics checked against `paper/photic.tex`.
 
-**Status update:** the build items (priority 1–2 and §1) were fixed after this review; see the git history. The code now builds with Apple clang 17 and GCC 16.
+**Status update:** the build items (priority 1–2 and §1) and the physics items (priority 3–5) were fixed after this review; items marked **[fixed]** are resolved, see the git history. The code now builds with Apple clang 17 and GCC 16.
 
 **Labels:** severity is critical / high / medium / low. **[verified]** means the finding was reproduced by a test program or by compiling. Items marked *uncertain* depend on intent that the code doesn't record.
 
@@ -22,9 +22,9 @@ Fix these first; each is either a build blocker or silently corrupts scientific 
 |---|---|---|
 | 1 | build | `OK`/`COMMENT`/`EXIT`/`STOP` are undefined, so `bam.c` does not compile at HEAD. They were deleted in `c0038fe`; the original values were 1000/1001/1002/1005. [verified] |
 | 2 | build | Globals are defined in `common.h`, which needs `-fcommon`; GCC ≥ 10 gives 122 link errors. `typedef int bool` fails under C23 (GCC ≥ 15). The makefile has MacPorts paths hard-coded. [verified] |
-| 3 | physics | `HTIDE` has no effect: `samodel_Rrs` uses `H`, not `H + tide` (samodel.c:2873, 2931, 2934). Multi-temporal fits ignore tidal differences. [verified] |
-| 4 | physics | Jerlov interpolation weights are swapped (jerlov.c:385-386), and the water-type fraction is reversed for decreasing ratio tables (jerlov.c:333). [verified] |
-| 5 | physics | The QAA coefficient `h2 = 0.469` should be `-0.469` (secchi.c:165). [verified] |
+| 3 | physics | **[fixed]** `HTIDE` has no effect: `samodel_Rrs` uses `H`, not `H + tide` (samodel.c:2873, 2931, 2934). Multi-temporal fits ignore tidal differences. [verified] |
+| 4 | physics | **[fixed]** Jerlov interpolation weights are swapped (jerlov.c:385-386), and the water-type fraction is reversed for decreasing ratio tables (jerlov.c:333). [verified] |
+| 5 | physics | **[fixed]** The QAA coefficient `h2 = 0.469` should be `-0.469` (secchi.c:165). [verified] |
 | 6 | I/O | `compress_2d` starts from `grmax = FLT_MIN` and uses `else if`, so the true maximum can be missed and wraps in the 16-bit pack. A constant grid gives scale 0, then NaN. This affects every NetCDF write (nc.c:286-316). [verified: 10 → 1.99979] |
 | 7 | I/O | Bilinear interpolation is wrong on the last row and column; bicubic never reads the last row or column (interp.c:73, 124). This affects UNITE, INTERPOLATE, PANSHARPEN, OVERLAY and SRTM. [verified] |
 | 8 | memory | `smooth()` reads `[j-1]` at `j=0` (smoothutils.c:96-121). [verified: ASan heap-buffer-overflow] |
@@ -70,7 +70,7 @@ Standalone utilities (they build with `common.c nc.c io.c` plus a helper, and `-
    - all the NetCDF writes.
 
    In addition, `schedule(dynamic)` defeats the sorted-order hot start. Restructure the code so that only the pixel loop is parallel before ever enabling `-fopenmp`.
-2. **The tide is ignored** in the forward model (L2867-2873, L2931, L2934). `md->depth = H + tide` is dead code: it is overwritten in `samodel_optimise` (L2000-2017).
+2. **[fixed]** **The tide is ignored** in the forward model (L2867-2873, L2931, L2934). `md->depth = H + tide` is dead code: it is overwritten in `samodel_optimise` (L2000-2017).
 
 ### High
 3. `md->h_empirical` is uninitialised when no DEPTHS grid is given, and stale when the grid is nodata at a pixel (L1826, L1138, L968-971). It controls the "sand only if > 8 m" decision.
@@ -221,10 +221,10 @@ Standalone utilities (they build with `common.c nc.c io.c` plus a helper, and `-
 ## 5. Optics, alignment, refine, plotting
 
 ### High
-1. `jerlov.c:385-386`: the interpolation weights are swapped. [verified]
-2. `jerlov.c:333`: the water-type fraction is reversed for decreasing ratio tables, which is the normal case for Landsat-8 band pairs. Example: the code gives 0.098 where about 0.90 is expected.
+1. **[fixed]** `jerlov.c:385-386`: the interpolation weights are swapped. [verified]
+2. **[fixed]** `jerlov.c:333`: the water-type fraction is reversed for decreasing ratio tables, which is the normal case for Landsat-8 band pairs. Example: the code gives 0.098 where about 0.90 is expected.
 3. `jerlov.c:28-49`: the table mixes Austin & Petzold (1984) values for types I–C1 with Jerlov (1976) values for C3–C9. It is not monotonic at C1→C3, so a single ratio can match two intervals.
-4. `secchi.c:165`: `h2` should be `-0.469`. [verified]
+4. **[fixed]** `secchi.c:165`: `h2` should be `-0.469`. [verified]
 5. `align.c:252-266`: the default resampling with replacement; overflow when MAXSOUNDINGS > n; division by zero when n = 0.
 6. `align.c:396-398`: nodata `z_model` entries are transformed, then missed by the exact-equality nodata check at :627.
 7. `align.c:316-318`: `NEGATESOUNDINGS` flips the sign once per grid, so it is a no-op for an even number of grids.

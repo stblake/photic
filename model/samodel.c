@@ -2867,10 +2867,13 @@ void samodel_Rrs(
 	double tide    = md->H_tide[k_scene];
 	double sec_theta_view = md->sec_theta_view[k_scene];
 	double sec_theta_sun = md->sec_theta_sun[k_scene];
+	double H_scene;
 
-	// Compute depth. 
+	// Compute the water column depth at the time of this scene. H is the depth below
+	// the common datum and tide is this scene's tidal offset to that datum.
 
-	md->depth = H + tide; // Correct for tidal height. 
+	H_scene = H + tide;
+	if (H_scene < 0.0) H_scene = 0.0; // Exposed at this tide.
 
 	// Compute bottom albedo. 
 
@@ -2928,10 +2931,10 @@ void samodel_Rrs(
 	// Compute rrs. 
 
 	M = sec_theta_sun + DuC*sec_theta_view;
-	rrs_C = rrs_dp*(1.0 - exp(-M*K*H)); // Contribution of the water column. 
+	rrs_C = rrs_dp*(1.0 - exp(-M*K*H_scene)); // Contribution of the water column. 
 
 	M = sec_theta_sun + DuB*sec_theta_view;
-	rrs_B = rho/PI*exp(-M*K*H); // Contribution of the bottom. 
+	rrs_B = rho/PI*exp(-M*K*H_scene); // Contribution of the bottom. 
 
 	md->rrs_bottom[k_region][k_scene][k_band] = rrs_B;
 	// printf("\nrrs_bottom = %.7f\n", md->rrs_bottom[k_region][k_scene][k_band]);
