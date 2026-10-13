@@ -325,6 +325,30 @@ Scenes with different sun angles therefore get inconsistent model errors, which 
   - Lee's structure remains the most transferable. Refits (B10) and an angular factor are available once the truth includes skylight.
 - The paper is stored in `raw/papers/`.
 
+### Sky-lit synthetic truth (2026-10-13; correction to the section above)
+
+**Builds.** `OSOAA_sky` is the scalar build with atmospheric scattering on (`EXPERT_MODE_FORCED_FATM_NULL .FALSE.`); `OSOAA_sky_blackocean` also has the sea source nulled, giving the surface-reflected sky and glint to subtract. The aerosol is maritime (Shettle & Fenn, relative humidity 80%), with optical thickness 0.1 at 550 nm, passed as `run_osoaa(aot=)`.
+
+**Normalisation.** OSOAA's REFL = π I/Ed_total(level), with Ed_total direct plus diffuse at the same level (OSOAA_CALC_REFL). So REFL(0+)/π − surface is water-leaving Rrs relative to the total Ed(0+), with or without a sky. The earlier tier 2/3 numbers were correctly normalised.
+
+**Tier 2, all 1,098 physical cases, sky against black sky:**
+
+| | black sky | sky, AOT 0.1 |
+|---|---|---|
+| OSOAA rrs(0−), change from black sky | – | median −0.03% (5–95%: −0.9 to +0.8%) |
+| OSOAA Rrs(0+), change from black sky | – | median −0.8% |
+| Lee error, median / p95 | 2.43% / 6.68% | 2.07% / 6.55% |
+| Lee bias by sun angle (θ_w 15 / 29 / 40°) | +2.2 / +1.0 / −1.2% | +2.3 / +1.0 / −1.4% |
+| Lee deep-water bias by sun angle | +4.9 / +2.3 / −2.0% | +4.4 / +2.0 / −1.8% |
+
+- **Skylight (14–33% of Ed) hardly changes the truth, and the sun-angle dependence is intact.**
+- **The earlier explanation was wrong:** the black sky does not exaggerate OSOAA's angular effect.
+- **The mismatch with Albert & Mobley's angular term must come from elsewhere.** The likely candidate is the particle phase function: Fournier–Forand with b̃_b = 0.018 here, against Petzold-like in Hydrolight. Their Lake Constance optics are another.
+- **Race fixed:** aerosol Mie files are cached per wavelength. Parallel OSOAA runs raced to write them, so tier 2 now warms up one case per sun angle and band, and tier 3 one per band.
+- **Tier 3:** `PHOTIC_TIER3_SKY=1` builds and uses sky-lit lookup tables (`lut_sky`).
+- **Decision:** use the sky-lit truth from now on, since it is more realistic at no extra cost in photic.
+- **Next for the forward model:** test the phase-function hypothesis (OSOAA with a Petzold-like phase function) before fitting any angular correction.
+
 ### Physics constraints (planned 2026-10-13)
 
 Each enters the LM fit as a bound or a weighted residual (a soft prior, weight 1/σ), and is switchable. Each is tested alone: Phase A pixels with noise, then tier 3 by depth bin, then tier 4 held-out sites. Any σ is tuned on the training split only.

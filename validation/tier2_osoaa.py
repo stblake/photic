@@ -138,14 +138,16 @@ def photic_side(c, tables):
     return out, theta_w
 
 
-def run_osoaa(c, ph, exe, osoaa_root, phase, workdir, dbdir, exe_black_ocean=None, albedo=None):
+def run_osoaa(c, ph, exe, osoaa_root, phase, workdir, dbdir, exe_black_ocean=None, albedo=None, aot=0.0):
     """OSOAA for one case: rrs(0-) and water-leaving Rrs(0+) at nadir, and the IOPs used.
 
     The radiance just above the surface includes sun glint (and any sky reflection), which
     is not water-leaving radiance. If exe_black_ocean (OSOAA built with
     EXPERT_MODE_FORCED_FSEA_NULL) is given, a second run with no marine scattering and a
     black bottom gives that surface-reflected part, which is subtracted. albedo, if given,
-    overrides the bottom albedo (photic's B * rho_table).
+    overrides the bottom albedo (photic's B * rho_table). aot is the aerosol optical thickness
+    at 550 nm (maritime, RH 80%); it only matters with a build that has atmospheric scattering
+    (OSOAA_sky), where the sky then lights the water.
     """
     ang, f11, btilde = phase
     aw_o, bw_o = water_coeffs(osoaa_root)
@@ -179,17 +181,17 @@ def run_osoaa(c, ph, exe, osoaa_root, phase, workdir, dbdir, exe_black_ocean=Non
         f.write("photic tier 2\ndepth a_hyd b_hyd\n(m) (1/m) (1/m)\n-\n-\n")
         f.write("0.0 %.8E %.8E\n%.4f %.8E %.8E" % (a_hyd, b_hyd, depth + 1.0, a_hyd, b_hyd))
 
-    rrs_0m, refl_0p = osoaa_once(c, exe, osoaa_root, workdir, dbdir, ext, prof, depth, alb)
+    rrs_0m, refl_0p = osoaa_once(c, exe, osoaa_root, workdir, dbdir, ext, prof, depth, alb, aot)
     surface = 0.0
     if exe_black_ocean is not None:
         _, surface = osoaa_once(c, exe_black_ocean, osoaa_root, os.path.join(workdir, "black_ocean"),
-                                dbdir, ext, prof, depth, 0.0)
+                                dbdir, ext, prof, depth, 0.0, aot)
     return dict(rrs_osoaa=rrs_0m, Rrs_osoaa=(refl_0p - surface)/math.pi,
                 Rrs_surface_osoaa=surface/math.pi, a_hyd=a_hyd, b_hyd=b_hyd, depth_osoaa=depth,
                 bottom_albedo=alb, a_rel_mismatch=a_mismatch)
 
 
-def osoaa_once(c, exe, osoaa_root, workdir, dbdir, ext, prof, depth, alb):
+def osoaa_once(c, exe, osoaa_root, workdir, dbdir, ext, prof, depth, alb, aot=0.0):
     """Run OSOAA; return rrs(0-) and REFL(0+) = pi L(0+)/Ed(0+) at nadir."""
     os.makedirs(workdir, exist_ok=True)
     res = os.path.join(workdir, "res")
@@ -197,8 +199,9 @@ def osoaa_once(c, exe, osoaa_root, workdir, dbdir, ext, prof, depth, alb):
     cmd = [exe, "-OSOAA.ResRoot", res, "-OSOAA.Log", "Main.Log", "-OSOAA.Wa", "%.4f" % (c["lam"]/1000.0),
            "-ANG.Thetas", "%.4f" % c["theta_air"],
            "-AP.Pressure", "%.3f" % PRESSURE, "-AP.HR", "8.0", "-AP.HA", "2.0",
-           "-AER.Waref", "0.550", "-AER.AOTref", "0.0", "-AER.Model", "2",
-           "-AER.SF.Model", "3", "-AER.SF.RH", "98.", "-AER.DirMie", os.path.join(dbdir, "MIE_AER"),
+           "-AER.Waref", "0.550", "-AER.AOTref", "%.4f" % aot, "-AER.Model", "2",
+           "-AER.SF.Model", "3", "-AER.SF.RH", "98." if aot == 0.0 else "80.",
+           "-AER.DirMie", os.path.join(dbdir, "MIE_AER"),
            "-PHYTO.Chl", "0.0", "-SED.Csed", "0.0", "-YS.Abs440", "0.0", "-DET.Abs440", "0.0",
            "-HYD.Model", "3", "-HYD.ExtData", ext, "-HYD.UserProfile", prof,
            "-HYD.DirMie", os.path.join(dbdir, "MIE_HYD"),
@@ -252,7 +255,7 @@ FIELDS = ["key", "water", "H", "bottom", "theta_air", "theta_w", "lam", "a", "bb
           "rrs_rel_err", "Rrs_rel_err", "Rrs_surface_osoaa", "a_rel_mismatch", "a_hyd", "b_hyd", "depth_osoaa"]
 
 
-def run(driver, osoaa_root, workroot, quick=False, jobs=12, black_ocean_root=None):
+def run(driver, osoaa_root, workroot, quick=False, jobs=12, black_ocean_root=None, aot=0.0):
     sel = QUICK if quick else FULL
     exe = os.path.join(osoaa_root, "exe", "OSOAA_MAIN.exe")
     exe_black_ocean = None
@@ -278,7 +281,7 @@ def run(driver, osoaa_root, workroot, quick=False, jobs=12, black_ocean_root=Non
             return json.load(open(cache))
         ph, theta_w = photic_side(c, tables)
         r = run_osoaa(c, ph, exe, osoaa_root, phase, os.path.join(workroot, "cases", key), dbdir,
-                      exe_black_ocean=exe_black_ocean)
+                      exe_black_ocean=exe_black_ocean, aot=aot)
         H = c["H"]
         row = dict(key=key, water=c["water"], H=H, bottom=c["bottom"], theta_air=c["theta_air"],
                     theta_w=theta_w, lam=c["lam"], a=ph["a"], bb=ph["bb"], u=ph["u"], K=ph["K"],
@@ -291,14 +294,16 @@ def run(driver, osoaa_root, workroot, quick=False, jobs=12, black_ocean_root=Non
         return row
 
     todo = [c for c in cases if case_key(c) not in done]
-    # Surface matrices are computed per sun angle and cached in db/SURF; compute them
-    # serially first so that parallel runs do not race to write the same file.
+    # Surface matrices (per sun angle, db/SURF) and aerosol Mie files (per wavelength,
+    # db/MIE_AER) are computed once and cached; compute one case for each serially first so
+    # that parallel runs do not race to write (or read half-written) files.
     for theta in sel["theta"]:
-        first = [c for c in todo if c["theta_air"] == theta][:1]
-        for c in first:
-            row = one(c)
-            done[row["key"]] = row
-            todo.remove(c)
+        for lam in sel["bands"]:
+            first = [c for c in todo if c["theta_air"] == theta and c["lam"] == lam][:1]
+            for c in first:
+                row = one(c)
+                done[row["key"]] = row
+                todo.remove(c)
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         for row in pool.map(one, todo):
             done[row["key"]] = row

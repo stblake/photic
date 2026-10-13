@@ -31,7 +31,7 @@ H_MAX = 60.0
 
 
 def deep_rrs(water, n):
-    lut_dir = os.path.join(A.DATA, "runs", "tier3", "lut")
+    lut_dir = os.path.join(A.DATA, "runs", "tier3", t3.LUT_DIR)
     out = []
     for k in range(n):
         lut = json.load(open(os.path.join(lut_dir, t3.scene_key(water, k) + ".json")))

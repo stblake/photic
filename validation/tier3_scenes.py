@@ -33,6 +33,14 @@ BANDS = [443.0, 490.0, 560.0, 665.0]
 DEPTH_NODES = [0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 15.0,
                18.0, 22.0, 27.0, 32.0]
 B_ALBEDO = 0.6
+# Sky-lit truth (PHOTIC_TIER3_SKY=1): OSOAA with atmospheric scattering (OSOAA_sky) and a
+# maritime aerosol of optical thickness AOT at 550 nm, so skylight reaches the water; cached
+# apart from the black-sky lookup tables.
+SKY = os.environ.get("PHOTIC_TIER3_SKY") == "1"
+AOT = 0.1 if SKY else 0.0
+LUT_DIR = "lut_sky" if SKY else "lut"
+OSOAA_DIR = "osoaa_sky" if SKY else "osoaa"
+OSOAA_BUILD = ("OSOAA_sky", "OSOAA_sky_blackocean") if SKY else ("OSOAA_scalar", "OSOAA_blackocean")
 # Optional albedo per bottom ({"sand": .., "seagrass": .., "coral": ..}) in place of B_ALBEDO,
 # for scenes with realistic bottoms (EXPERIMENTS.md B8). The benchmark's scenes use B_ALBEDO.
 ALBEDO_BY_BOTTOM = None
@@ -86,7 +94,7 @@ def build_lut(water, k, tables, osoaa, workroot, jobs):
     """OSOAA Rrs(0+) at the depth nodes for albedo 0 and 1, per band, cached as JSON."""
     P, G, X, Y, theta_air, tide = SCENE_SETS[water][k]
     t2.WATER_TYPES[scene_key(water, k)] = (P, G, X, Y)
-    path = os.path.join(workroot, "lut", scene_key(water, k) + ".json")
+    path = os.path.join(workroot, LUT_DIR, scene_key(water, k) + ".json")
     if os.path.exists(path):
         return json.load(open(path))
     jobs_list = []
@@ -99,14 +107,16 @@ def build_lut(water, k, tables, osoaa, workroot, jobs):
         lam, H, alb = args
         c = dict(water=scene_key(water, k), H=H, bottom="sand", theta_air=theta_air, lam=lam)
         ph, _ = t2.photic_side(c, tables)
-        wd = os.path.join(workroot, "osoaa", scene_key(water, k), "%g_%g_%g" % (lam, H, alb))
+        wd = os.path.join(workroot, OSOAA_DIR, scene_key(water, k), "%g_%g_%g" % (lam, H, alb))
         black = osoaa["black_ocean"] if (H == DEPTH_NODES[0] and alb == 0.0) else None
         r = t2.run_osoaa(c, ph, osoaa["exe"], osoaa["root"], osoaa["phase"], wd, osoaa["db"],
-                         exe_black_ocean=black, albedo=alb)
+                         exe_black_ocean=black, albedo=alb, aot=AOT)
         return args, r
 
-    # Surface matrices for this sun angle first (avoids parallel writes of the same file).
-    first, rest = jobs_list[:1], jobs_list[1:]
+    # One job per band first, serially: the surface matrices (per sun angle) and the aerosol
+    # Mie files (per wavelength) are cached, and parallel runs must not race to write them.
+    first = [next(j for j in jobs_list if j[0] == lam) for lam in BANDS]
+    rest = [j for j in jobs_list if j not in first]
     results = [one(a) for a in first]
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         results += list(pool.map(one, rest))
@@ -296,9 +306,9 @@ def run(driver, photic, data, workroot, quick=False, jobs=12, photic_work=None, 
     global ALBEDO_BY_BOTTOM
     sel = QUICK if quick else FULL
     photic_work = photic_work or os.path.join(workroot, "photic")
-    osoaa = dict(root=os.path.join(data, "tools", "OSOAA_scalar"),
-                 exe=os.path.join(data, "tools", "OSOAA_scalar", "exe", "OSOAA_MAIN.exe"),
-                 black_ocean=os.path.join(data, "tools", "OSOAA_blackocean", "exe", "OSOAA_MAIN.exe"),
+    osoaa = dict(root=os.path.join(data, "tools", OSOAA_BUILD[0]),
+                 exe=os.path.join(data, "tools", OSOAA_BUILD[0], "exe", "OSOAA_MAIN.exe"),
+                 black_ocean=os.path.join(data, "tools", OSOAA_BUILD[1], "exe", "OSOAA_MAIN.exe"),
                  db=os.path.join(workroot, "db"), phase=t2.phase_table())
     for d in ["MIE_AER", "MIE_HYD", "SURF"]:
         os.makedirs(os.path.join(osoaa["db"], d), exist_ok=True)
@@ -340,7 +350,7 @@ def run(driver, photic, data, workroot, quick=False, jobs=12, photic_work=None, 
 
 def lut_check(tables, osoaa, workroot, water):
     """Interpolation error of the lookup table at depths between the nodes."""
-    path = os.path.join(workroot, "lut", scene_key(water, 0) + ".json")
+    path = os.path.join(workroot, LUT_DIR, scene_key(water, 0) + ".json")
     lut = json.load(open(path))
     P, G, X, Y, theta_air, tide = SCENE_SETS[water][0]
     errs = []
