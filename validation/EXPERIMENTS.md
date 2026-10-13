@@ -228,6 +228,31 @@ Prototype (`h0_estimate.py main_class`, image deep rows as RINF), class-aware H0
   - estimate RINF in tier 4 from deep-water pixels (offshore of Ningaloo);
   - judge mode 2 on the full benchmark.
 
+### Decoupling the water from depth and bottom, steps 1–2 (2026-10-13, `decouple.py`)
+
+photic's search (profile, then refine; LM; `Y_MODEL 3`, `BOTTOM_BOUNDS 1`) on OSOAA pixels in three ways:
+- **joint:** everything fitted;
+- **true:** the water (P, G, X, Y per scene) held at the truth, the ceiling;
+- **deep:** each scene's water fitted first to its deep-water Rrs (photic's model, no bottom), then held fixed for the shallow pixels.
+
+The deep-water fit recovers P, G and X within about 5–40% and Y within about 30%; clear water splits P and G worst. With the bounds, the default scenes' seagrass and coral (albedo 0.6) are out of range, so only the realistic-bottom scenes are a fair test. RMSE:
+
+| Realistic bottoms, noise 0.0005 | 2–5 m | 5–10 m | 10–15 m |
+|---|---|---|---|
+| clear: joint / **deep** / true | 1.09 / **0.35** / 0.28 | 2.19 / **1.22** / 0.92 | 3.08 / **1.63** / 1.77 |
+| moderate: joint / **deep** / true | 0.56 / 1.00 / 0.86 | 3.32 / **1.77** / 1.65 | 7.92 / **5.23** / 5.82 |
+| turbid: joint / **deep** / true | 2.05 / 5.53 / 0.48 | 6.34 / **4.03** / 3.95 | – |
+
+| Realistic bottoms, no noise | 2–5 m | 5–10 m | 10–15 m |
+|---|---|---|---|
+| clear: joint / deep / true | 0.11 / 0.15 / 0.11 | 0.96 / 0.89 / **0.25** | 1.88 / 1.96 / **0.64** |
+| moderate: joint / deep / true | 0.84 / **0.11** / 0.36 | 3.00 / **1.23** / 0.99 | 3.06 / 4.30 / 3.62 |
+
+- **With noise, water from deep water gains a lot at 2–15 m**, often reaching the ceiling: a noisy pixel cannot pin down its own water, but the deep-water reference can.
+- **Exceptions:** turbid 2–5 m (a few outliers) and moderate 2–5 m.
+- **Without noise it is mixed.** The joint fit can bend the water to absorb the forward model's own error, while fixed water pushes that error into depth. In clear water the deep-water fit's P/G split (G 0.013 against 0.02) costs it the ceiling's gain.
+- **Caveat:** tier 3 is the best case, with uniform water and a deep reference of the same water. Real lagoons can differ, hence step 3, a water shared over a tile within a scene and fitted with its pixels.
+
 ### Physics constraints (planned 2026-10-13)
 
 Each enters the LM fit as a bound or a weighted residual (a soft prior, weight 1/σ), and is switchable. Each is tested alone: Phase A pixels with noise, then tier 3 by depth bin, then tier 4 held-out sites. Any σ is tuned on the training split only.
