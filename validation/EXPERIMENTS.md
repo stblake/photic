@@ -248,6 +248,30 @@ Prior residuals (B_r,k − mean B_·,k)/σ_B pull each region's bottom albedos t
 - **Why it is limited:** coherence makes a window's regions agree with each other, but the whole window can still trade brightness against depth together. The error budget showed that the *absolute* bottom brightness is what removes the bias.
 - **Decision:** off by default (σ 0.2 is the mildest if it is wanted). **Next:** B8 with a bottom library built from first principles, which bounds absolute brightness per type.
 
+### B8 step 1: bottom reflectance from first principles (2026-10-13, `bottom_rt.py`)
+
+Physical models of submerged bottom reflectance, each a family over parameter ranges:
+- **sand:** Kubelka–Munk semi-infinite layer, with k/s from mineral, iron-oxide, organic and microphytobenthos absorption;
+- **seagrass:** PROSPECT-D leaves with the leaf–water relative refractive index, in a Kubelka–Munk canopy over sand;
+- **coral:** zooxanthellae tissue over an aragonite skeleton.
+
+Absorption data:
+- PROSPECT-D coefficients (from the `prosail` package data);
+- extracted-pigment spectra from Clementson & Wojtasiewicz (2019, CC BY 4.0), with in-vivo shifts.
+
+Both are stored in `raw/bottom/`.
+
+| 443 / 490 / 560 / 665 / 705 nm | model, shape (÷560) | photic's table |
+|---|---|---|
+| sand | 0.80 / 0.90 / 1.01 / 1.08 / 1.10 (absolute 0.47–0.64) | 0.75 / 0.88 / 1.01 / 1.09 / 1.19 |
+| seagrass | 0.04 / 0.08 / 0.92 / 0.07 / 1.40 | 0.55 / 0.65 / 1.03 / 0.81 / 3.33 |
+| coral | 0.09 / 0.12 / 1.11 / 0.62 / 1.41 | 0.37 / 0.52 / 1.16 / 0.80 / 2.91 |
+
+- **Sand reproduces photic's measured shape from first principles**, with an absolute reflectance (0.4–0.7) typical of bright carbonate sand.
+- **Seagrass and coral are far too dark in the blue and red**, because the assumed pigment loads and full canopy cover absorb almost everything at chlorophyll's peaks. Measured spectra include canopy gaps, the sand beneath and epiphytes.
+- **The models' structure is sound, but their parameter ranges are not yet anchored.** Step 2 needs measured benthic spectra to calibrate the ranges (pigment load, cover fraction, packaging), first to see whether the families then contain photic's shapes.
+- **No measured library is at hand:** sambuca_core ships none.
+
 ### Geometry constraints across scenes (planned 2026-10-13)
 
 Each scene sees the same seabed through a different light path, M_s = sec θ_w,s + D sec θ_v,s, and a different water column H + τ_s. The forward model already contains both, but P, G and X are free per scene, so a change in water can absorb most of the angular signal.
