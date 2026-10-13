@@ -94,10 +94,16 @@
 #define MAX_BOTTOMS 12
 
 #define SAM 0
+#ifndef LUT
 #define LUT 1
+#endif
+#ifndef RESTART
 #define RESTART 0
+#endif
 #define DELTA 0
+#ifndef K_PRIOR
 #define K_PRIOR 0
+#endif
 
 // Backscattering slope Y of b_bp = X (440/lambda)^Y:
 //   0  from chi = Rrs440/Rrs490 of the measured spectrum (Lee 1999), as originally;
@@ -428,6 +434,7 @@ void samodel(
 		// inputs
 		scene scene_data[], geogrid gridded_data[], int *scene_indexes, int nscenes, 
 		bool empirical_depth_present, geogrid empirical_depths,
+		bool points_present, geogrid points,
 		// parameterisation
 		int n_smoothing_radius, int n_spatial, int n_bottoms,
 		// outputs
@@ -943,6 +950,13 @@ void samodel(
 					}
 				}
 				if (nodata) break ;
+			}
+
+			// With POINTS, model only the cells flagged non-zero (the rest stay at the defaults).
+
+			if (! nodata && points_present && (points.array[i][j] == 0.0 ||
+					approx_equal(points.array[i][j], points.nodata_value, 1.0e-6))) {
+				nodata = true;
 			}
 
 			if (! nodata) {

@@ -2995,14 +2995,17 @@ void run_model() {
 //    /bathymetry one sigma error estimate/ /model error grid/ /bottom albedo grid/ 
 //    /bottom sand percentage/ /bottom seagrass percentage/ /bottom coral percentage/
 //    /Kd min grid/ /bottom type grid/ /index optical depth/ [optional]
-//    DEPTHS /depth estimates/ BOTTOMONLY
+//    DEPTHS /depth estimates/ POINTS /cells to model/ BOTTOMONLY
+//
+//  POINTS limits the model to the cells where that grid is non-zero (and not nodata), for
+//  quick evaluations on a sample of points (validation/ab.py). Other cells get no depth.
 
 void run_model_lee_semi_analytical() {
 
   int k, n, m, nrows, ncols, nscenes, nbands, ps_in[MAX_GRIDS], ps_bathy, ps_model_error, ps_empirical_depths,
     ps_bottom_albedo, ps_bottom_sand, ps_bottom_seagrass, ps_bottom_coral, ps_kd_min, ps_bottom_type, 
-    ps_index_optical_depth, ps_bathy_sigma;
-  bool success, empirical_depth_present, bottom_only = false;
+    ps_index_optical_depth, ps_bathy_sigma, ps_points = 0;
+  bool success, empirical_depth_present, points_present = false, bottom_only = false;
 
   // Can we allocate the 8 new grids? 
 
@@ -3019,7 +3022,7 @@ void run_model_lee_semi_analytical() {
 /model error grid/ /bottom albedo grid/ \
 /bottom sand percentage/ /bottom seagrass percentage/ /bottom coral percentage/ \
 /Kd min grid/ /bottom type grid/ /index optical depth/ [optional] \
-DEPTHS /depth estimates/ BOTTOMONLY \n");
+DEPTHS /depth estimates/ POINTS /cells to model/ BOTTOMONLY \n");
     return ;
   }  
 
@@ -3053,7 +3056,7 @@ DEPTHS /depth estimates/ BOTTOMONLY \n");
 /model error grid/ /bottom albedo grid/ \
 /bottom sand percentage/ /bottom seagrass percentage/ /bottom coral percentage/ \
 /Kd min grid/ /bottom type grid/ /index optical depth/ [optional] \
-DEPTHS /depth estimates/  BOTTOMONLY \n");
+DEPTHS /depth estimates/ POINTS /cells to model/ BOTTOMONLY \n");
     return ;
   }
 
@@ -3107,6 +3110,22 @@ DEPTHS /depth estimates/  BOTTOMONLY \n");
     printf("\n\nWARNING!! Empirical depths not present!! This greatly effects the model optimisation!!\n\n");
     empirical_depth_present = false;
     ps_empirical_depths = 0;
+  }
+
+  // Cells to model (optional).
+
+  if (strcmp(parsed[k], "POINTS") == 0) {
+    success = parse_old_grid(&ps_points, ++k);
+    k++;
+    if (! success) return ;
+
+    if (! commensurate_grids(
+              gridded_data[scene_data[ps_in[0]].band_indexes[0]], 
+              gridded_data[ps_points])) {
+        printf("\nERROR: input grids and points grid are not commensurate.\n");
+        return ; 
+    }
+    points_present = true;
   }
 
 // Allocate memory for output grids. 
@@ -3252,6 +3271,7 @@ DEPTHS /depth estimates/  BOTTOMONLY \n");
 
   samodel(scene_data, gridded_data, ps_in, nscenes, // inputs
     empirical_depth_present, gridded_data[ps_empirical_depths],
+    points_present, gridded_data[ps_points],
     samodel_n_smoothing_radius, samodel_n_spatial, samodel_n_bottoms,
     bathy, bathy_sigma, model_error, bottom_albedo, bottom_sand, bottom_seagrass, bottom_coral, kd_min, bottom_type, index_optical_depth, // outputs
     pagesize, background, line_width // graphics 

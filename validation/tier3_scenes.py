@@ -241,7 +241,8 @@ def score(H_true, H_model, albedo_model, kmin_model, kmin_true, elapsed, albedo_
     return out
 
 
-def run_photic(photic, rundir, water, n, H, bottom, tables, luts, noise, prior, control):
+def write_inputs(rundir, water, n, H, bottom, tables, luts, noise, prior, control):
+    """Write a scenario's bands and run.bam to rundir; returns the prior estimate (or None)."""
     os.makedirs(rundir, exist_ok=True)
     rng = np.random.default_rng(12345)
     lines = []
@@ -269,8 +270,15 @@ def run_photic(photic, rundir, water, n, H, bottom, tables, luts, noise, prior, 
         write_asc(os.path.join(rundir, "prior.asc"), est)
         lines.append("READ GRID prior prior.asc")
         model += " DEPTHS prior"
+    else:
+        est = None
     lines += scenes + [model, "EXIT"]
     open(os.path.join(rundir, "run.bam"), "w").write("\n".join(lines) + "\n")
+    return est
+
+
+def run_photic(photic, rundir, water, n, H, bottom, tables, luts, noise, prior, control):
+    est = write_inputs(rundir, water, n, H, bottom, tables, luts, noise, prior, control)
     t0 = time.time()
     with open(os.path.join(rundir, "photic.log"), "w") as log:
         subprocess.run([photic, "run.bam"], cwd=rundir, stdin=subprocess.DEVNULL, stdout=log,

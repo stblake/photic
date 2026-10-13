@@ -21,6 +21,30 @@ $PY bench.py compare baseline <commit>                  # what changed
 
 `make` builds `drivers/forward_dump` against `../model`. Results for each commit go to `$PHOTIC_VALIDATION_DATA/runs/<commit>/` (default `~/photic_dev/validation_data`); only scorecards are kept in git.
 
+## Quick A/B tests (`ab.py`)
+
+To iterate on the model, compare two variants on a few hundred out-of-sample points in about a minute, before running the full benchmark:
+
+```sh
+$PY ab.py HEAD .                  # the working tree against the last commit
+$PY ab.py . .:-DLUT=0             # a compile-time switch, without editing the code
+$PY ab.py . .:-DY_MODEL=2 --split train --seed 2
+```
+
+- **Variants:** a git ref or `.` (the working tree), optionally followed by `:` and extra compiler flags. Each build is cached under `ab/build/`, and its photic must support `MODEL ... POINTS`.
+- **Points:** a fixed, depth-stratified sample (`--n 300`, `--seed`). `--split test` (the default) takes them from tier 3's turbid water and tier 4's Bundegi and Tantabiddi; `--split train` from the training data.
+- **How it runs:** both variants run on the full scenes with `POINTS`, so only the sampled cells are modelled.
+- **Not tested:** behaviour that depends on modelling neighbouring cells in sequence, such as the lookup table and carry-over. Those need the full benchmark.
+- **Report:** paired per tier:
+  - coverage;
+  - RMSE and the RMSE difference with a 95% bootstrap interval;
+  - share within tolerance and wins;
+  - RMSE by depth;
+  - σ calibration and run time.
+- **Verdict:** a change counts as better or worse only if the interval excludes zero and the RMSE moves by at least `--min-effect` (2%).
+
+This is a screen, not the acceptance test below. Use it to choose what to benchmark. Reusing one seed for many decisions overfits that sample, so confirm a promising change with another seed or split.
+
 ## Diagnosing the inversion
 
 `EXPERIMENTS.md` is the experiment plan and log for making the model work without a depth prior. `phaseA.py` runs photic's own error function and optimiser on single tier 3 pixels through `drivers/invert_lab`, against the known truth.

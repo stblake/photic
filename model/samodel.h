@@ -9,6 +9,7 @@ void samodel(
 		// inputs
 		scene scene_data[], geogrid gridded_data[], int *scene_indexes, int nscenes,
 		bool empirical_depth_present, geogrid empirical_depths,  
+		bool points_present, geogrid points,
 		// parameterisation
 		int n_smoothing_radius, int n_spatial, int n_bottoms,
 		// outputs
