@@ -166,6 +166,22 @@ Each enters the LM fit as a bound or a weighted residual (a soft prior, weight 1
 - **B4. Seabed continuity.** Penalise the second difference of depth across the window (a plane is free), in place of departure from the window mean (A-3).
 - **B9. Water-mass priors.** Weak priors keeping P, G and X per scene within natural ranges, from the training data.
 
+### Geometry constraints across scenes (planned 2026-10-13)
+
+Each scene sees the same seabed through a different light path, M_s = sec θ_w,s + D sec θ_v,s, and a different water column H + τ_s. The forward model already contains both, but P, G and X are free per scene, so a change in water can absorb most of the angular signal.
+
+- **B12. Water tied between scenes.**
+  - Add prior residuals (ln P_s − ln P̄)/σ, and likewise for G and X, with σ ≈ 20–30% (tier 3's scenes differ by about ±20%).
+  - The scenes' path differences then constrain κH independently of albedo.
+  - Prediction: lower depth bias at 5–20 m, and more gain with 4 scenes than with 2.
+- **B13. Angular-ratio depth.**
+  - With the same water in two scenes s and t, the bottom contrast Δ = rrs − rrs_dp obeys ln(Δ_s/Δ_t) = −κ[(M_s − M_t)H + M_s τ_s − M_t τ_t]. The albedo cancels, so H follows in closed form.
+  - First compute its Cramér–Rao precision against ΔM, κH and noise (it amplifies noise at depth). Then test it as a starting depth and as a consistency flag against the full fit.
+- **B14. Direct and diffuse downwelling light.**
+  - The path factor should be sec_eff = f sec θ_w + (1 − f)/μ̄_d, with f the direct fraction (from sun elevation and aerosol optical thickness) and μ̄_d ≈ 0.86 for skylight. The current model puts all the light at θ_w, which overstates the path differences between scenes at low sun.
+  - The tier 3 OSOAA scenes are black-sky, so test on tier 4, with f from ACOLITE's aerosol optical thickness.
+- **B15. Glint as a per-scene offset.** Restore the per-scene spectrally flat offset (`DELTA`), with its size limited by a Cox–Munk prior from each scene's sun–view geometry. Test on tier 4 (tier 3 has no glint).
+
 ### B3 result (2026-10-13, `Y_MODEL` switch in samodel.c)
 
 Phase A pixels, 2 scenes, noise-free, depth RMSE. Control scenes are generated with Y from the measured χ (`Y_MODEL 0`), so the other variants cannot reproduce them exactly; the OSOAA scenes are the real test.
