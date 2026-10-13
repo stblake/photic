@@ -175,6 +175,8 @@ struct model_data_struct {
 	double **K;
 	double ***rho;
 	double depth;
+	bool optically_deep;  // The bottom was not detected (EXPERIMENTS.md C2).
+	double deep_chi2;     // Fit improvement of the bottom over an optically deep model.
 	double depth_prev;
 	double depth_sigma;
 	double Rrs_error;

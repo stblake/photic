@@ -10,6 +10,7 @@
 //   SETUP n_scenes n_bands n_regions origin n_bottoms
 //   SCENE k theta_sun theta_view tide w_1 .. w_n      (subsurface angles in degrees)
 //   RRS region scene Rrs_1 .. Rrs_n                   (one line per region and scene)
+//   NOISE scene sigma_1 .. sigma_n                    (optional Rrs noise, as RSIGMA)
 //   END
 //
 // Commands follow, one per line. Parameter vectors use photic's internal (transformed)
@@ -191,6 +192,16 @@ int main(void) {
           md->bottom_reflectance[k][k_scene][k_band] = interp_1d(ref_wlens, bottom_tables[k], n_ref_wlens, v[k_band]);
         }
       }
+    } else if (strcmp(word, "NOISE") == 0) {
+      if (sscanf(s, "%d%n", &k_scene, &used) != 1 || k_scene < 0 || k_scene >= n_scenes) {
+        printf("ERROR: bad NOISE\n");
+        return 1;
+      }
+      s += used;
+      if (! read_doubles(&s, v, n_bands)) { printf("ERROR: bad NOISE values\n"); return 1; }
+      for (k_band = 0; k_band < n_bands; k_band++) {
+        md->rrs_noise[k_scene][k_band] = v[k_band];
+      }
     } else if (strcmp(word, "RRS") == 0) {
       if (sscanf(s, "%d %d%n", &k_region, &k_scene, &used) != 2 ||
           k_region < 0 || k_region >= n_regions || k_scene < 0 || k_scene >= n_scenes) {
@@ -335,8 +346,9 @@ int main(void) {
         md->h_empirical = h;
       }
       samodel_optimise(md);
-      printf("PHOTIC depth %.10g albedo %.10g K_min %.10g iterations %d converged %d n_params %d\n",
-        md->depth, md->bottom_albedo, md->K_min, md->n_iterations, md->converged, md->n_params);
+      printf("PHOTIC depth %.10g albedo %.10g K_min %.10g iterations %d converged %d n_params %d deep %d deep_chi2 %.6g\n",
+        md->depth, md->bottom_albedo, md->K_min, md->n_iterations, md->converged, md->n_params,
+        md->optically_deep, md->deep_chi2);
       printf("PGX");
       for (k_scene = 0; k_scene < n_scenes; k_scene++) printf(" %.10g %.10g %.10g", md->P[k_scene], md->G[k_scene], md->X[k_scene]);
       printf("\nbottom_percent");

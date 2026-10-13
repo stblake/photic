@@ -106,6 +106,25 @@
 //   2  self-consistent: Lee's chi relation applied to the model's rrs_dp(440)/rrs_dp(490);
 //   3  fitted per scene, in [Y_MIN, Y_MAX].
 
+// Optically deep test (EXPERIMENTS.md C2): the bottom counts as detected only if the best fit
+// beats an optically deep fit (no bottom; the water re-fitted) by
+//   chi2 = n (E_deep^2 - E_best^2)/(100 sigma_rel)^2 > DEEP_PENALTY k ln(n),
+// a multiple of the Bayesian information criterion's penalty for the k depth and bottom
+// parameters the shallow model adds. E is the Rrs error (RMS %), n the number of residuals and
+// sigma_rel^2 = (sigma_noise/mean Rrs)^2 + DEEP_MODEL_ERROR^2 (the forward model's own error,
+// about 2-3% against exact radiative transfer, tier 2). DEEP_PENALTY was chosen on clear and
+// moderate tier 3 pixels and checked on turbid ones. Pixels failing the test get no depth.
+
+#ifndef OPTICALLY_DEEP
+#define OPTICALLY_DEEP 1
+#endif
+#ifndef DEEP_MODEL_ERROR
+#define DEEP_MODEL_ERROR 0.03
+#endif
+#ifndef DEEP_PENALTY
+#define DEEP_PENALTY 2.0
+#endif
+
 #ifndef Y_MODEL
 #define Y_MODEL 0
 #endif
@@ -2503,6 +2522,12 @@ void samodel_optimise(model_data *md) {
 	}
 
 	md->depth /= origin_weight + ((double) md->n_regions) - 1.0;
+
+	// No depth where the bottom is not detected (optically deep).
+
+	if (md->optically_deep) {
+		md->depth = 0.0;
+	}
 #else
 	md->depth = samodel_depth(best, md->origin);
 #endif
@@ -2683,6 +2708,47 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 			copy_double_vec(start, best, md->n_params);
 		}
 	}
+
+	// Optically deep test: fit the water with every region at H_MAX and no bottom.
+
+	md->optically_deep = false;
+	md->deep_chi2 = -1.0;
+
+#if OPTICALLY_DEEP
+	{
+		int k_scene, k_band, n_resid = 0;
+		double deep_error, noise, mean = 0.0, sigma_rel;
+
+		copy_double_vec(best, start, md->n_params);
+		for (i = 0; i < offset; i++) {
+			start[i] = i < md->n_regions ? H_MAX : 0.0;
+			is_free[i] = 0.0;
+		}
+		for (i = offset; i < md->n_params; i++) {
+			is_free[i] = 1.0;
+		}
+		deep_error = samodel_lm(md, start, is_free, LM_ITERATIONS, LM_FTOL, &n_eval);
+		total_count += n_eval;
+
+		noise = 0.0;
+		for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+			for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
+				noise += md->rrs_noise[k_scene][k_band]*md->rrs_noise[k_scene][k_band];
+				for (k = 0; k < md->n_regions; k++) {
+					mean += md->Rrs_measured[k][k_scene][k_band];
+				}
+				n_resid++;
+			}
+		}
+		mean /= (double) (n_resid*md->n_regions);
+		noise = sqrt(noise/n_resid);
+		n_resid *= md->n_regions;
+
+		sigma_rel = sqrt(pow(noise/mean, 2.0) + DEEP_MODEL_ERROR*DEEP_MODEL_ERROR);
+		md->deep_chi2 = n_resid*(deep_error*deep_error - lowest_error*lowest_error)/pow(100.0*sigma_rel, 2.0);
+		md->optically_deep = md->deep_chi2 < DEEP_PENALTY*offset*log((double) n_resid);
+	}
+#endif
 
 	md->n_iterations = total_count;
 	md->converged = true;

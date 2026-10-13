@@ -188,6 +188,22 @@ Phase A pixels, 2 scenes, noise-free, depth RMSE. Control scenes are generated w
 - **New candidate, B10:** refit Lee's shallow-water coefficients (D_uC, D_uB) to exact radiative transfer, training on tier 2's clear and moderate cases and testing on turbid and tier 3.
 - **Decision:** keep the switch (default 0), and take Y2 into the final combination if it helps on the benchmark.
 
+### C2 result (2026-10-13, `OPTICALLY_DEEP` in samodel.c)
+
+After the search, the water is re-fitted with every region at H_MAX and no bottom (the optically deep model). The bottom counts as detected only if Δχ² = n(E_deep² − E_best²)/(100σ_rel)² > DEEP_PENALTY·k·ln n:
+- k is the number of depth and bottom parameters and n the number of residuals;
+- σ_rel² = (σ_noise/mean Rrs)² + ε², with ε = 0.03, the forward model's own error from tier 2.
+
+Pixels failing the test get no depth, and coverage is reported. A plain Δχ² > 9 test flagged nothing with noise, because the shallow model's 36 extra parameters fit the noise (Δχ² ≈ 70–120 where the bottom is invisible). DEEP_PENALTY was chosen on clear and moderate pixels and checked on held-out turbid ones (Phase A pixels, 2 scenes):
+
+| Threshold | Moderate + noise 0.0005 (training): RMSE / within tol. / coverage | Turbid + noise (held out) |
+|---|---|---|
+| none | 10.3–10.9 m / 29–31% / 100% | 12.4–12.6 m / 12–15% / 100% |
+| 1 × k ln n (BIC) | 2.7–3.2 / 54–60% / 52–54% | 7.2–10.0 / 24–44% / 33–52% |
+| **2 × k ln n** (chosen) | **1.7–1.9 / 62–71% / 44%** | **1.1–1.2 / 55–70% / 21–23%** |
+
+Without noise, 2 × k ln n also cuts moderate water off at about 11 m (the true limit is about 15 m), and clear water at about 24 m. Tier 3 now passes the simulated noise to photic as RSIGMA. For tier 4 no noise estimate exists yet, so only ε applies; estimating noise from the image is a follow-up.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

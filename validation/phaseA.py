@@ -67,7 +67,7 @@ def window(i, j, nspatial):
     return cells, origin
 
 
-def pixel_setup(water, n, i, j, H, bottom, grids, nspatial):
+def pixel_setup(water, n, i, j, H, bottom, grids, nspatial, noise=0.0):
     cells, origin = window(i, j, nspatial)
     nr = len(cells)
     lines = ["SETUP %d %d %d %d %d" % (n, len(t3.BANDS), nr, origin, N_BOTTOMS)]
@@ -79,6 +79,9 @@ def pixel_setup(water, n, i, j, H, bottom, grids, nspatial):
         for k in range(n):
             lines.append("RRS %d %d %s" % (r, k, " ".join("%.12g" % grids[k][m][a, b]
                                                           for m in range(len(t3.BANDS)))))
+    if noise > 0:
+        for k in range(n):
+            lines.append("NOISE %d %s" % (k, " ".join(["%g" % noise]*len(t3.BANDS))))
     lines.append("END")
     # Truth as physical values; packed into photic's layout by the driver (PACK).
     q = []

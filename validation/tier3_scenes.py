@@ -233,8 +233,11 @@ def run_photic(photic, rundir, water, n, H, bottom, tables, luts, noise, prior, 
             write_asc(os.path.join(rundir, name + ".asc"), g)
             lines.append("READ GRID %s %s.asc" % (name, name))
             names.append(name)
-        scenes.append("SCENE NAME s%d BANDS %s WAVELENGTHS %s THETAVIEW 0 THETASUN %.4f HTIDE %.3f" % (
-            k + 1, " ".join(names), " ".join("%d" % l for l in BANDS), theta_w(theta_air), tide))
+        # The simulated noise is passed to photic as RSIGMA (the noise an ACOLITE user would
+        # estimate); without noise photic's default (Lsm_sigma) applies.
+        rsigma = (" RSIGMA " + " ".join(["%g" % noise]*len(BANDS))) if noise > 0 else ""
+        scenes.append("SCENE NAME s%d BANDS %s WAVELENGTHS %s THETAVIEW 0 THETASUN %.4f HTIDE %.3f%s" % (
+            k + 1, " ".join(names), " ".join("%d" % l for l in BANDS), theta_w(theta_air), tide, rsigma))
     model = "MODEL Lee_Semi_Analytical IN %s OUT H H_sigma H_error albedo sand seagrass coral kmin btype iod" % (
         " ".join("s%d" % (k + 1) for k in range(n)))
     if prior:
