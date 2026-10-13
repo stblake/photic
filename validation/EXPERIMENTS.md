@@ -348,6 +348,15 @@ Scenes with different sun angles therefore get inconsistent model errors, which 
 - **Tier 3:** `PHOTIC_TIER3_SKY=1` builds and uses sky-lit lookup tables (`lut_sky`).
 - **Decision:** use the sky-lit truth from now on, since it is more realistic at no extra cost in photic.
 - **Next for the forward model:** test the phase-function hypothesis (OSOAA with a Petzold-like phase function) before fitting any angular correction.
+- **Tier 3 sky-lit lookup tables** (all 12 scene sets):
+  - water column within ±0.7% of black sky;
+  - bottom term at 443 nm −1.6% (clear, moderate) and −7% (turbid): diffuse light takes longer slanted paths to the bottom.
+
+  Inversion on the same Phase A pixels (realistic bottoms, bottom bounds), black sky against sky:
+  - coverage identical, RMSE within 0.15 m in every scenario;
+  - e.g. clear without noise 1.41 against 1.39 m (within tolerance 65% against 87%); moderate with noise 1.10 against 1.17 m.
+
+  The sky-lit truth changes none of the earlier conclusions.
 
 ### Physics constraints (planned 2026-10-13)
 
