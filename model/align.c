@@ -70,6 +70,13 @@ void run_align() {
     k++;
   }
 
+  if (n_grids == 0 || k == MAX_ARGS) {
+    printf("\nERROR: ALIGN IN /grid 1/ /grid 2/ ... OUT /output grid/ SOUNDINGS \
+/soundings file or grid/ [optional] CHARTDATUM /chart datum for soundings/ MAXSOUNDINGS \
+/maximum number of soundins/ NEGATEGRID NEGATESOUNDINGS\n");
+    return ;
+  }
+
   printf("\nn_grids = %d\n", n_grids);
 
 // Check grids are on the same extents. 
@@ -179,13 +186,13 @@ SPVAL /no data value/ MAXSOUNDINGS /maximum number of soundins/ NEGATEGRID NEGAT
 
     spval = gridded_data[ps_in[0]].nodata_value;
     kk = 0;
-    for (k = 0; k < n_soundings; k++) {
+    for (i = 0; i < n_soundings; i++) {
 
       nodata = false; 
 
       for (n = 0; n < n_grids; n++) {
-        if (x[k] < gridded_data[ps_in[n]].wlon || x[k] > gridded_data[ps_in[n]].elon || 
-          y[k] < gridded_data[ps_in[n]].slat || y[k] > gridded_data[ps_in[n]].nlat) {
+        if (x[i] < gridded_data[ps_in[n]].wlon || x[i] > gridded_data[ps_in[n]].elon || 
+          y[i] < gridded_data[ps_in[n]].slat || y[i] > gridded_data[ps_in[n]].nlat) {
           nodata = true; 
           break ;
         } else {
@@ -197,7 +204,7 @@ SPVAL /no data value/ MAXSOUNDINGS /maximum number of soundins/ NEGATEGRID NEGAT
                 gridded_data[ps_in[n]].slat, 
                 gridded_data[ps_in[n]].cellsize, 
                 gridded_data[ps_in[n]].nodata_value, 
-                x[k], y[k]); 
+                x[i], y[i]); 
           // printf("\n\t\t%.2f\n", z_depth);
           if (approx_equal_double(z_depth, (double) spval, 1.0e-4)) {
             nodata = true; 
@@ -207,10 +214,10 @@ SPVAL /no data value/ MAXSOUNDINGS /maximum number of soundins/ NEGATEGRID NEGAT
       }
 
       if (! nodata) {
-        // printf("\n%.2f  %.2f", z_depth, z_soundings_float[k]);
-        x[kk] = x[k];
-        y[kk] = y[k];
-        z_soundings_float[kk] = z_soundings_float[k];
+        // printf("\n%.2f  %.2f", z_depth, z_soundings_float[i]);
+        x[kk] = x[i];
+        y[kk] = y[i];
+        z_soundings_float[kk] = z_soundings_float[i];
         kk++;
       }
     }
@@ -243,27 +250,40 @@ SPVAL /no data value/ MAXSOUNDINGS /maximum number of soundins/ NEGATEGRID NEGAT
     spval = 0.0;
   }
 
-  // Read MAXSOUNDINGS. 
+  // Read MAXSOUNDINGS. (0, or no option, uses all soundings.)
 
   if (strcmp(parsed[k], "MAXSOUNDINGS") == 0) {
-    max_soundings = atof(parsed[++k]);
+    max_soundings = atoi(parsed[++k]);
     k++; 
   } else {
-    max_soundings = n_soundings;
+    max_soundings = 0;
   }
 
-  printf("\nmax_soundings = %d\n", max_soundings);
+  if (n_soundings == 0) {
+    printf("\nERROR: no soundings inside the input grids.\n");
+    free(x);
+    free(y);
+    free(z_soundings_float);
+    free(z_soundings);
+    return ;
+  }
 
-  if (max_soundings != 0) {
+  // Random subsample of max_soundings soundings, without replacement (partial 
+  // Fisher-Yates shuffle). 
+
+  if (max_soundings > 0 && max_soundings < n_soundings) {
+    float tmp_xy;
+    double tmp_z;
     for (n = 0; n < max_soundings; n++) {
-      r_index = random_in_range(0, n_soundings);
-      x[n] = x[r_index];
-      y[n] = y[r_index];
-      z_soundings[n] = z_soundings[r_index];
+      r_index = random_in_range(n, n_soundings);
+      tmp_xy = x[n]; x[n] = x[r_index]; x[r_index] = tmp_xy;
+      tmp_xy = y[n]; y[n] = y[r_index]; y[r_index] = tmp_xy;
+      tmp_z = z_soundings[n]; z_soundings[n] = z_soundings[r_index]; z_soundings[r_index] = tmp_z;
     }
-
     n_soundings = max_soundings;
   }
+
+  printf("\nusing %d soundings\n", n_soundings);
 
   // Read NEGATEGRID. 
 
@@ -291,6 +311,11 @@ SPVAL /no data value/ MAXSOUNDINGS /maximum number of soundins/ NEGATEGRID NEGAT
 
   allocate_double_array_2d(&z_model, n_grids, n_soundings);
 
+  if (negate_soundings) {
+    for (k = 0; k < n_soundings; k++) 
+      z_soundings[k] *= -1.0;
+  }
+
   for (k = 0; k < n_soundings; k++) {
     for (n = 0; n < n_grids; n++) {
       
@@ -313,9 +338,6 @@ SPVAL /no data value/ MAXSOUNDINGS /maximum number of soundins/ NEGATEGRID NEGAT
         continue ;
       }
 
-      if (negate_soundings) {
-        z_soundings[k] *= -1.0;
-      }
       if (negate_grid) {
         z_model[n][k] *= -1.0; 
       }
@@ -394,6 +416,8 @@ SPVAL /no data value/ MAXSOUNDINGS /maximum number of soundins/ NEGATEGRID NEGAT
     // Update modelled depths. 
 
     for (j = 0; j < n_soundings; j++) {
+      if (approx_equal_double(z_model[i][j], (double) spval, 1.0e-4)) 
+        continue ;
       z_model[i][j] = transformed_params[i][0]*pow(fabs(z_model[i][j]), transformed_params[i][1]);
     }
   }
