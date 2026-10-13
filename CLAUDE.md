@@ -97,6 +97,16 @@ Main commands (dispatch in `bam.c:run_command`):
 - **`WRITE GRID … REGION` writes nothing**, and `.asc` output is silently NetCDF.
 - `REVIEW.md` (October 2026) lists every known defect with file:line references and severity. Consult it before changing a module, and update it when fixing items.
 
+## Validation benchmark (`validation/`)
+
+`validation/` is a four-tier physics benchmark for the SA model; see `validation/README.md`. Use it to judge every change to the model core:
+- **Tier 1:** the C equations against an independent Python reference (`photic_ref.py`) and SAMBUCA.
+- **Tier 2:** the forward model against exact radiative transfer (OSOAA).
+- **Tier 3:** inversion of synthetic scenes built from OSOAA.
+- **Tier 4:** Sentinel-2 over Exmouth Gulf, scored against WA DoT soundings.
+
+Data and tools live outside the repo in `~/photic_dev/validation_data` (override with `$PHOTIC_VALIDATION_DATA`), with a venv at `.venv`. Run `bench.py run --tier N`, then `bench.py score`, then `bench.py compare baseline <commit>`. The acceptance rule is in the README: depth metrics in tiers 3 and 4 must improve with no regressions, and baselines are updated deliberately in the same commit. `validation/makefile` includes `model/makefile.inc`, which holds the shared compiler settings and object lists.
+
 ## Verification
 
 To check a change:

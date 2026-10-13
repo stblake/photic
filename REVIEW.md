@@ -144,6 +144,51 @@ These were found after the original review. The test generates noise-free scenes
 3. **high — the solution is very sensitive to the error-term weights.**
    - Changing `weight_depth` from 15 to 15.5 (+3%) moves the modelled depths by up to 12.6 m and changes P/G/X in almost every pixel.
 
+## 2c. Findings from the physics validation benchmark (`validation/`, October 2026)
+
+See `validation/README.md` and `validation/scorecards/baseline.json`.
+
+**Tier 1: the equations are implemented exactly.**
+- photic's `samodel_Rrs` matches an independent Python implementation of the paper's equations bit for bit over 51,840 cases (relative difference 0).
+- It matches CSIRO's SAMBUCA to 2e-15 given the same water backscatter. With SAMBUCA's own b_bw formula the difference is ≤ 0.7%.
+
+Deliberate departures from the paper, as the relative change in Rrs if switched to the paper's form:
+
+| Departure | Median | 95th percentile | Max |
+|---|---|---|---|
+| **a₀/a₁:** the code uses Lee's tables, but the paper says the CSIRO-derived Appendix A tables are used | 0.6% | 13% | **72%** |
+| **χ:** the code omits the paper's 750 nm correction | 0.04% | 1.8% | 2.3% |
+
+The Y and κ clamps are never active on the grid. The tables are within 1–3% of their sources (a_w vs Pope & Fry, limited by photic's 10 nm table; b_bw vs Lee's formula to 0.1%).
+
+**Tier 2: Lee's semi-analytical model is a good approximation to exact radiative transfer.** This is against OSOAA (scalar, no atmosphere, sun glint removed with a black-ocean run), over 1,098 cases in the physical range: 10 depths, 3 water types, 3 bottoms, 3 sun angles and 5 Sentinel-2 bands.
+- Subsurface rrs: median 2.4%, 95th percentile 6.7%, max 11%.
+- Above-surface Rrs: median 2.4%, 95th percentile 7.0%, max 11.6%.
+- photic is systematically about 3% high where κH ≈ 1–4, and the bias depends on sun angle (+2% at 20°, −1% at 60°).
+
+New finding:
+
+1. **high: bottom albedo can exceed 1.** photic's seagrass and coral spectra are normalised to 1 at 550 nm but reach about 3.3 and 2.9 at 705 nm, so B·ρ_table exceeds 1 (it is about 2.0 for B = 0.6). That is physically impossible, and there Lee's Rrs conversion overshoots by up to 42%. B is unbounded (§2 #14), so the inversion can reach such states. These 162 cases are excluded from the tier 2 statistics and reported separately.
+
+**Tier 3: the inversion does not retrieve depth on its own.** Synthetic 32×32 scenes are built from OSOAA (lookup-table interpolation error ≤ 0.15%).
+- **Without a depth prior, photic fails in every scenario:** clear, moderate and turbid water; 1, 2 or 4 scenes; with or without noise. Bias is +6 to +77 m and at most 15% of pixels are within ±(0.5 m + 10%). This includes the control generated with photic's own forward model, so it is optimiser and heuristic failure, not model-structure error.
+- **With a ±20% depth prior (`DEPTHS`), photic returns roughly the prior.** Bias is about 0 and RMSE 2–3 m, but its errors correlate 0.8–0.99 with the prior's own errors, so it adds little or no skill (`rmse_skill_vs_prior` −0.68 to +0.21; negative is worse than the prior). The scorecard now reports the prior's own score and `rmse_skill_vs_prior`.
+- **Retrieved albedo is about 0.05 instead of 0.6 in every scenario.**
+- **The run-time LUT shortcut copies results between pixels.** photic copies a previous LUT entry whenever the spectra match within an adaptive threshold and the depth and K are within 10% of the previous pixel's; that rule is in §2 of samodel.c. In the quick scenario about 100% of pixels were copied rather than optimised.
+
+**Tier 4: Exmouth Gulf against WA DoT singlebeam surveys.** Six Sentinel-2 scenes (2019–2024) were processed with ACOLITE, with tides from the Exmouth 02 gauge, at four sites. Scenes covering less than half as much of a site as the best scene are dropped. Run without a depth prior, the current code fails at every site (baseline scorecard, `validation/scorecards/baseline.json`):
+
+| Site | photic bias | RMSE | within tol. | r | published bias | RMSE | within tol. | r |
+|---|---|---|---|---|---|---|---|---|
+| Marina | +31.2 m | 41.4 m | 5% | 0.31 | −0.11 m | 0.97 m | 68% | 0.96 |
+| Bundegi | +43.7 m | 133 m | 2% | 0.23 | +0.64 m | 3.7 m | 42% | 0.78 |
+| Tantabiddi | +19.4 m | 24.9 m | 5% | −0.17 | not covered | | | |
+| Gulf entrance | +29.0 m | 30.2 m | 0% | 0.05 | +1.94 m | 2.2 m | 50% | 0.96 |
+
+- The build-fix-only commit `a0eb70f` gives the same result (bias +29.3 m vs +29.0 m), so this is not a regression from the fixes in this review.
+- The **published photic Exmouth Gulf product** (README) scores well on the same cells (right-hand columns); it does not cover Tantabiddi.
+- So either the published runs used an empirical depth prior and settings this benchmark does not reproduce, or the code that produced them differs from the code in this repository. Establishing which is the first task for improving the core.
+
 ---
 
 ## 3. Interpreter (`bam.c`)

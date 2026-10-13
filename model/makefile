@@ -9,25 +9,9 @@
 #
 # Must be compiled as C17 or earlier (see the bool typedef in common.h).
 
-CC         = cc
-CSTD       = -std=gnu17
-CFLAGS     = -O3
-WARN       =
-
-NETCDF_CFLAGS := $(shell nc-config --cflags)
-NETCDF_LIBS   := $(shell nc-config --libs)
-
-PGPLOT_DIR    = /opt/local
-PGPLOT_CFLAGS = -I$(PGPLOT_DIR)/include
-PGPLOT_LIBS   = -L$(PGPLOT_DIR)/lib -lcpgplot -lpgplot -lX11
+include makefile.inc
 
 ALL_CFLAGS = $(CSTD) $(CFLAGS) $(WARN) -MMD -MP -I. $(NETCDF_CFLAGS) $(PGPLOT_CFLAGS)
-
-CORE   = common.o nc.o io.o
-
-PHOTIC = $(CORE) graphics.o colours.o interp.o filllakesutils.o smoothutils.o \
-	jerlov.o secchi.o linenoise.o asa047.o samodelgraphics.o samodel.o \
-	align.o process.o refine.o write.o plot.o bam.o
 
 UTILS  = asc2nc grid2grid smooth smoothspval emptygrid srtm filllakes
 
