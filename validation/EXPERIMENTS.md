@@ -165,6 +165,29 @@ Each enters the LM fit as a bound or a weighted residual (a soft prior, weight 1
 - **B4. Seabed continuity.** Penalise the second difference of depth across the window (a plane is free), in place of departure from the window mean (A-3).
 - **B9. Water-mass priors.** Weak priors keeping P, G and X per scene within natural ranges, from the training data.
 
+### B3 result (2026-10-13, `Y_MODEL` switch in samodel.c)
+
+Phase A pixels, 2 scenes, noise-free, depth RMSE. Control scenes are generated with Y from the measured χ (`Y_MODEL 0`), so the other variants cannot reproduce them exactly; the OSOAA scenes are the real test.
+
+| | Y0 measured χ | Y1 QAA, self-consistent | Y2 χ, self-consistent | Y3 fitted per scene |
+|---|---|---|---|---|
+| clear OSOAA | 2.80 | 1.93 | 1.94 | 2.34 |
+| moderate OSOAA | 4.46 | 4.36 | 4.15 | 5.03 |
+| turbid OSOAA | 11.85 | 11.81 | 11.84 | 5.87 (albedo → 0: the bottom is dropped) |
+| s/pixel | 0.06–0.10 | 0.3–0.7 (before caching) | 0.10–0.21 | 0.09–0.16 |
+
+- **Prediction failed for moderate water** (4.5 → about 2 m expected; got 4.15). Self-consistent Y helps clear water (2.8 → 1.9 m) and mid depths a little.
+- **QAA's relation is not a fix on its own:** it gives Y = 1.7, 0.5 and 0.27 for the clear, moderate and turbid tier 3 waters, whose true Y is 1.
+- **Moderate OSOAA by depth (Y0 → Y2):**
+  - 0–5 m: RMSE 0.07–0.16 m;
+  - 5–10 m: 3.1 → 2.4 m (too deep, albedo 0.76–0.81);
+  - 10–15 m: 1.8 m;
+  - 15–30 m: 4.6–8.0 m (too shallow, albedo 0.15).
+- **The 5–10 m bias is Lee's approximation.** Tier 2 found it about 3% high at κH ≈ 1–4, and the fit absorbs that by trading depth against albedo.
+- **The deep error is the optically-deep ambiguity**, with the model's own 2–3% structural error acting as noise.
+- **New candidate, B10:** refit Lee's shallow-water coefficients (D_uC, D_uB) to exact radiative transfer, training on tier 2's clear and moderate cases and testing on turbid and tier 3.
+- **Decision:** keep the switch (default 0), and take Y2 into the final combination if it helps on the benchmark.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

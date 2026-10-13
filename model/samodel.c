@@ -97,7 +97,26 @@
 #define LUT 1
 #define RESTART 0
 #define DELTA 0
-#define K_PRIOR 0 // Penalise low K in shallow water and very high K (off: it excludes the truth, EXPERIMENTS.md A-2).
+#define K_PRIOR 0
+
+// Backscattering slope Y of b_bp = X (440/lambda)^Y:
+//   0  from chi = Rrs440/Rrs490 of the measured spectrum (Lee 1999), as originally;
+//   1  self-consistent: QAA's Y = 2[1 - 1.2 exp(-0.9 rrs_dp(443)/rrs_dp(555))] from the
+//      model's own deep-water reflectance (no bottom contamination);
+//   2  self-consistent: Lee's chi relation applied to the model's rrs_dp(440)/rrs_dp(490);
+//   3  fitted per scene, in [Y_MIN, Y_MAX].
+
+#ifndef Y_MODEL
+#define Y_MODEL 0
+#endif
+#define Y_MIN 0.0
+#define Y_MAX 2.5
+
+#if Y_MODEL == 3
+#define N_WATER 4 // ln P, ln G, ln X, Y per scene.
+#else
+#define N_WATER 3 // ln P, ln G, ln X per scene.
+#endif // Penalise low K in shallow water and very high K (off: it excludes the truth, EXPERIMENTS.md A-2).
 
 #if DELTA
 #error "DELTA is not supported by the bounded parameterisation"
@@ -665,6 +684,7 @@ void samodel(
 
 	prev = malloc(4*md->n_scenes*sizeof(double)); // P,G,X,D for each scene.
 	md->prev = prev;
+	md->Y_scene = calloc(md->n_scenes, sizeof(double));
 
 	printf("\n\n");
 
@@ -1806,7 +1826,7 @@ static double clamp(double v, double lo, double hi) {
 }
 
 int samodel_n_params(model_data *md) {
-	return md->n_regions*(1 + md->n_bottoms) + 3*md->n_scenes;
+	return md->n_regions*(1 + md->n_bottoms) + N_WATER*md->n_scenes;
 }
 
 void samodel_bounds(model_data *md, double *lo, double *hi) {
@@ -1822,12 +1842,16 @@ void samodel_bounds(model_data *md, double *lo, double *hi) {
 		hi[k] = 1.0;
 	}
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
-		lo[offset + 3*k_scene]     = log(P_MIN);
-		hi[offset + 3*k_scene]     = log(P_MAX);
-		lo[offset + 3*k_scene + 1] = log(G_MIN);
-		hi[offset + 3*k_scene + 1] = log(G_MAX);
-		lo[offset + 3*k_scene + 2] = log(X_MIN);
-		hi[offset + 3*k_scene + 2] = log(X_MAX);
+		lo[offset + N_WATER*k_scene]     = log(P_MIN);
+		hi[offset + N_WATER*k_scene]     = log(P_MAX);
+		lo[offset + N_WATER*k_scene + 1] = log(G_MIN);
+		hi[offset + N_WATER*k_scene + 1] = log(G_MAX);
+		lo[offset + N_WATER*k_scene + 2] = log(X_MIN);
+		hi[offset + N_WATER*k_scene + 2] = log(X_MAX);
+#if Y_MODEL == 3
+		lo[offset + N_WATER*k_scene + 3] = Y_MIN;
+		hi[offset + N_WATER*k_scene + 3] = Y_MAX;
+#endif
 	}
 }
 
@@ -1858,9 +1882,12 @@ void samodel_unpack_scene(double *params, model_data *md, int k_scene, double *P
 
 	int offset = md->n_regions*(1 + md->n_bottoms);
 
-	*P = exp(clamp(params[offset + 3*k_scene],     log(P_MIN), log(P_MAX)));
-	*G = exp(clamp(params[offset + 3*k_scene + 1], log(G_MIN), log(G_MAX)));
-	*X = exp(clamp(params[offset + 3*k_scene + 2], log(X_MIN), log(X_MAX)));
+	*P = exp(clamp(params[offset + N_WATER*k_scene],     log(P_MIN), log(P_MAX)));
+	*G = exp(clamp(params[offset + N_WATER*k_scene + 1], log(G_MIN), log(G_MAX)));
+	*X = exp(clamp(params[offset + N_WATER*k_scene + 2], log(X_MIN), log(X_MAX)));
+#if Y_MODEL == 3
+	md->Y_scene[k_scene] = clamp(params[offset + N_WATER*k_scene + 3], Y_MIN, Y_MAX);
+#endif
 }
 
 // Pack physical values into a parameter vector. q holds n_bottoms fractions per region.
@@ -1878,9 +1905,12 @@ void samodel_pack(model_data *md, double *H, double *albedo, double *q, double *
 	}
 
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
-		params[offset + 3*k_scene]     = log(clamp(P[k_scene], P_MIN, P_MAX));
-		params[offset + 3*k_scene + 1] = log(clamp(G[k_scene], G_MIN, G_MAX));
-		params[offset + 3*k_scene + 2] = log(clamp(X[k_scene], X_MIN, X_MAX));
+		params[offset + N_WATER*k_scene]     = log(clamp(P[k_scene], P_MIN, P_MAX));
+		params[offset + N_WATER*k_scene + 1] = log(clamp(G[k_scene], G_MIN, G_MAX));
+		params[offset + N_WATER*k_scene + 2] = log(clamp(X[k_scene], X_MIN, X_MAX));
+#if Y_MODEL == 3
+		params[offset + N_WATER*k_scene + 3] = 1.0; // Starting Y.
+#endif
 	}
 }
 
@@ -2318,7 +2348,7 @@ void samodel_optimise(model_data *md) {
 #if DELTA
 	max_n_params += 4*md->n_scenes; // P,G,X,D
 #else
-	max_n_params += 3*md->n_scenes; // P,G,X
+	max_n_params += N_WATER*md->n_scenes; // P,G,X (and Y)
 #endif
 
 	min  = malloc(max_n_params*sizeof(double));
@@ -2522,8 +2552,8 @@ void samodel_optimise(model_data *md) {
 	offset = md->n_regions*(1 + md->n_bottoms);
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 		samodel_unpack_scene(best, md, k_scene, &md->P[k_scene], &md->G[k_scene], &md->X[k_scene]);
-		for (i = 0; i < 3; i++) {
-			md->prev[3*k_scene + i] = best[offset + 3*k_scene + i];
+		for (i = 0; i < N_WATER; i++) {
+			md->prev[N_WATER*k_scene + i] = best[offset + N_WATER*k_scene + i];
 		}
 	}
 
@@ -2597,7 +2627,7 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 		H_refine[0] = md->h_empirical;
 		samodel_initial(md, md->h_empirical, ALBEDO_START, profile, is_free);
 		if (md->start_at_previous) {
-			for (i = 0; i < 3*md->n_scenes; i++) {
+			for (i = 0; i < N_WATER*md->n_scenes; i++) {
 				profile[offset + i] = md->prev[i];
 			}
 		}
@@ -2606,7 +2636,7 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 		for (k_h = 0; k_h < n_grid; k_h++) {
 			samodel_initial(md, H_grid[k_h], ALBEDO_START, start, is_free);
 			if (md->start_at_previous) {
-				for (i = 0; i < 3*md->n_scenes; i++) {
+				for (i = 0; i < N_WATER*md->n_scenes; i++) {
 					start[offset + i] = md->prev[i];
 				}
 			}
@@ -3063,6 +3093,69 @@ float model_spectral_diff_mean(double ***Rrs_measured, double ***lut_modelled_Rr
 
 
 
+// Self-consistent backscattering slope (Y_MODEL 1 and 2): Y from the ratio of the model's own
+// deep-water reflectance rrs_dp at two wavelengths, which depends on Y, solved by fixed-point
+// iteration. The last result is cached, as it is called with the same P, G, X for every band.
+
+static double deep_rrs(int k, double lambda, double P, double G, double X, double Y) {
+
+	// Deep-water rrs at one of two cached wavelengths (k = 0, 1).
+
+	const double S = 0.015;
+	static double cached_lambda[2] = {-1.0, -1.0}, a_0[2], a_1[2], a_w[2], b_bw[2];
+	double a, bb, u;
+
+	if (cached_lambda[k] != lambda) {
+		a_0[k]  = interp_1d(ref_wlens, a0_Lee, n_ref_wlens, lambda);
+		a_1[k]  = interp_1d(ref_wlens, a1_Lee, n_ref_wlens, lambda);
+		a_w[k]  = interp_1d(ref_wlens, aw_Pope_Fry1997, n_ref_wlens, lambda);
+		b_bw[k] = interp_1d(ref_wlens, bbw_Morel_1974, n_ref_wlens, lambda);
+		cached_lambda[k] = lambda;
+	}
+
+	a  = a_w[k] + (a_0[k] + a_1[k]*log(P))*P + G*exp(-S*(lambda - 440.0));
+	bb = b_bw[k] + X*pow(440.0/lambda, Y);
+	u  = bb/(a + bb);
+	return (0.084 + 0.170*u)*u;
+}
+
+double samodel_water_Y(double P, double G, double X) {
+
+	static double last_P = -1.0, last_G = -1.0, last_X = -1.0, last_Y = 1.0;
+	double Y, Y_new, ratio;
+	int k;
+
+	if (P == last_P && G == last_G && X == last_X) {
+		return last_Y;
+	}
+
+	Y = last_Y; // Start from the previous solution (usually a nearby P, G, X).
+	for (k = 0; k < 50; k++) {
+#if Y_MODEL == 1
+		ratio = deep_rrs(0, 443.0, P, G, X, Y)/deep_rrs(1, 555.0, P, G, X, Y);
+		Y_new = 2.0*(1.0 - 1.2*exp(-0.9*ratio));
+#else
+		ratio = deep_rrs(0, 440.0, P, G, X, Y)/deep_rrs(1, 490.0, P, G, X, Y);
+		Y_new = 3.44*(1.0 - 3.17*exp(-2.01*ratio));
+#endif
+		if (Y_new < Y_MIN) Y_new = Y_MIN;
+		if (Y_new > Y_MAX) Y_new = Y_MAX;
+		if (fabs(Y_new - Y) < 1.0e-10) {
+			Y = Y_new;
+			break ;
+		}
+		Y = Y_new;
+	}
+
+	last_P = P;
+	last_G = G;
+	last_X = X;
+	last_Y = Y;
+	return Y;
+}
+
+
+
 void samodel_Rrs(
 		 double P, double G, double X, double B[], double q[], double H, double Delta, // parameters
 	model_data *md, int k_scene, int k_band, int k_region) {
@@ -3117,11 +3210,17 @@ void samodel_Rrs(
 
 	// Compute bb - total backscattering coefficient.
 
+#if Y_MODEL == 0
 	// chi = (Rrs440 - Rrs750)/(Rrs490 - Rrs750);
 	chi = Rrs440/Rrs490;
 	Y = 3.44*(1.0 - 3.17*exp(-2.01*chi));
 	if (Y < 0.0) Y = 0.0;
 	if (Y > 2.5) Y = 2.5;  
+#elif Y_MODEL == 3
+	Y = md->Y_scene[k_scene];
+#else
+	Y = samodel_water_Y(P, G, X);
+#endif
 	// Y = 0.5; // Consistent with more turbid waters per Lee, 2001. 
 	b_p = X*pow(440.0/lambda, Y);
 
@@ -3351,11 +3450,11 @@ void partial_copy_md(model_data *md, model_data *md_out, bool allocate) {
 	}
 #else
 	if (allocate) {
-		prev = (double*) malloc(3*md->n_scenes*sizeof(double));
+		prev = (double*) malloc(4*md->n_scenes*sizeof(double));
 		md_out->prev = prev;
 	}
 
-	for (i = 0; i < 3*md->n_scenes; i++) {
+	for (i = 0; i < N_WATER*md->n_scenes; i++) {
 		md_out->prev[i] = md->prev[i];
 	}
 #endif

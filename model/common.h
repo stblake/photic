@@ -166,6 +166,7 @@ struct model_data_struct {
 	double *B;
 	double *H;
 	double *D;
+	double *Y_scene; // Fitted backscattering slope per scene (Y_MODEL 3).
 	double *prev;
 	double ***Rrs_modelled; 
 	double ***rrs_modelled;
