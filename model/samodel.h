@@ -45,6 +45,7 @@ void samodel_initial(model_data *md, double h, double albedo, double *start, dou
 void samodel_bounds(model_data *md, double *lo, double *hi);
 
 int samodel_residuals(double *params, model_data *md, double *r);
+double samodel_depth_sigma(model_data *md, double *x);
 
 double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations, double ftol,
 	int *n_evaluations);

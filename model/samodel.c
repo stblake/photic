@@ -133,6 +133,17 @@
 #define DEEP_PENALTY 2.0
 #endif
 
+// Depth uncertainty (H_sigma output; EXPERIMENTS.md C2):
+//   1  per pixel, from the Levenberg-Marquardt Jacobian J at the optimum: the covariance of
+//      the parameters is u^2 (J'J)^-1, with u the residual of one standard deviation (as in
+//      the optically deep test), over the parameters not on a bound (samodel_depth_sigma);
+//   0  the Monte Carlo pass: sampled pixels re-modelled with perturbed Rrs, one sigma per
+//      0.25 m depth bin.
+
+#ifndef DEPTH_SIGMA
+#define DEPTH_SIGMA 1
+#endif
+
 // Coefficients of Lee's shallow-water model (Lee et al. 1998, 1999), fitted to Hydrolight:
 // rrs_dp = (G0 + G1 u) u; D_uC = C0 sqrt(1 + C1 u); D_uB = B0 sqrt(1 + B1 u). EXPERIMENTS.md B10
 // refits them to exact radiative transfer (OSOAA).
@@ -979,6 +990,7 @@ void samodel(
 	for (i = 0; i < nrows; i++) {
 		for (j = 0; j < ncols; j++) {
 			depth[i][j]               = 0.0;
+			depth_sigma[i][j]         = 0.0;
 			model_error[i][j]         = 0.0;
 			bottom_albedo[i][j]       = 0.0;
 			bottom_sand[i][j]         = -9999.0;
@@ -1280,6 +1292,9 @@ void samodel(
 			// Store model data. 
 
 			depth[i][j]               = (float) md->depth;  
+			if (DEPTH_SIGMA) {
+				depth_sigma[i][j]         = (float) md->depth_sigma;
+			}
 			model_error[i][j]         = (float) md->Rrs_error;
 			bottom_albedo[i][j]       = (float) md->bottom_albedo;
 			bottom_sand[i][j]         = (float) md->B_type_percent[0];
@@ -1531,117 +1546,122 @@ min/mean/max min(K) = %.4f %.4f %.4f\n",
 	//	Compute depth error estimate. 
 	// 
 
-	// This is an hoc estimate of the depth error. A thorough estimate would require
-	// modelling each pixel many times with an appropriate pertubation to the reflectance
-	// as dictated by the variance of the reflectance over optically deep water. 
+	// With DEPTH_SIGMA, the depth sigma is already set per pixel (samodel_depth_sigma).
 
-	printf("\nComputing depth error estimates...");
+	if (! DEPTH_SIGMA) {
 
-	n_samples = 128;
-	n_pertubations = 16;
-	n_total_per_interval = n_samples*n_pertubations;
-	n_trials = (int) sqrt(nrows*ncols);
-	depth_interval = 0.25;
+		// This is an hoc estimate of the depth error. A thorough estimate would require
+		// modelling each pixel many times with an appropriate pertubation to the reflectance
+		// as dictated by the variance of the reflectance over optically deep water. 
 
-	max_depth_reached = array_max2(depth, nrows, ncols, 0.0);
-	max_depth_reached = depth_interval*((int) max_depth_reached/depth_interval);
-	max_depth_reached = MIN(max_depth_reached, 30.0);
-	n_depth_intervals = (int) max_depth_reached/depth_interval;
+		printf("\nComputing depth error estimates...");
 
-	trial_depths = malloc(n_samples*sizeof(double));
-	depth_sigma_table = malloc(n_depth_intervals*sizeof(double));
+		n_samples = 128;
+		n_pertubations = 16;
+		n_total_per_interval = n_samples*n_pertubations;
+		n_trials = (int) sqrt(nrows*ncols);
+		depth_interval = 0.25;
 
-	// Iterate over all depth intervals. 
+		max_depth_reached = array_max2(depth, nrows, ncols, 0.0);
+		max_depth_reached = depth_interval*((int) max_depth_reached/depth_interval);
+		max_depth_reached = MIN(max_depth_reached, 30.0);
+		n_depth_intervals = (int) max_depth_reached/depth_interval;
 
-	md->start_at_previous = false;
-	k_depth = 0;
-	for (d = 0.0; d < max_depth_reached; d += depth_interval) {
+		trial_depths = malloc(n_samples*sizeof(double));
+		depth_sigma_table = malloc(n_depth_intervals*sizeof(double));
 
-		printf("\nDepth interval %.2f - %.2f\n", d, d + depth_interval);
+		// Iterate over all depth intervals. 
 
-		// Create samples within the interval. 
+		md->start_at_previous = false;
+		k_depth = 0;
+		for (d = 0.0; d < max_depth_reached; d += depth_interval) {
 
-		for (k_sample = 0; k_sample < n_samples; k_sample++) {
+			printf("\nDepth interval %.2f - %.2f\n", d, d + depth_interval);
 
-			// Randomly find a depth within the interval. 
+			// Create samples within the interval. 
 
-			within_interval = false;
+			for (k_sample = 0; k_sample < n_samples; k_sample++) {
 
-			for (k_trial = 0; k_trial < n_trials; k_trial++) {
-				i = random_in_range(0, nrows);
-				j = random_in_range(0, ncols);
+				// Randomly find a depth within the interval. 
 
-				if (depth[i][j] > d && depth[i][j] < d + depth_interval) {
-					within_interval = true; 
-					break ;
-				}
-			}
+				within_interval = false;
 
-			if (! within_interval) {
-				trial_depths[k_sample] = 0.0;
-				continue ;
-			}
+				for (k_trial = 0; k_trial < n_trials; k_trial++) {
+					i = random_in_range(0, nrows);
+					j = random_in_range(0, ncols);
 
-			// Pertubate and remodel. 
-
-			n_sigma = frand2(1.0);
-
-			extract_Rrs_data(i, j, scene_data, gridded_data, scene_indexes, 
-				nscenes, n_spatial, n_smoothing_radius, nrows, ncols, md, n_sigma);
-
-			if (md->n_regions == 0) {
-				continue ;
-			}
-
-			// Empirical depth. 
-
-			if (empirical_depth_present) {
-				if (! approx_equal(empirical_depths.array[i][j], empirical_depths.nodata_value, 1.0e-6)) {
-					if (empirical_depths.array[i][j] > -1.0) { 
-						md->h_empirical = 1.0; // Very shallow. 
-					} else {
-						md->h_empirical = fabs(empirical_depths.array[i][j]);
+					if (depth[i][j] > d && depth[i][j] < d + depth_interval) {
+						within_interval = true; 
+						break ;
 					}
-				} else {
+				}
+
+				if (! within_interval) {
 					trial_depths[k_sample] = 0.0;
 					continue ;
 				}
-			} else {
-				md->h_empirical = 5.0;
+
+				// Pertubate and remodel. 
+
+				n_sigma = frand2(1.0);
+
+				extract_Rrs_data(i, j, scene_data, gridded_data, scene_indexes, 
+					nscenes, n_spatial, n_smoothing_radius, nrows, ncols, md, n_sigma);
+
+				if (md->n_regions == 0) {
+					continue ;
+				}
+
+				// Empirical depth. 
+
+				if (empirical_depth_present) {
+					if (! approx_equal(empirical_depths.array[i][j], empirical_depths.nodata_value, 1.0e-6)) {
+						if (empirical_depths.array[i][j] > -1.0) { 
+							md->h_empirical = 1.0; // Very shallow. 
+						} else {
+							md->h_empirical = fabs(empirical_depths.array[i][j]);
+						}
+					} else {
+						trial_depths[k_sample] = 0.0;
+						continue ;
+					}
+				} else {
+					md->h_empirical = 5.0;
+				}
+
+				// Call the core modelling routine. 
+
+				samodel_optimise(md);
+				md->start_at_previous = true;
+
+				trial_depths[k_sample] = md->depth;
 			}
 
-			// Call the core modelling routine. 
-
-			samodel_optimise(md);
-			md->start_at_previous = true;
-
-			trial_depths[k_sample] = md->depth;
+			mean_trial_depths = vec_mean2_double(trial_depths, n_samples, 0.0);
+			depth_sigma_table[k_depth++] = vec_stddev_double(trial_depths, n_samples, 0.0, mean_trial_depths);
 		}
 
-		mean_trial_depths = vec_mean2_double(trial_depths, n_samples, 0.0);
-		depth_sigma_table[k_depth++] = vec_stddev_double(trial_depths, n_samples, 0.0, mean_trial_depths);
-	}
-
-	for (i = 0; i < nrows; i++) {
-		for (j = 0; j < ncols; j++) {
-			depth_sigma[i][j] = 0.0;
-			if (depth[i][j] > 0.0) {
-				k_depth = 0;
-				for (d = 0.0; d < max_depth_reached; d += depth_interval) {
-					if (depth[i][j] > d && depth[i][j] <= d + depth_interval) {
-						depth_sigma[i][j] = depth_sigma_table[k_depth];  
-						break ;
+		for (i = 0; i < nrows; i++) {
+			for (j = 0; j < ncols; j++) {
+				depth_sigma[i][j] = 0.0;
+				if (depth[i][j] > 0.0) {
+					k_depth = 0;
+					for (d = 0.0; d < max_depth_reached; d += depth_interval) {
+						if (depth[i][j] > d && depth[i][j] <= d + depth_interval) {
+							depth_sigma[i][j] = depth_sigma_table[k_depth];  
+							break ;
+						}
+						k_depth++;
 					}
-					k_depth++;
 				}
 			}
 		}
+
+		printf("...finished.\n");
+
+		free(trial_depths);
+		free(depth_sigma_table);
 	}
-
-	printf("...finished.\n");
-
-	free(trial_depths);
-	free(depth_sigma_table);
 
 	// NRS uses negatives depths below MSL.
 
@@ -2280,7 +2300,7 @@ int samodel_residuals(double *params, model_data *md, double *r) {
 
 // Bounded Levenberg-Marquardt on samodel_residuals, over the parameters with is_free[i] != 0
 // (the others are held at their values in x). The Jacobian is by forward differences, taken
-// inwards at the bounds. Steps are projected onto the box, and a parameter at a bound whose
+// inwards at the bounds (lm_jacobian). Steps are projected onto the box, and a parameter at a bound whose
 // gradient points out of the box is held there for that iteration. Damping is Marquardt's
 // (scaled by the diagonal of J'J). On return x holds the solution; returns the Rrs error
 // (the root sum of squares of the residuals) and the number of residual evaluations. Stops
@@ -2317,20 +2337,165 @@ static int cholesky_solve(double *A, double *b, int n) {
 	return 1;
 }
 
+// Jacobian of the residuals r (at x) with respect to the n_free parameters index[]; column j
+// of J (row-major, m by n_free) is parameter index[j]. Forward differences, taken inwards at
+// the upper bound. A region's depth and bottom albedos affect only that region's residuals
+// (and the prior rows), so only that region is re-evaluated; the water parameters affect every
+// region. x_new (n) and r_new (m) are workspace. Returns the number of residual evaluations.
+
+static int lm_jacobian(model_data *md, double *x, double *r, int *index, int n_free, double *hi,
+	double *J, double *x_new, double *r_new) {
+
+	int i, j, k, k_region, n_region = residuals_per_region(md), offset = samodel_water_offset(md),
+		m = md->n_regions*n_region + continuity_count(md) + coherence_count(md);
+	double h, scale = residual_scale(md), unit = chi_unit(md);
+
+	copy_double_vec(x, x_new, samodel_n_params(md));
+	for (j = 0; j < n_free; j++) {
+		i = index[j];
+		h = 1.0e-6*MAX(fabs(x[i]), 1.0);
+		if (x[i] + h > hi[i]) h = -h;
+		x_new[i] = x[i] + h;
+		if (i < offset) {
+			k_region = i < md->n_regions ? i : (i - md->n_regions)/bottom_block(md);
+			for (k = 0; k < m; k++) J[k*n_free + j] = 0.0;
+			region_residuals(x_new, md, k_region, scale, &r_new[k_region*n_region]);
+			for (k = k_region*n_region; k < (k_region + 1)*n_region; k++) {
+				J[k*n_free + j] = (r_new[k] - r[k])/h;
+			}
+			if (m > md->n_regions*n_region) {
+				// The prior rows (continuity, coherence) depend on the region parameters.
+				continuity_residuals(x_new, md, unit, &r_new[md->n_regions*n_region]);
+				coherence_residuals(x_new, md, unit, &r_new[md->n_regions*n_region + continuity_count(md)]);
+				for (k = md->n_regions*n_region; k < m; k++) {
+					J[k*n_free + j] = (r_new[k] - r[k])/h;
+				}
+			}
+		} else {
+			samodel_residuals(x_new, md, r_new);
+			for (k = 0; k < m; k++) J[k*n_free + j] = (r_new[k] - r[k])/h;
+		}
+		x_new[i] = x[i];
+	}
+	return n_free;
+}
+
+// Weights w (n_regions) of the regional depths in the pixel's depth (samodel_optimise): the
+// origin counts sqrt(n_regions) times as much as each other region.
+
+static void depth_weights(model_data *md, double *w) {
+	int k_region;
+	double origin_weight = sqrt((double) md->n_regions),
+		total = origin_weight + ((double) md->n_regions) - 1.0;
+	for (k_region = 0; k_region < md->n_regions; k_region++) {
+		w[k_region] = (k_region == md->origin ? origin_weight : 1.0)/total;
+	}
+}
+
+// Standard deviation of the pixel's depth sum_i w_i H_i (depth_weights) at the optimum x, from
+// the linearised covariance u^2 (J'J)^-1 of the parameters, where the residuals are scaled so
+// that u (chi_unit) is one standard deviation: sigma_rel^2 = (sigma_noise/mean Rrs)^2 +
+// DEEP_MODEL_ERROR^2, treated as independent between residuals. Parameters on a bound are held
+// there (the active set), so a regional depth on a bound contributes nothing. If J'J is
+// singular, a ridge (relative to its diagonal) is added until it can be factorised, so an
+// unidentified depth gets a large sigma. Overwrites the model-derived data in md (callers
+// recompute them at the optimum).
+
+double samodel_depth_sigma(model_data *md, double *x) {
+
+	int i, j, k, m, n, n_free, ok, *index;
+	double *lo, *hi, *r, *r_new, *x_new, *J, *JTJ, *A, *w, *y, *w_region, ridge, diag_max, variance,
+		unit;
+
+	n = samodel_n_params(md);
+	m = md->n_regions*residuals_per_region(md) + continuity_count(md) + coherence_count(md);
+
+	lo    = malloc(n*sizeof(double));
+	hi    = malloc(n*sizeof(double));
+	index = malloc(n*sizeof(int));
+	x_new = malloc(n*sizeof(double));
+	w     = malloc(n*sizeof(double));
+	y     = malloc(n*sizeof(double));
+	r     = malloc(m*sizeof(double));
+	r_new = malloc(m*sizeof(double));
+	J     = malloc(m*n*sizeof(double));
+	JTJ   = malloc(n*n*sizeof(double));
+	A     = malloc(n*n*sizeof(double));
+	w_region = malloc(md->n_regions*sizeof(double));
+
+	samodel_bounds(md, lo, hi);
+	depth_weights(md, w_region);
+
+	n_free = 0;
+	for (i = 0; i < n; i++) {
+		if (x[i] > lo[i] && x[i] < hi[i]) {
+			w[n_free] = i < md->n_regions ? w_region[i] : 0.0;
+			index[n_free++] = i;
+		}
+	}
+
+	variance = 0.0;
+	if (n_free > 0) {
+		samodel_residuals(x, md, r);
+		lm_jacobian(md, x, r, index, n_free, hi, J, x_new, r_new);
+
+		for (j = 0; j < n_free; j++) {
+			for (i = 0; i <= j; i++) {
+				JTJ[j*n_free + i] = 0.0;
+				for (k = 0; k < m; k++) JTJ[j*n_free + i] += J[k*n_free + j]*J[k*n_free + i];
+				JTJ[i*n_free + j] = JTJ[j*n_free + i];
+			}
+		}
+
+		// Solve (J'J + ridge max diag(J'J) I) y = w; the variance is u^2 w'y.
+
+		diag_max = 0.0;
+		for (j = 0; j < n_free; j++) diag_max = MAX(diag_max, JTJ[j*n_free + j]);
+		ridge = 0.0;
+		do {
+			for (j = 0; j < n_free*n_free; j++) A[j] = JTJ[j];
+			for (j = 0; j < n_free; j++) {
+				A[j*n_free + j] += ridge*diag_max;
+				y[j] = w[j];
+			}
+			ok = cholesky_solve(A, y, n_free);
+			ridge = ridge == 0.0 ? 1.0e-12 : 100.0*ridge;
+		} while (! ok && ridge < 1.0);
+
+		if (ok) {
+			for (j = 0; j < n_free; j++) variance += w[j]*y[j];
+			unit = chi_unit(md);
+			variance *= unit*unit;
+		} else {
+			variance = H_MAX*H_MAX;
+		}
+	}
+
+	free(lo);
+	free(hi);
+	free(index);
+	free(x_new);
+	free(w);
+	free(y);
+	free(r);
+	free(r_new);
+	free(J);
+	free(JTJ);
+	free(A);
+	free(w_region);
+
+	return MIN(sqrt(MAX(variance, 0.0)), H_MAX);
+}
+
 double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations, double ftol,
 	int *n_evaluations) {
 
-	int i, j, k, m, n, n_free, iteration, accepted, pass, solved, new_bounds, *index, *active, *bound,
-		n_region, offset, k_region;
+	int i, j, k, m, n, n_free, iteration, accepted, pass, solved, new_bounds, *index, *active, *bound;
 	double *lo, *hi, *r, *r_new, *J, *JTJ, *A, *g, *delta, *x_new, *diag,
-		cost, cost_new, lambda, nu, h, step_norm, x_norm, predicted, gain, *fixed_step, scale, unit;
+		cost, cost_new, lambda, nu, h, step_norm, x_norm, predicted, gain, *fixed_step;
 
 	n = samodel_n_params(md);
-	n_region = residuals_per_region(md);
-	m = md->n_regions*n_region + continuity_count(md) + coherence_count(md);
-	scale = residual_scale(md);
-	unit = chi_unit(md);
-	offset = samodel_water_offset(md);
+	m = md->n_regions*residuals_per_region(md) + continuity_count(md) + coherence_count(md);
 
 	lo     = malloc(n*sizeof(double));
 	hi     = malloc(n*sizeof(double));
@@ -2366,38 +2531,7 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 
 	for (iteration = 0; iteration < max_iterations && n_free > 0; iteration++) {
 
-		// Jacobian of the free parameters (column j of J is parameter index[j]). A region's
-		// depth and bottom albedos affect only that region's residuals, so only that region is
-		// re-evaluated; the water parameters affect every region.
-
-		copy_double_vec(x, x_new, n);
-		for (j = 0; j < n_free; j++) {
-			i = index[j];
-			h = 1.0e-6*MAX(fabs(x[i]), 1.0);
-			if (x[i] + h > hi[i]) h = -h;
-			x_new[i] = x[i] + h;
-			if (i < offset) {
-				k_region = i < md->n_regions ? i : (i - md->n_regions)/bottom_block(md);
-				for (k = 0; k < m; k++) J[k*n_free + j] = 0.0;
-				region_residuals(x_new, md, k_region, scale, &r_new[k_region*n_region]);
-				for (k = k_region*n_region; k < (k_region + 1)*n_region; k++) {
-					J[k*n_free + j] = (r_new[k] - r[k])/h;
-				}
-				if (m > md->n_regions*n_region) {
-					// The prior rows (continuity, coherence) depend on the region parameters.
-					continuity_residuals(x_new, md, unit, &r_new[md->n_regions*n_region]);
-					coherence_residuals(x_new, md, unit, &r_new[md->n_regions*n_region + continuity_count(md)]);
-					for (k = md->n_regions*n_region; k < m; k++) {
-						J[k*n_free + j] = (r_new[k] - r[k])/h;
-					}
-				}
-			} else {
-				samodel_residuals(x_new, md, r_new);
-				for (k = 0; k < m; k++) J[k*n_free + j] = (r_new[k] - r[k])/h;
-			}
-			(*n_evaluations)++;
-			x_new[i] = x[i];
-		}
+		*n_evaluations += lm_jacobian(md, x, r, index, n_free, hi, J, x_new, r_new);
 
 		// Gradient J'r and J'J.
 
@@ -2570,8 +2704,8 @@ void samodel_optimise(model_data *md) {
 	int i, j, k_region, k_scene, k_band, k_bottom, max_n_params, max_bottom_types, best_single_bottom, offset,
 	best_double_bottom_A, best_double_bottom_B, best_single_iterations, best_double_iterations; 
 	double max_bottom_retrieval_depth, error, lowest_single_error, lowest_double_error, 
-	origin_weight, H, B_type, extinction_depth, nobs, env_system_noise,
-	*min, *best, *best_single, *best_double, largest_percentage, albedo, q[MAX_BOTTOMS];
+	H, B_type, extinction_depth, nobs, env_system_noise,
+	*min, *best, *w, *best_single, *best_double, largest_percentage, albedo, q[MAX_BOTTOMS];
 	bool best_single_convergence, best_double_convergence;
 
 #if DEBUG
@@ -2616,6 +2750,7 @@ void samodel_optimise(model_data *md) {
 
 	min  = malloc(max_n_params*sizeof(double));
 	best = malloc(max_n_params*sizeof(double));
+	w    = malloc(md->n_regions*sizeof(double));
 	best_single = malloc(max_n_params*sizeof(double));
 	best_double = malloc(max_n_params*sizeof(double));
 
@@ -2749,7 +2884,7 @@ void samodel_optimise(model_data *md) {
 
 #if 1
 	md->depth = 0.0;
-	origin_weight = sqrt((double) md->n_regions);
+	depth_weights(md, w);
 
 	for (i = 0; i < md->n_regions; i++) {
 		H = samodel_depth(best, i);
@@ -2758,14 +2893,8 @@ void samodel_optimise(model_data *md) {
 			H = extinction_depth;
 		}
 #endif
-		if (i == md->origin) {
-			md->depth += origin_weight*H;
-		} else {
-			md->depth += H;
-		}
+		md->depth += w[i]*H;
 	}
-
-	md->depth /= origin_weight + ((double) md->n_regions) - 1.0;
 
 	// No depth where the bottom is not detected (optically deep).
 
@@ -2836,6 +2965,7 @@ void samodel_optimise(model_data *md) {
 
 	free(min);
 	free(best);
+	free(w);
 	free(best_single);
 	free(best_double);
 
@@ -3106,6 +3236,10 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 
 	md->n_iterations = total_count;
 	md->converged = true;
+
+	// Depth uncertainty from the Jacobian at the optimum (none where optically deep).
+
+	md->depth_sigma = (DEPTH_SIGMA && ! md->optically_deep) ? samodel_depth_sigma(md, best) : 0.0;
 
 	// Recompute all model-derived data at the optimum. 
 

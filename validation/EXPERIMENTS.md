@@ -646,6 +646,18 @@ Lee's bias by κH (+1.6 to +2.0% at κH 1–8) is removed by the refits. **The e
 
 The free fit pushes the water-column elongation (c0) to about 3, which is not physical. **Decision:** not adopted. Lee's coefficients stay the default; the refits stay available through the macros. The remaining depth bias is not mainly from Lee's coefficients.
 
+### B18: depth sigma from the LM Jacobian (2026-10-14, `DEPTH_SIGMA`)
+
+H_sigma is now per pixel: σ_d² = u² wᵀ[(JᵀJ)⁻¹]_HH w. Here w are the pixel's depth weights over its regions, u is one standard deviation in residual units (as in the C2 test), and parameters on a bound are held fixed. This replaces the Monte Carlo pass, which re-modelled sampled pixels per 0.25 m depth bin and was seeded from the clock (not reproducible). `DEPTH_SIGMA 0` restores the pass.
+
+- **Depths are unchanged** (bit-identical on tier 3), and tier 3 runs 3–6× faster: 802 s for all 51 scenarios.
+- **Tier 3 calibration**:
+  - σ ranks errors well in clear and moderate water: Spearman ρ(σ, |e|) 0.6–0.85 with 2 or 4 scenes.
+  - Coverage is about right in clear water: 55–83% of |e| ≤ σ.
+  - σ is overconfident in moderate and turbid water: 10–50% of |e| ≤ σ.
+  - With one scene, σ often reaches the 60 m cap, correctly marking depth as unidentified.
+- **Tier 4** (`ab.py`): 0–4% of |e| ≤ σ. The errors are mostly the depth–albedo bias, which a linearised σ with independent residuals cannot see. Calibrating σ (for example, a correlated model-error term) is a follow-up.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.
