@@ -231,6 +231,23 @@ Moderate, noise 0.0005:
   - **B16, bottom coherence:** a soft prior pulling a pixel's B_k towards the window mean (the seabed locally uniform at about 60 m).
   - **B8, realistic albedo ranges per bottom type:** needs absolute library reflectances.
 
+### B16: bottom coherence across the window (2026-10-13, `COHERENCE`, mixed)
+
+Prior residuals (B_r,k − mean B_·,k)/σ_B pull each region's bottom albedos towards the window mean. OSOAA pixels, RMSE:
+
+| | off | σ 0.2 | σ 0.1 | σ 0.05 |
+|---|---|---|---|---|
+| clear, no noise, 5–10 m | 1.70 | 0.84 | 0.63 | **0.45** |
+| clear, no noise, 10–15 m | 3.52 | 2.29 | 2.14 | **1.98** |
+| clear, no noise, 20–30 m | **3.77** | 5.00 | 4.86 | 4.75 |
+| moderate + noise, 2–5 m | 1.03 | 0.23 | **0.13** | 0.15 |
+| moderate + noise, 5–10 m | **2.74** | 2.91 | 3.55 | 3.21 |
+| clear + noise, 10–15 m | **2.00** | 2.23 | 2.42 | 2.67 |
+
+- **It helps shallow and mid depths, and hurts the deepest and noisy mid-depth bins.**
+- **Why it is limited:** coherence makes a window's regions agree with each other, but the whole window can still trade brightness against depth together. The error budget showed that the *absolute* bottom brightness is what removes the bias.
+- **Decision:** off by default (σ 0.2 is the mildest if it is wanted). **Next:** B8 with a bottom library built from first principles, which bounds absolute brightness per type.
+
 ### Geometry constraints across scenes (planned 2026-10-13)
 
 Each scene sees the same seabed through a different light path, M_s = sec θ_w,s + D sec θ_v,s, and a different water column H + τ_s. The forward model already contains both, but P, G and X are free per scene, so a change in water can absorb most of the angular signal.

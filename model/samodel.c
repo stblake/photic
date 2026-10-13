@@ -169,6 +169,17 @@
 #define CONT_SIGMA_H 0.05
 #endif
 
+// Bottom coherence (EXPERIMENTS.md B16): prior residuals (B_r,k - mean_r B_r,k)/COHERE_SIGMA,
+// in chi units, pulling each region's bottom albedos towards the window mean (the seabed
+// locally uniform at the scale of the spatial window).
+
+#ifndef COHERENCE
+#define COHERENCE 0
+#endif
+#ifndef COHERE_SIGMA
+#define COHERE_SIGMA 0.1
+#endif
+
 #ifndef Y_MODEL
 #define Y_MODEL 0
 #endif
@@ -2104,6 +2115,28 @@ static double chi_unit(model_data *md) {
 	return 100.0*sigma_rel/sqrt((double) (n*md->n_regions));
 }
 
+static int coherence_count(model_data *md) {
+	return (COHERENCE && md->n_regions > 1) ? md->n_regions*md->n_bottoms : 0;
+}
+
+static void coherence_residuals(double *params, model_data *md, double unit, double *r) {
+#if COHERENCE
+	int k_region, k_bottom, nr = md->n_regions, nb = md->n_bottoms;
+	double mean;
+	if (nr < 2) return;
+	for (k_bottom = 0; k_bottom < nb; k_bottom++) {
+		mean = 0.0;
+		for (k_region = 0; k_region < nr; k_region++) mean += params[nr + k_region*nb + k_bottom];
+		mean /= (double) nr;
+		for (k_region = 0; k_region < nr; k_region++) {
+			r[k_bottom*nr + k_region] = unit*(params[nr + k_region*nb + k_bottom] - mean)/COHERE_SIGMA;
+		}
+	}
+#else
+	(void) params; (void) md; (void) unit; (void) r;
+#endif
+}
+
 // Continuity residuals (continuity_count values) for the depths in params.
 
 static void continuity_residuals(double *params, model_data *md, double unit, double *r) {
@@ -2157,8 +2190,9 @@ int samodel_residuals(double *params, model_data *md, double *r) {
 		region_residuals(params, md, k_region, scale, &r[k_region*n_region]);
 	}
 	continuity_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region]);
+	coherence_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region + continuity_count(md)]);
 
-	return md->n_regions*n_region + continuity_count(md);
+	return md->n_regions*n_region + continuity_count(md) + coherence_count(md);
 }
 
 // Bounded Levenberg-Marquardt on samodel_residuals, over the parameters with is_free[i] != 0
@@ -2210,7 +2244,7 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 
 	n = samodel_n_params(md);
 	n_region = residuals_per_region(md);
-	m = md->n_regions*n_region + continuity_count(md);
+	m = md->n_regions*n_region + continuity_count(md) + coherence_count(md);
 	scale = residual_scale(md);
 	unit = chi_unit(md);
 	offset = md->n_regions*(1 + md->n_bottoms);
@@ -2266,8 +2300,10 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 				for (k = k_region*n_region; k < (k_region + 1)*n_region; k++) {
 					J[k*n_free + j] = (r_new[k] - r[k])/h;
 				}
-				if (i < md->n_regions && m > md->n_regions*n_region) {
+				if (m > md->n_regions*n_region) {
+					// The prior rows (continuity, coherence) depend on the region parameters.
 					continuity_residuals(x_new, md, unit, &r_new[md->n_regions*n_region]);
+					coherence_residuals(x_new, md, unit, &r_new[md->n_regions*n_region + continuity_count(md)]);
 					for (k = md->n_regions*n_region; k < m; k++) {
 						J[k*n_free + j] = (r_new[k] - r[k])/h;
 					}
