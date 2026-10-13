@@ -64,14 +64,26 @@ float interp_bilinear(float **grid, int nx, int ny, double wlon, double slat, do
 
 float interp_bilinear_raw(float **grid, int nx, int ny, float xf, float yf, float spval) {
 
-  int i, j;
+  int i, j, j1, i1;
   float eps = 1.0e-6, x = xf, y = yf, A, B, C, D, a, b, c, d, interp;
+
+  // Outside the grid. Allow 1% of a cell for float rounding of edge coordinates. 
+
+  if (x < -0.01 || x > ((float) nx - 1) + 0.01 || y < -0.01 || y > ((float) ny - 1) + 0.01)
+    return spval;
+
+  // Cell containing (x, y). The last row/column belongs to the cell below/left of it. 
 
   j = floor(x);
   i = floor(y);
 
-  if (j == nx - 1) j--; 
-  if (i == ny - 1) i--;
+  if (j > nx - 2) j = nx - 2;
+  if (i > ny - 2) i = ny - 2;
+  if (j < 0) j = 0;
+  if (i < 0) i = 0;
+
+  j1 = (nx > 1) ? j + 1 : j;
+  i1 = (ny > 1) ? i + 1 : i;
 
   // values at the nodes. 
   //
@@ -82,9 +94,9 @@ float interp_bilinear_raw(float **grid, int nx, int ny, float xf, float yf, floa
   //  A   |    B
 
   A = grid[i][j];
-  B = grid[i][j + 1];
-  C = grid[i + 1][j];
-  D = grid[i + 1][j + 1];
+  B = grid[i][j1];
+  C = grid[i1][j];
+  D = grid[i1][j1];
 
   if (approx_equal(A, spval, 1.0e-4) && approx_equal(B, spval, 1.0e-4) && 
       approx_equal(C, spval, 1.0e-4) && approx_equal(D, spval, 1.0e-4)) {
@@ -93,8 +105,8 @@ float interp_bilinear_raw(float **grid, int nx, int ny, float xf, float yf, floa
 
   // bilinear interpolant
 
-  x -= floor(x);
-  y -= floor(y);
+  x -= (float) j;
+  y -= (float) i;
 
   if (approx_equal(A, spval, 1.0e-4) || approx_equal(B, spval, 1.0e-4) || 
       approx_equal(C, spval, 1.0e-4) || approx_equal(D, spval, 1.0e-4)) {
@@ -121,8 +133,12 @@ float interp_bilinear_raw(float **grid, int nx, int ny, float xf, float yf, floa
 
 float interp_bicubic_raw(float **grid, int nx, int ny, float x, float y, float spval)
   {
-    int msize = ny - 1;
-    int nsize = nx - 1;
+    // The interior stencil needs 4 nodes in each direction. 
+    if (nx < 4 || ny < 4) 
+      return interp_bilinear_raw(grid, nx, ny, x, y, spval);
+
+    int msize = ny;
+    int nsize = nx;
     int mmax = msize;
     int nmax = nsize;
     int mmin = 1;

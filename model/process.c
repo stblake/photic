@@ -464,6 +464,40 @@ void run_process_add() {
     }
   }
 
+// [optional] Read COEFFICIENTS. 
+
+  k = 7;
+
+  if (strcmp(parsed[k], "COEFFICIENTS") == 0) {
+    c1 = atof(parsed[++k]);
+    c2 = atof(parsed[++k]);
+    c3 = atof(parsed[++k]);
+    k++;
+  } else {
+    c1 = 1.0; 
+    c2 = 1.0;
+    c3 = 0.0;
+  }
+
+// [optional] Read ABS. 
+
+  if (strcmp(parsed[k], "ABS") == 0) {
+    abs_p = true; 
+  }
+
+// Check grids are commensurate. 
+
+  if (gridded_data[ps_in_1].nrows != gridded_data[ps_in_2].nrows || 
+    gridded_data[ps_in_1].ncols != gridded_data[ps_in_2].ncols || 
+    fabs(gridded_data[ps_in_1].slat - gridded_data[ps_in_2].slat) > extent_eps || 
+    fabs(gridded_data[ps_in_1].nlat - gridded_data[ps_in_2].nlat) > extent_eps || 
+    fabs(gridded_data[ps_in_1].wlon - gridded_data[ps_in_2].wlon) > extent_eps || 
+    fabs(gridded_data[ps_in_1].elon - gridded_data[ps_in_2].elon) > extent_eps || 
+    fabs(gridded_data[ps_in_1].cellsize - gridded_data[ps_in_2].cellsize) > extent_eps) {
+    printf("\nERROR: input grids are not commensurate.\n");
+    return ;
+  }
+
 // Allocate grid into the first empty slot. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
@@ -481,39 +515,6 @@ void run_process_add() {
 
   allocated_grids[ps_out] = true;
 
-// [optional] Read WEIGHTS
-
-  k = 7;
-
-  if (strcmp(parsed[k], "COEFFICIENTS") != 0) {
-    c1 = atof(parsed[++k]);
-    c2 = atof(parsed[++k]);
-    c3 = atof(parsed[++k]);
-  } else {
-    c1 = 1.0; 
-    c2 = 1.0;
-    c3 = 0.0;
-  }
-
-// [optional] Read ABS. 
-
-  if (strcmp(parsed[k], "ABS") != 0) {
-    abs_p = true; 
-  }
-
-// Check grids are commensurate. 
-
-  if (gridded_data[ps_in_1].nrows != gridded_data[ps_in_2].nrows || 
-    gridded_data[ps_in_1].ncols != gridded_data[ps_in_2].ncols || 
-    fabs(gridded_data[ps_in_1].slat - gridded_data[ps_in_2].slat) > extent_eps || 
-    fabs(gridded_data[ps_in_1].nlat - gridded_data[ps_in_2].nlat) > extent_eps || 
-    fabs(gridded_data[ps_in_1].wlon - gridded_data[ps_in_2].wlon) > extent_eps || 
-    fabs(gridded_data[ps_in_1].elon - gridded_data[ps_in_2].elon) > extent_eps || 
-    fabs(gridded_data[ps_in_1].cellsize - gridded_data[ps_in_2].cellsize) > extent_eps) {
-    printf("\nERROR: input grids are not commensurate.\n");
-    return ;
-  }
-
 // Allocate memory for output grid. 
 
   nrows = gridded_data[ps_in_1].nrows;
@@ -529,7 +530,7 @@ void run_process_add() {
 
   n_grids_in_use++;
 
-// Compute w1*grid1 + w2*grid2
+// Compute c1*grid1 + c2*grid2 + c3
 
   for (i = 0; i < nrows; i++) {
     for (j = 0; j < ncols; j++) {
@@ -2109,7 +2110,7 @@ void run_process_unite() {
   int i, j, k, n, ps_in[MAX_GRIDS], n_in, ps_out, ncols, nrows, nobs,
     method, method_min = 1, method_mean = 2, method_max = 3, method_exp = 4, 
     method_median = 5, method_median_no_spval = 6;
-  float **array, *scene_list, res, wlon = 360.0, elon = 0.0, slat = 90.0, nlat = -90.0, 
+  float **array, *scene_list, res, wlon = 360.0, elon = -360.0, slat = 90.0, nlat = -90.0, 
     min, max, mean, lon, lat, z, z0, spval, weights[MAX_GRIDS], ws, w, stddev, avg, median;
   bool present, region = false, and, first, no_data;
 
@@ -2356,11 +2357,9 @@ COMBINE AND||OR WEIGHTS /weight for grid 1/ ... /weight for grid 2/\n");
           no_data = true;
         }
 
-        if (! approx_equal(z, gridded_data[ps_in[k]].nodata_value, 1.0e-6) || method_median_no_spval) {
+        if (! approx_equal(z, gridded_data[ps_in[k]].nodata_value, 1.0e-6)) {
 
-          if (! approx_equal(z, gridded_data[ps_in[k]].nodata_value, 1.0e-6)) {
-            nobs++;
-          }
+          nobs++;
 
           if (method == method_min && z < min) {
             min = z;

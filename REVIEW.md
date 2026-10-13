@@ -8,7 +8,7 @@
 - Small standalone test drivers for the I/O and numeric helpers, some run under AddressSanitizer.
 - Physics checked against `paper/photic.tex`.
 
-**Status update:** the build items (priority 1–2 and §1) and the physics items (priority 3–5) were fixed after this review; items marked **[fixed]** are resolved, see the git history. The code now builds with Apple clang 17 and GCC 16.
+**Status update:** the build items (priority 1–2 and §1) the physics items (priority 3–5) and the data-corruption items (priority 6–8, 11–12) were fixed after this review; items marked **[fixed]** are resolved, see the git history. The code now builds with Apple clang 17 and GCC 16.
 
 **Labels:** severity is critical / high / medium / low. **[verified]** means the finding was reproduced by a test program or by compiling. Items marked *uncertain* depend on intent that the code doesn't record.
 
@@ -25,13 +25,13 @@ Fix these first; each is either a build blocker or silently corrupts scientific 
 | 3 | physics | **[fixed]** `HTIDE` has no effect: `samodel_Rrs` uses `H`, not `H + tide` (samodel.c:2873, 2931, 2934). Multi-temporal fits ignore tidal differences. [verified] |
 | 4 | physics | **[fixed]** Jerlov interpolation weights are swapped (jerlov.c:385-386), and the water-type fraction is reversed for decreasing ratio tables (jerlov.c:333). [verified] |
 | 5 | physics | **[fixed]** The QAA coefficient `h2 = 0.469` should be `-0.469` (secchi.c:165). [verified] |
-| 6 | I/O | `compress_2d` starts from `grmax = FLT_MIN` and uses `else if`, so the true maximum can be missed and wraps in the 16-bit pack. A constant grid gives scale 0, then NaN. This affects every NetCDF write (nc.c:286-316). [verified: 10 → 1.99979] |
-| 7 | I/O | Bilinear interpolation is wrong on the last row and column; bicubic never reads the last row or column (interp.c:73, 124). This affects UNITE, INTERPOLATE, PANSHARPEN, OVERLAY and SRTM. [verified] |
-| 8 | memory | `smooth()` reads `[j-1]` at `j=0` (smoothutils.c:96-121). [verified: ASan heap-buffer-overflow] |
+| 6 | I/O | **[fixed]** `compress_2d` starts from `grmax = FLT_MIN` and uses `else if`, so the true maximum can be missed and wraps in the 16-bit pack. A constant grid gives scale 0, then NaN. This affects every NetCDF write (nc.c:286-316). [verified: 10 → 1.99979] |
+| 7 | I/O | **[fixed]** Bilinear interpolation is wrong on the last row and column; bicubic never reads the last row or column (interp.c:73, 124). This affects UNITE, INTERPOLATE, PANSHARPEN, OVERLAY and SRTM. [verified] |
+| 8 | memory | **[fixed]** `smooth()` reads `[j-1]` at `j=0` (smoothutils.c:96-121). [verified: ASan heap-buffer-overflow] |
 | 9 | memory | `tokenize()` has no bounds on `MAX_ARGS` or `MAX_ARG_SIZE` (bam.c:6597), so it overflows the global `parsed`. |
 | 10 | memory | Empty names match unused slots in every grid and scene lookup. Missing arguments therefore cause NULL dereferences, use-after-free and double free (e.g. `DELETE` with no argument). |
-| 11 | process | `PROCESS ADD`: the inverted `!= 0` tests mean the default output is all zeros and `COEFFICIENTS` is ignored (process.c:488-502). [verified] |
-| 12 | process | `PROCESS UNITE`: `\|\| method_median_no_spval` tests the constant 6 (always true), so nodata is mixed into MEAN/MIN/EXP and the MEDIAN path writes `scene_list[-1]` (process.c:2359, 2379). [verified] |
+| 11 | process | **[fixed]** `PROCESS ADD`: the inverted `!= 0` tests mean the default output is all zeros and `COEFFICIENTS` is ignored (process.c:488-502). [verified] |
+| 12 | process | **[fixed]** `PROCESS UNITE`: `\|\| method_median_no_spval` tests the constant 6 (always true), so nodata is mixed into MEAN/MIN/EXP and the MEDIAN path writes `scene_list[-1]` (process.c:2359, 2379). [verified] |
 | 13 | align | `ALIGN` resamples soundings with replacement by default, which drops ~37% of them; `MAXSOUNDINGS > n` overflows (align.c:252-266). |
 | 14 | OpenMP | `samodel()` is one big `omp parallel` block, so setup, the σ pass, `depth *= -1` and the file writes all run on every thread. It is latent only because OpenMP is off. |
 
@@ -182,13 +182,13 @@ Standalone utilities (they build with `common.c nc.c io.c` plus a helper, and `-
 ## 4. Grid processing (`process.c`)
 
 ### Critical
-1. `ADD`: the inverted tests (L488-502) are described in the priority list. [verified]
-2. `UNITE`: the `|| method_median_no_spval` bug (L2359, L2379) is described in the priority list. [verified]
+1. **[fixed]** `ADD`: the inverted tests (L488-502) are described in the priority list. [verified]
+2. **[fixed]** `UNITE`: the `|| method_median_no_spval` bug (L2359, L2379) is described in the priority list. [verified]
 
 ### High
 3. ~~`INTERPOLATE REGION <grid>`: `ps_region` is declared `bool`, so the extent always comes from slot 0 or 1 (L3144, L3226).~~ **Not a bug** while `bool` is `typedef int`, but it *would* become one under `_Bool`/C23. That is one reason `bool` must stay an `int`.
 4. `POLYGONS`: a missing polygon file causes an infinite loop, because `continue` runs without `k++` (L998-1001).
-5. `UNITE`: the default extent starts at `elon = 0`, so grids west of Greenwich produce an enormous output (L2112, L2280).
+5. **[fixed]** `UNITE`: the default extent starts at `elon = 0`, so grids west of Greenwich produce an enormous output (L2112, L2280).
 6. `lyzenga_extinction_cutoff`: the float loop runs 101 times, so `partial_indx > k` and reads out of bounds; it also divides by zero when k = 0 (L3738-3742). This is reached by `SHALLOW THRESHOLD AUTOMATIC`. [verified]
 7. `OVERLAY`: bicubic interpolation extrapolates outside the layer, so a small layer overwrites the whole base grid (L1304-1318).
 8. `SHALLOW GRIDS`: the bands are not checked for matching dimensions or for nodata (L3655-3683).
@@ -269,13 +269,13 @@ Standalone utilities (they build with `common.c nc.c io.c` plus a helper, and `-
 ## 6. Utilities and I/O (`common.c`, `io.c`, `nc.c`, `interp.c`, `write.c`, `smoothutils.c`, `filllakesutils.c`, standalone tools)
 
 ### High
-1. `nc.c:286-296`: the `compress_2d` maximum bug. [verified]
-2. `nc.c:305,316`: a constant or all-nodata grid gives scale 0, so 0/0 → NaN, which is then converted to short (undefined behaviour).
-3. `smoothutils.c:96-121`: an out-of-bounds read at the edges. [verified, ASan]
+1. **[fixed]** `nc.c:286-296`: the `compress_2d` maximum bug. [verified]
+2. **[fixed]** `nc.c:305,316`: a constant or all-nodata grid gives scale 0, so 0/0 → NaN, which is then converted to short (undefined behaviour).
+3. **[fixed]** `smoothutils.c:96-121`: an out-of-bounds read at the edges. [verified, ASan]
 4. `io.c:66,147`: the header token buffer `str[32]` is read with an unbounded `fscanf("%s")`.
 5. `io.c:229-237`: `read_asc` does not check counts. Extra values write to a negative row, too few leave the grid uninitialised, and a non-numeric token loops forever.
-6. `interp.c:73-74`: bilinear interpolation on the last row or column returns column n−2. There is no bounds check, and `nx = 1` reads index −1. [verified]
-7. `interp.c:124-127`: bicubic `msize = ny-1`, so the last row and column are never used. [verified: 100 → 0]
+6. **[fixed]** `interp.c:73-74`: bilinear interpolation on the last row or column returns column n−2. There is no bounds check, and `nx = 1` reads index −1. [verified]
+7. **[fixed]** `interp.c:124-127`: bicubic `msize = ny-1`, so the last row and column are never used. [verified: 100 → 0]
 8. `write.c:199-213`: `WRITE LINE` reads out of bounds.
 9. `write.c:285-296`: `WRITE GRID … REGION` writes nothing.
 

@@ -283,26 +283,35 @@ void compress_2d(float **grid, short int *compressed, int ncols, int nrows, doub
 // Compute min and max of grid. 
 
 	grmin = FLT_MAX; 
-	grmax = FLT_MIN;
+	grmax = -FLT_MAX;
 
 	for(i = 0; i < nrows; i++) {
 		for(j = 0; j < ncols; j++) {
-			if (grid[i][j] == fspv)
+			if (grid[i][j] == fspv || isnan(grid[i][j]))
 				continue; 
 			if (grid[i][j] < grmin)
 				grmin = grid[i][j];
-			else if (grid[i][j] > grmax)
+			if (grid[i][j] > grmax)
 				grmax = grid[i][j];
 		}
+	}
+
+// All nodata. 
+
+	if (grmin > grmax) {
+		grmin = 0.0;
+		grmax = 0.0;
 	}
 
 // Assign add_offset. 
 
 	*add_offset = grmin; 
 
-// Assign scale_factor. 
+// Assign scale_factor. A constant grid packs to zeros, so any non-zero scale will do. 
 
 	scale = (grmax - grmin)/((float) SHRT_MAX);
+	if (scale == 0.0) 
+		scale = 1.0;
 	*scale_factor = scale;
 
 // Compute compressed array. 
@@ -310,7 +319,7 @@ void compress_2d(float **grid, short int *compressed, int ncols, int nrows, doub
 	k = 0;
 	for(i = 0; i < nrows; i++) {
 		for(j = 0; j < ncols; j++) {
-			if (grid[i][j] == fspv)
+			if (grid[i][j] == fspv || isnan(grid[i][j]))
 				compressed[k++] = *missing_value;
 			else
 				compressed[k++] = ((short int) rint((grid[i][j] - grmin)/scale));

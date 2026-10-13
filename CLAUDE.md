@@ -74,7 +74,7 @@ Main commands (dispatch in `bam.c:run_command`):
   - Arrays are indexed `[region][scene][band]`, padded to `max_n_bands`, and the padding is uninitialised.
 - **`jerlov.c`**: Jerlov water-type attenuation table and interpolation. **`secchi.c`**: Lee 2016 Landsat-8 Kd/Secchi (QAA-style).
 - **`io.c`** reads and writes ESRI `.asc`, `.xyz` and `.csv` files, choosing the format by substring `.nc`/`.asc` in the filename. **`nc.c`** handles photic's own NetCDF layout: dimensions `lons`/`lats`, variable `bathy(lats,lons)` stored as **16-bit packed shorts** (lossy). It does not read arbitrary NetCDF files.
-- **`interp.c`**: bilinear and bicubic interpolation, plus `grid2gridinterp`. **`smoothutils.c`**, **`filllakesutils.c`**: filters.
+- **`interp.c`**: bilinear and bicubic interpolation, plus `grid2gridinterp`. Bilinear returns nodata outside the grid (with 1% of a cell of tolerance). Bicubic falls back to bilinear on grids smaller than 4×4, and **extrapolates** linearly outside the grid, so callers must range-check. **`smoothutils.c`**, **`filllakesutils.c`**: filters.
 - Vendored third-party code; don't modify casually: `linenoise.c/.h` (antirez) and `asa047.c/.h` (Burkardt's Nelder–Mead).
 
 ## Conventions
@@ -94,7 +94,7 @@ Main commands (dispatch in `bam.c:run_command`):
 - **`tokenize()` has no bounds checks** on `MAX_ARGS`/`MAX_ARG_SIZE`.
 - **The OpenMP design in `samodel()` is unsafe.** The whole function is one `omp parallel` region: setup, `rand()`, the depth-σ pass, `depth *= -1` and file writes all run on every thread. It is latent only because OpenMP is off.
 - **Tidal convention**: `H` (fitted and output) is depth below the common datum. In `samodel_Rrs`, each scene's water column is `H + HTIDE`, clamped at 0. `HTIDE` defaults to 0.
-- **`write_nc` packs to 16-bit**, and its max-finding is buggy (`compress_2d`: `grmax = FLT_MIN`, `else if`), so the first cell's value can wrap.
+- **`write_nc` packs to 16-bit** (`compress_2d`), so every NetCDF round trip quantises to (max−min)/32767. NaN cells are written as nodata.
 - **`WRITE GRID … REGION` writes nothing**, and `.asc` output is silently NetCDF.
 - `REVIEW.md` (October 2026) lists every known defect with file:line references and severity. Consult it before changing a module, and update it when fixing items.
 

@@ -39,6 +39,13 @@ void smooth(float **input, float **smoothed, int ncols, int nrows,
   copy_float_array_2d(input, unsmoothed, nrows, ncols);
   copy_float_array_2d(unsmoothed, smoothed, nrows, ncols);
 
+// The stencils need at least 2 rows and 2 columns. 
+
+  if (nrows < 2 || ncols < 2) {
+    free_float_array_2d(unsmoothed, nrows);
+    return ;
+  }
+
   for (n = 0; n < npasses; n++) {
 
   // Interior points.  
@@ -93,7 +100,7 @@ void smooth(float **input, float **smoothed, int ncols, int nrows,
 
   // Southern boundary. 
 
-    for (j = 0; j < ncols - 1; j++) {
+    for (j = 1; j < ncols - 1; j++) {
       if (unsmoothed[0][j] == spval) 
         continue; 
       tot = 0.0;
@@ -108,7 +115,7 @@ void smooth(float **input, float **smoothed, int ncols, int nrows,
 
   // Northern boundary. 
 
-    for (j = 0; j < ncols - 1; j++) {
+    for (j = 1; j < ncols - 1; j++) {
       if (unsmoothed[nrows - 1][j] == spval) 
         continue; 
       tot = 0.0;
