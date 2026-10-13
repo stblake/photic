@@ -231,6 +231,17 @@ OSOAA's bottom response saturates, R = R0 + Aρ/(1 − cρ), with c up to 0.42 i
 
 **Unexplained so far:** the remaining OSOAA depth bias (clear 10–30 m about +3.5 m with too bright an albedo; moderate 5–10 m about +2.7 m). It survives B3, B10 and B11.
 
+### B4, B8, B9 (2026-10-13)
+
+- **B4, seabed continuity (`CONTINUITY` switch, negative).**
+  - Second differences of depth across the 3×3 window were added as prior residuals, with σ = σ0 + σH·H̄ in three strengths (σ0 0.03–0.3 m, σH 0.015–0.15).
+  - On noisy OSOAA pixels there is no meaningful effect: clear 10–15 m RMSE goes from 2.00 m to 2.29–2.53 m, and other bins change by ≤ 0.3 m.
+  - The reported depth is already a weighted mean over the window, which averages the noise much as the prior would. Off by default.
+- **B8, absolute bottom library: deferred.**
+  - Its essential physics, ρ ≤ 1 at every band, is in through B7. The failure it targeted (shallow over a near-black bottom) is now handled by C2.
+  - A full version needs absolute library reflectances, but photic has only shapes normalised near 550 nm.
+- **B9, water-mass priors: deferred to Phase D.** Priors on P, G and X must come from real water, and on tier 3's synthetic water types they would only encode the synthetic values. Fit them on the Exmouth training sites.
+
 ### B10 result (2026-10-13, `LEE_*` macros in samodel.c, `b10_fit.py`)
 
 Lee's coefficients were refitted to tier 2's OSOAA cases: 732 clear and moderate cases for training, 366 turbid for testing, physical albedo only. Subsurface rrs relative error:

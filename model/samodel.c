@@ -153,6 +153,20 @@
 #define R_INTERNAL 0.464
 #define D_DIFFUSE 2.07
 
+// Seabed continuity (EXPERIMENTS.md B4): weak prior residuals on the second differences of
+// depth along the rows and columns of the spatial window (a plane is free), each divided by
+// CONT_SIGMA_0 + CONT_SIGMA_H*mean depth (m), in the same chi units as the Rrs residuals.
+
+#ifndef CONTINUITY
+#define CONTINUITY 0
+#endif
+#ifndef CONT_SIGMA_0
+#define CONT_SIGMA_0 0.1
+#endif
+#ifndef CONT_SIGMA_H
+#define CONT_SIGMA_H 0.05
+#endif
+
 #ifndef Y_MODEL
 #define Y_MODEL 0
 #endif
@@ -2051,6 +2065,66 @@ static double residual_scale(model_data *md) {
 	return 100.0/(mean*sqrt((double) n));
 }
 
+// Side of the square spatial window, or 0 if the regions do not form a full square (nodata).
+
+static int window_side(model_data *md) {
+	int side = (int) floor(sqrt((double) md->n_regions) + 0.5);
+	return (side*side == md->n_regions && side >= 3) ? side : 0;
+}
+
+static int continuity_count(model_data *md) {
+#if CONTINUITY
+	int side = window_side(md);
+	return side ? 2*side*(side - 2) : 0;
+#else
+	return 0;
+#endif
+}
+
+// Rrs residual units per chi unit: 100 sigma_rel/sqrt(n), with sigma_rel as in the optically
+// deep test.
+
+static double chi_unit(model_data *md) {
+	int k_scene, k_band, k_region, n = 0;
+	double noise = 0.0, mean = 0.0, sigma_rel;
+	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+		for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
+			noise += md->rrs_noise[k_scene][k_band]*md->rrs_noise[k_scene][k_band];
+			for (k_region = 0; k_region < md->n_regions; k_region++) {
+				mean += md->Rrs_measured[k_region][k_scene][k_band];
+			}
+			n++;
+		}
+	}
+	mean /= (double) (n*md->n_regions);
+	noise = sqrt(noise/n);
+	sigma_rel = sqrt(pow(noise/mean, 2.0) + DEEP_MODEL_ERROR*DEEP_MODEL_ERROR);
+	return 100.0*sigma_rel/sqrt((double) (n*md->n_regions));
+}
+
+// Continuity residuals (continuity_count values) for the depths in params.
+
+static void continuity_residuals(double *params, model_data *md, double unit, double *r) {
+#if CONTINUITY
+	int side = window_side(md), row, col, n = 0;
+	double H_mean = 0.0, sigma;
+	if (! side) return;
+	for (row = 0; row < md->n_regions; row++) H_mean += samodel_depth(params, row);
+	H_mean /= (double) md->n_regions;
+	sigma = CONT_SIGMA_0 + CONT_SIGMA_H*H_mean;
+	for (row = 0; row < side; row++) {
+		for (col = 1; col < side - 1; col++) {
+			r[n++] = unit*(samodel_depth(params, row*side + col - 1) - 2.0*samodel_depth(params, row*side + col)
+				+ samodel_depth(params, row*side + col + 1))/sigma;
+			r[n++] = unit*(samodel_depth(params, (col - 1)*side + row) - 2.0*samodel_depth(params, col*side + row)
+				+ samodel_depth(params, (col + 1)*side + row))/sigma;
+		}
+	}
+#else
+	(void) params; (void) md; (void) unit; (void) r;
+#endif
+}
+
 // The residuals of one region, written to r (residuals_per_region values).
 
 static void region_residuals(double *params, model_data *md, int k_region, double scale, double *r) {
@@ -2080,8 +2154,9 @@ int samodel_residuals(double *params, model_data *md, double *r) {
 	for (k_region = 0; k_region < md->n_regions; k_region++) {
 		region_residuals(params, md, k_region, scale, &r[k_region*n_region]);
 	}
+	continuity_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region]);
 
-	return md->n_regions*n_region;
+	return md->n_regions*n_region + continuity_count(md);
 }
 
 // Bounded Levenberg-Marquardt on samodel_residuals, over the parameters with is_free[i] != 0
@@ -2129,12 +2204,13 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 	int i, j, k, m, n, n_free, iteration, accepted, pass, solved, new_bounds, *index, *active, *bound,
 		n_region, offset, k_region;
 	double *lo, *hi, *r, *r_new, *J, *JTJ, *A, *g, *delta, *x_new, *diag,
-		cost, cost_new, lambda, nu, h, step_norm, x_norm, predicted, gain, *fixed_step, scale;
+		cost, cost_new, lambda, nu, h, step_norm, x_norm, predicted, gain, *fixed_step, scale, unit;
 
 	n = samodel_n_params(md);
 	n_region = residuals_per_region(md);
-	m = md->n_regions*n_region;
+	m = md->n_regions*n_region + continuity_count(md);
 	scale = residual_scale(md);
+	unit = chi_unit(md);
 	offset = md->n_regions*(1 + md->n_bottoms);
 
 	lo     = malloc(n*sizeof(double));
@@ -2187,6 +2263,12 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 				region_residuals(x_new, md, k_region, scale, &r_new[k_region*n_region]);
 				for (k = k_region*n_region; k < (k_region + 1)*n_region; k++) {
 					J[k*n_free + j] = (r_new[k] - r[k])/h;
+				}
+				if (i < md->n_regions && m > md->n_regions*n_region) {
+					continuity_residuals(x_new, md, unit, &r_new[md->n_regions*n_region]);
+					for (k = md->n_regions*n_region; k < m; k++) {
+						J[k*n_free + j] = (r_new[k] - r[k])/h;
+					}
 				}
 			} else {
 				samodel_residuals(x_new, md, r_new);
