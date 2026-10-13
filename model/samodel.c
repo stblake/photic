@@ -167,6 +167,17 @@
 #define CONT_SIGMA_H 0.05
 #endif
 
+// Water tied between scenes (EXPERIMENTS.md B12): prior residuals (ln W_s - mean ln W)/TIE_SIGMA
+// for W = P, G, X, in the same chi units as the Rrs residuals. With the water tied, the scenes'
+// different light paths (sun angle, tide) constrain depth independently of the bottom albedo.
+
+#ifndef WATER_TIE
+#define WATER_TIE 0
+#endif
+#ifndef TIE_SIGMA
+#define TIE_SIGMA 0.25
+#endif
+
 #ifndef Y_MODEL
 #define Y_MODEL 0
 #endif
@@ -2102,6 +2113,35 @@ static double chi_unit(model_data *md) {
 	return 100.0*sigma_rel/sqrt((double) (n*md->n_regions));
 }
 
+static int tie_count(model_data *md) {
+#if WATER_TIE
+	return md->n_scenes > 1 ? 3*md->n_scenes : 0;
+#else
+	(void) md;
+	return 0;
+#endif
+}
+
+// Tie residuals (tie_count values) for the water parameters in params.
+
+static void tie_residuals(double *params, model_data *md, double unit, double *r) {
+#if WATER_TIE
+	int k_scene, w, offset = md->n_regions*(1 + md->n_bottoms);
+	double mean;
+	if (md->n_scenes < 2) return;
+	for (w = 0; w < 3; w++) {
+		mean = 0.0;
+		for (k_scene = 0; k_scene < md->n_scenes; k_scene++) mean += params[offset + N_WATER*k_scene + w];
+		mean /= (double) md->n_scenes;
+		for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+			r[w*md->n_scenes + k_scene] = unit*(params[offset + N_WATER*k_scene + w] - mean)/TIE_SIGMA;
+		}
+	}
+#else
+	(void) params; (void) md; (void) unit; (void) r;
+#endif
+}
+
 // Continuity residuals (continuity_count values) for the depths in params.
 
 static void continuity_residuals(double *params, model_data *md, double unit, double *r) {
@@ -2155,8 +2195,9 @@ int samodel_residuals(double *params, model_data *md, double *r) {
 		region_residuals(params, md, k_region, scale, &r[k_region*n_region]);
 	}
 	continuity_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region]);
+	tie_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region + continuity_count(md)]);
 
-	return md->n_regions*n_region + continuity_count(md);
+	return md->n_regions*n_region + continuity_count(md) + tie_count(md);
 }
 
 // Bounded Levenberg-Marquardt on samodel_residuals, over the parameters with is_free[i] != 0
@@ -2208,7 +2249,7 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 
 	n = samodel_n_params(md);
 	n_region = residuals_per_region(md);
-	m = md->n_regions*n_region + continuity_count(md);
+	m = md->n_regions*n_region + continuity_count(md) + tie_count(md);
 	scale = residual_scale(md);
 	unit = chi_unit(md);
 	offset = md->n_regions*(1 + md->n_bottoms);
@@ -2264,9 +2305,9 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 				for (k = k_region*n_region; k < (k_region + 1)*n_region; k++) {
 					J[k*n_free + j] = (r_new[k] - r[k])/h;
 				}
-				if (i < md->n_regions && m > md->n_regions*n_region) {
+				if (i < md->n_regions && continuity_count(md) > 0) {
 					continuity_residuals(x_new, md, unit, &r_new[md->n_regions*n_region]);
-					for (k = md->n_regions*n_region; k < m; k++) {
+					for (k = md->n_regions*n_region; k < md->n_regions*n_region + continuity_count(md); k++) {
 						J[k*n_free + j] = (r_new[k] - r[k])/h;
 					}
 				}
