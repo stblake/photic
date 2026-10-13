@@ -188,7 +188,7 @@
 // +-GLINT_MAX and with a weak prior offset/GLINT_SIGMA (chi units).
 
 #ifndef GLINT_OFFSET
-#define GLINT_OFFSET 0
+#define GLINT_OFFSET 1
 #endif
 #ifndef GLINT_SIGMA
 #define GLINT_SIGMA 5.0e-4
