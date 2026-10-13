@@ -219,3 +219,160 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# Step 2: measured spectra and calibration of the families.
+
+MEASURED = os.path.join(DATA, "raw", "bottom", "measured")
+FIT_LAM = np.arange(410.0, 681.0, 5.0)  # Heron Reef reads 0 at 400 nm; signal is lost beyond ~680 nm
+
+
+def heron_reef():
+    """Roelfsema & Phinn (2012), PANGAEA.804589: in situ underwater reflectance, Heron Reef."""
+    import collections
+    txt = open(os.path.join(MEASURED, "pangaea_804589.tab"), encoding="utf-8").read()
+    ev = collections.OrderedDict()
+    for r in txt[txt.index("*/") + 2:].lstrip("\n").splitlines()[1:]:
+        f = r.split("\t")
+        e = ev.setdefault(f[0], dict(comment=f[8].split(" - ")[0], wl=[], R=[]))
+        e["wl"].append(float(f[6]))
+        e["R"].append(float(f[7]) if f[7] else np.nan)
+    out = []
+    for name, e in ev.items():
+        c = e["comment"].lower()
+        if "sand" in c and "algae" not in c:
+            cls = "sediment"
+        elif c.startswith("rock") or c.startswith("rubble") and "turf" not in c:
+            cls = "sediment"
+        elif c.startswith("live") and "coral" in c or c.startswith(("live montipora", "live acropora", "live porites", "live pocillopora")):
+            cls = "coral"
+        elif "(algae)" in c or c.startswith(("green algae", "algae", "turf")):
+            cls = "algae"
+        else:
+            continue
+        wl, R = np.array(e["wl"]), np.array(e["R"])
+        ok = np.isfinite(R)
+        out.append(dict(source="Heron Reef", name=name, comment=e["comment"], cls=cls,
+                        R=np.interp(FIT_LAM, wl[ok], R[ok])))
+    return out
+
+
+def moreton_bay():
+    """Roelfsema, Phinn & Joyce (2016), PANGAEA.864310: underwater (Diablo Passage, Deception
+    Bay) seagrass and sediment reflectance, Moreton Bay. Samples measured in air are excluded."""
+    import openpyxl
+    ws = openpyxl.load_workbook(os.path.join(MEASURED, "pangaea_864310.xlsx"), read_only=True, data_only=True).worksheets[0]
+    rows = [r for r in ws.iter_rows(values_only=True)]
+    wl = np.array([r[0] for r in rows[17:]], dtype=float)
+    out = []
+    for c in range(2, len(rows[16])):
+        name, place, fov = rows[16][c], str(rows[0][c]), str(rows[5][c])
+        if name is None or "uw" not in fov:
+            continue
+        low = str(name).lower()
+        if any(g in low for g in ("halophila", "syringodium", "zostera", "halodu", "cymad")):
+            cls = "seagrass"
+        elif "sand" in low:
+            cls = "sediment"
+        else:
+            continue
+        if "Roof" in place:
+            continue
+        R = np.array([r[c] if isinstance(r[c], (int, float)) else np.nan for r in rows[17:]], dtype=float)
+        ok = np.isfinite(R)
+        out.append(dict(source="Moreton Bay", name=str(name), comment=place, cls=cls,
+                        R=np.interp(FIT_LAM, wl[ok], R[ok])))
+    return out
+
+
+class Families:
+    """Model families as functions of a parameter vector, on FIT_LAM, with bounds."""
+
+    def __init__(self):
+        self.P = prospect_d()
+        self.pig = pigments()
+        self.Pf = {k: np.interp(FIT_LAM, LAM, v) for k, v in self.P.items()}
+        self.pigf = {k: np.interp(FIT_LAM, LAM, v) for k, v in self.pig.items()}
+        self.brown = self.Pf["kbrown"]/self.Pf["kbrown"].max()
+
+    def sediment(self, x):
+        q0, fe, org, mpb = x
+        L = FIT_LAM
+        q = (q0 + fe*np.exp(-0.012*(L - 440.0)) + org*np.exp(-0.011*(L - 440.0))
+             + 0.02*mpb*(self.pigf["chl_a"] + 0.3*self.pigf["chl_c2"] + 0.6*self.pigf["fucoxanthin"]))
+        return 1 + q - np.sqrt(q*q + 2*q)
+
+    sediment_bounds = ([0.0, 0.0, 0.0, 0.0], [5.0, 3.0, 3.0, 200.0])
+    sediment_names = ["q_mineral", "q_ironoxide_440", "q_organic_440", "mpb_chl"]
+
+    def seagrass(self, x):
+        N, cab, car_ratio, cbrown, L, cover, q_bg = x
+        P = {k: v for k, v in self.Pf.items()}
+        rL, tL = prospect_leaf(P, N, cab, cab*car_ratio, cbrown)
+        k = np.clip(1 - rL - tL, 1e-6, None)
+        s = np.clip(rL, 1e-6, None)
+        bg = 1 + q_bg - np.sqrt(q_bg*q_bg + 2*q_bg)
+        return cover*km_layer(k, s, L, bg) + (1 - cover)*bg
+
+    seagrass_bounds = ([1.0, 2.0, 0.1, 0.0, 0.2, 0.0, 0.0], [2.5, 80.0, 0.4, 2.0, 8.0, 1.0, 5.0])
+    seagrass_names = ["N", "Cab_ug_cm2", "Car/Cab", "Cbrown", "LAI", "cover", "q_background"]
+
+    def coral(self, x):
+        chl, R_sk, R_t, brown = x
+        tau = chl*(self.pigf["chl_a"] + 0.4*self.pigf["chl_c2"] + 0.6*self.pigf["peridinin"]
+                   + 0.3*self.pigf["diadinoxanthin"]) + brown*self.brown
+        T = np.exp(-2.0*tau)
+        return R_t + T*T*R_sk/(1 - R_t*R_sk)
+
+    coral_bounds = ([0.0, 0.05, 0.0, 0.0], [150.0, 0.95, 0.1, 3.0])
+    coral_names = ["chl_mg_m2 (x packaging)", "R_skeleton", "R_tissue", "brown_tau"]
+
+
+def fit_spectrum(fam, kind, R):
+    from scipy.optimize import least_squares
+    f = getattr(fam, kind)
+    lo, hi = getattr(fam, kind + "_bounds")
+    w = 1.0/np.maximum(R, 0.01)
+    best = None
+    rng = np.random.default_rng(0)
+    for _ in range(8):
+        x0 = rng.uniform(lo, hi)
+        r = least_squares(lambda x: (f(x) - R)*w, x0, bounds=(lo, hi))
+        if best is None or r.cost < best.cost:
+            best = r
+    model = f(best.x)
+    rel = np.sqrt(np.mean(((model - R)/np.maximum(R, 0.01))**2))
+    return best.x, model, rel
+
+
+def calibrate():
+    fam = Families()
+    meas, seen = [], []
+    for m in heron_reef() + moreton_bay():
+        if any(np.allclose(m["R"], r) for r in seen):
+            continue  # duplicate spectrum (Moreton Bay lists one sand average twice)
+        seen.append(m["R"])
+        meas.append(m)
+    kind_of = {"sediment": "sediment", "seagrass": "seagrass", "coral": "coral"}
+    summary = {}
+    for cls, kind in kind_of.items():
+        sel = [m for m in meas if m["cls"] == cls]
+        fits = [fit_spectrum(fam, kind, m["R"]) for m in sel]
+        X = np.array([f[0] for f in fits])
+        rel = np.array([f[2] for f in fits])
+        B = np.array([[np.interp(b, FIT_LAM, m["R"]) for b in (443.0, 490.0, 560.0, 665.0)] for m in sel])
+        summary[cls] = dict(n=len(sel), rel=rel, X=X, names=getattr(fam, kind + "_names"), B=B,
+                            sources=sorted({m["source"] for m in sel}))
+    return summary
+
+
+def report_calibration():
+    s = calibrate()
+    for cls, d in s.items():
+        print("%s: %d measured spectra (%s)" % (cls, d["n"], ", ".join(d["sources"])))
+        print("  fit error (RMS relative, 400-680 nm): median %.1f%%, 90th percentile %.1f%%" % (
+            100*np.median(d["rel"]), 100*np.percentile(d["rel"], 90)))
+        for k, nm in enumerate(d["names"]):
+            print("  %-26s 10th %8.3f  median %8.3f  90th %8.3f" % (nm, *np.percentile(d["X"][:, k], [10, 50, 90])))
+        print("  measured R at 443/490/560/665 nm, 10th-90th percentile: " + "  ".join(
+            "%.3f-%.3f" % tuple(np.percentile(d["B"][:, k], [10, 90])) for k in range(4)))

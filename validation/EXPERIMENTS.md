@@ -272,6 +272,32 @@ Both are stored in `raw/bottom/`.
 - **The models' structure is sound, but their parameter ranges are not yet anchored.** Step 2 needs measured benthic spectra to calibrate the ranges (pigment load, cover fraction, packaging), first to see whether the families then contain photic's shapes.
 - **No measured library is at hand:** sambuca_core ships none.
 
+### B8 step 2: calibration against measured spectra (2026-10-13)
+
+**Measured data**, both open on PANGAEA, stored in `raw/bottom/measured/`:
+- **Heron Reef:** in situ underwater reflectance of 105 benthic types (Roelfsema & Phinn 2012, PANGAEA.804589).
+- **Moreton Bay:** underwater seagrass and sediment (Roelfsema, Phinn & Joyce 2016, PANGAEA.864310, CC BY 3.0). Samples measured in air are excluded.
+- Data quality: Heron reads 0 at 400 nm, and every spectrum is noisy beyond about 680 nm (water absorbs the red), so the fits use 410–680 nm.
+
+**Fit:** each measured spectrum, by its family with bounded least squares. The families were widened from step 1:
+- seagrass: a canopy cover fraction and epiphyte (brown) absorption;
+- coral: a darker skeleton range and broad host absorption;
+- sediment: mineral background absorption from bright sand to mud.
+
+| Class (n) | Fit error, median (90th pct) | Calibrated parameters (median) | Measured R at 560 nm, 10th–90th pct |
+|---|---|---|---|
+| sediment (5) | **6.6%** (10.2%) | q_mineral 0.09, iron oxide 0.55, microalgae | 0.24–0.69 |
+| seagrass (6) | **7.7%** (11.3%) | Cab 14 µg cm⁻², N 1.24, LAI 1.3, epiphytes (Cbrown 1.4), cover ≈ 1 | 0.05–0.10 |
+| live coral (40) | 17% (29%) | chl about 23 mg m⁻² (with packaging), skeleton under tissue about 0.2, brown τ 0.34 | 0.04–0.20 |
+
+- **The physical families reproduce real spectra.** Coral's larger error is mostly Heron's 0.01 quantisation at R ≈ 0.02–0.06.
+- **Absolute brightness separates the classes:** sediment is bright, while seagrass and coral are dark. That is the constraint the error budget asks for.
+- **Benchmark gap:** tier 3's truth gives every bottom albedo 0.6, so its "seagrass" has R(560) ≈ 0.6 against 0.05–0.10 measured. Realistic bounds would make tier 3's truth unreachable.
+- **Step 3:**
+  1. Add a tier 3 scene set with realistic albedos per class.
+  2. Parameterise photic's bottom as cover fractions and a brightness per type, bounded by the measured classes, with the shapes from the calibrated families or photic's tables.
+  3. Test with `error_budget.py` and the pixel harness.
+
 ### Geometry constraints across scenes (planned 2026-10-13)
 
 Each scene sees the same seabed through a different light path, M_s = sec θ_w,s + D sec θ_v,s, and a different water column H + τ_s. The forward model already contains both, but P, G and X are free per scene, so a change in water can absorb most of the angular signal.
