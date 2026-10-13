@@ -102,7 +102,7 @@
 #endif
 #define DELTA 0
 #ifndef K_PRIOR
-#define K_PRIOR 0
+#define K_PRIOR 0 // Penalise low K in shallow water and very high K (off: it excludes the truth, EXPERIMENTS.md A-2).
 #endif
 
 // Backscattering slope Y of b_bp = X (440/lambda)^Y:
@@ -186,6 +186,17 @@
 #define CONT_SIGMA_H 0.05
 #endif
 
+// Water tied between scenes (EXPERIMENTS.md B12): prior residuals (ln W_s - mean ln W)/TIE_SIGMA
+// for W = P, G, X, in the same chi units as the Rrs residuals. With the water tied, the scenes'
+// different light paths (sun angle, tide) constrain depth independently of the bottom albedo.
+
+#ifndef WATER_TIE
+#define WATER_TIE 0
+#endif
+#ifndef TIE_SIGMA
+#define TIE_SIGMA 0.25
+#endif
+
 // Bottom coherence (EXPERIMENTS.md B16): prior residuals (B_r,k - mean_r B_r,k)/COHERE_SIGMA,
 // in chi units, pulling each region's bottom albedos towards the window mean (the seabed
 // locally uniform at the scale of the spatial window).
@@ -204,7 +215,7 @@
 // coral 0.03-0.25. Without it (0), B_k in [0, 1] is linear and unbounded below.
 
 #ifndef BOTTOM_BOUNDS
-#define BOTTOM_BOUNDS 0
+#define BOTTOM_BOUNDS 1
 #endif
 
 static const double bright_lo[8] = {0.15, 0.03, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0};
@@ -219,16 +230,27 @@ static const double bright_hi[8] = {0.75, 0.15, 0.25, 1.0, 1.0, 1.0, 1.0, 1.0};
 #endif
 
 #ifndef Y_MODEL
-#define Y_MODEL 0
+#define Y_MODEL 2
 #endif
 #define Y_MIN 0.0
 #define Y_MAX 2.5
 
-#if Y_MODEL == 3
-#define N_WATER 4 // ln P, ln G, ln X, Y per scene.
-#else
-#define N_WATER 3 // ln P, ln G, ln X per scene.
-#endif // Penalise low K in shallow water and very high K (off: it excludes the truth, EXPERIMENTS.md A-2).
+// Residual glint as a per-scene, spectrally flat Rrs offset (EXPERIMENTS.md B15), within
+// +-GLINT_MAX and with a weak prior offset/GLINT_SIGMA (chi units).
+
+#ifndef GLINT_OFFSET
+#define GLINT_OFFSET 1
+#endif
+#ifndef GLINT_SIGMA
+#define GLINT_SIGMA 5.0e-4
+#endif
+#define GLINT_MAX 3.0e-3
+
+// Water parameters per scene: ln P, ln G, ln X, then Y (Y_MODEL 3), then the glint offset.
+
+#define Y_SLOT (Y_MODEL == 3 ? 1 : 0)
+#define GLINT_INDEX (3 + Y_SLOT)
+#define N_WATER (3 + Y_SLOT + GLINT_OFFSET)
 
 #if DELTA
 #error "DELTA is not supported by the bounded parameterisation"
@@ -795,7 +817,7 @@ void samodel(
 	md->X = XX;
 	md->D = DD;
 
-	prev = malloc(4*md->n_scenes*sizeof(double)); // P,G,X,D for each scene.
+	prev = malloc(MAX(4, N_WATER)*md->n_scenes*sizeof(double)); // P,G,X,D for each scene.
 	md->prev = prev;
 	md->Y_scene = calloc(md->n_scenes, sizeof(double));
 	allocate_double_array_2d(&md->R_inf, md->n_scenes, md->max_n_bands);
@@ -2021,6 +2043,10 @@ void samodel_bounds(model_data *md, double *lo, double *hi) {
 		lo[offset + N_WATER*k_scene + 3] = Y_MIN;
 		hi[offset + N_WATER*k_scene + 3] = Y_MAX;
 #endif
+#if GLINT_OFFSET
+		lo[offset + N_WATER*k_scene + GLINT_INDEX] = -GLINT_MAX;
+		hi[offset + N_WATER*k_scene + GLINT_INDEX] = GLINT_MAX;
+#endif
 	}
 }
 
@@ -2071,6 +2097,9 @@ void samodel_unpack_scene(double *params, model_data *md, int k_scene, double *P
 #if Y_MODEL == 3
 	md->Y_scene[k_scene] = clamp(params[offset + N_WATER*k_scene + 3], Y_MIN, Y_MAX);
 #endif
+#if GLINT_OFFSET
+	md->D[k_scene] = clamp(params[offset + N_WATER*k_scene + GLINT_INDEX], -GLINT_MAX, GLINT_MAX);
+#endif
 }
 
 // Pack physical values into a parameter vector. q holds n_bottoms fractions per region.
@@ -2101,6 +2130,9 @@ void samodel_pack(model_data *md, double *H, double *albedo, double *q, double *
 		params[offset + N_WATER*k_scene + 2] = log(clamp(X[k_scene], X_MIN, X_MAX));
 #if Y_MODEL == 3
 		params[offset + N_WATER*k_scene + 3] = 1.0; // Starting Y.
+#endif
+#if GLINT_OFFSET
+		params[offset + N_WATER*k_scene + GLINT_INDEX] = 0.0;
 #endif
 	}
 }
@@ -2219,6 +2251,50 @@ static double chi_unit(model_data *md) {
 	return 100.0*sigma_rel/sqrt((double) (n*md->n_regions));
 }
 
+static int glint_count(model_data *md) {
+	return GLINT_OFFSET ? md->n_scenes : 0;
+}
+
+static void glint_residuals(double *params, model_data *md, double unit, double *r) {
+#if GLINT_OFFSET
+	int k_scene, offset = samodel_water_offset(md);
+	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+		r[k_scene] = unit*params[offset + N_WATER*k_scene + GLINT_INDEX]/GLINT_SIGMA;
+	}
+#else
+	(void) params; (void) md; (void) unit; (void) r;
+#endif
+}
+
+static int tie_count(model_data *md) {
+#if WATER_TIE
+	return md->n_scenes > 1 ? 3*md->n_scenes : 0;
+#else
+	(void) md;
+	return 0;
+#endif
+}
+
+// Tie residuals (tie_count values) for the water parameters in params.
+
+static void tie_residuals(double *params, model_data *md, double unit, double *r) {
+#if WATER_TIE
+	int k_scene, w, offset = samodel_water_offset(md);
+	double mean;
+	if (md->n_scenes < 2) return;
+	for (w = 0; w < 3; w++) {
+		mean = 0.0;
+		for (k_scene = 0; k_scene < md->n_scenes; k_scene++) mean += params[offset + N_WATER*k_scene + w];
+		mean /= (double) md->n_scenes;
+		for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+			r[w*md->n_scenes + k_scene] = unit*(params[offset + N_WATER*k_scene + w] - mean)/TIE_SIGMA;
+		}
+	}
+#else
+	(void) params; (void) md; (void) unit; (void) r;
+#endif
+}
+
 static int coherence_count(model_data *md) {
 	return (COHERENCE && !BOTTOM_BOUNDS && md->n_regions > 1) ? md->n_regions*md->n_bottoms : 0;
 }
@@ -2278,10 +2354,18 @@ static void region_residuals(double *params, model_data *md, int k_region, doubl
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 		samodel_unpack_scene(params, md, k_scene, &P, &G, &X);
 		for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
-			samodel_Rrs(P, G, X, B, q, H, 0.0, md, k_scene, k_band, k_region);
+			samodel_Rrs(P, G, X, B, q, H, GLINT_OFFSET ? md->D[k_scene] : 0.0, md, k_scene, k_band, k_region);
 			r[n++] = scale*(md->Rrs_modelled[k_region][k_scene][k_band] - md->Rrs_measured[k_region][k_scene][k_band]);
 		}
 	}
+}
+
+// The number of residuals: the Rrs of every region, then the prior rows (continuity,
+// coherence, ties between scenes, glint offsets).
+
+static int samodel_n_residuals(model_data *md) {
+	return md->n_regions*residuals_per_region(md) + continuity_count(md) + coherence_count(md) +
+		tie_count(md) + glint_count(md);
 }
 
 int samodel_residuals(double *params, model_data *md, double *r) {
@@ -2294,8 +2378,10 @@ int samodel_residuals(double *params, model_data *md, double *r) {
 	}
 	continuity_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region]);
 	coherence_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region + continuity_count(md)]);
+	tie_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region + continuity_count(md) + coherence_count(md)]);
+	glint_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region + continuity_count(md) + coherence_count(md) + tie_count(md)]);
 
-	return md->n_regions*n_region + continuity_count(md) + coherence_count(md);
+	return samodel_n_residuals(md);
 }
 
 // Bounded Levenberg-Marquardt on samodel_residuals, over the parameters with is_free[i] != 0
@@ -2347,7 +2433,7 @@ static int lm_jacobian(model_data *md, double *x, double *r, int *index, int n_f
 	double *J, double *x_new, double *r_new) {
 
 	int i, j, k, k_region, n_region = residuals_per_region(md), offset = samodel_water_offset(md),
-		m = md->n_regions*n_region + continuity_count(md) + coherence_count(md);
+		m = samodel_n_residuals(md), n_prior = continuity_count(md) + coherence_count(md);
 	double h, scale = residual_scale(md), unit = chi_unit(md);
 
 	copy_double_vec(x, x_new, samodel_n_params(md));
@@ -2363,11 +2449,12 @@ static int lm_jacobian(model_data *md, double *x, double *r, int *index, int n_f
 			for (k = k_region*n_region; k < (k_region + 1)*n_region; k++) {
 				J[k*n_free + j] = (r_new[k] - r[k])/h;
 			}
-			if (m > md->n_regions*n_region) {
-				// The prior rows (continuity, coherence) depend on the region parameters.
+			if (n_prior > 0) {
+				// The prior rows on the region parameters (continuity, coherence); tie and glint
+				// rows depend only on the water parameters.
 				continuity_residuals(x_new, md, unit, &r_new[md->n_regions*n_region]);
 				coherence_residuals(x_new, md, unit, &r_new[md->n_regions*n_region + continuity_count(md)]);
-				for (k = md->n_regions*n_region; k < m; k++) {
+				for (k = md->n_regions*n_region; k < md->n_regions*n_region + n_prior; k++) {
 					J[k*n_free + j] = (r_new[k] - r[k])/h;
 				}
 			}
@@ -2408,7 +2495,7 @@ double samodel_depth_sigma(model_data *md, double *x) {
 		unit;
 
 	n = samodel_n_params(md);
-	m = md->n_regions*residuals_per_region(md) + continuity_count(md) + coherence_count(md);
+	m = samodel_n_residuals(md);
 
 	lo    = malloc(n*sizeof(double));
 	hi    = malloc(n*sizeof(double));
@@ -2495,7 +2582,7 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 		cost, cost_new, lambda, nu, h, step_norm, x_norm, predicted, gain, *fixed_step;
 
 	n = samodel_n_params(md);
-	m = md->n_regions*residuals_per_region(md) + continuity_count(md) + coherence_count(md);
+	m = samodel_n_residuals(md);
 
 	lo     = malloc(n*sizeof(double));
 	hi     = malloc(n*sizeof(double));
@@ -3301,7 +3388,7 @@ double samodel_error(double *params, model_data *md) {
 		for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 
 			samodel_unpack_scene(params, md, k_scene, &P, &G, &X);
-			Delta = 0.0;
+			Delta = GLINT_OFFSET ? md->D[k_scene] : 0.0;
 
 #if WRITE_EPGXBHD
 			// P
@@ -3708,6 +3795,44 @@ double samodel_water_Y(double P, double G, double X) {
 
 
 
+// The backscattering slope Y used for scene k_scene and region k_region (see Y_MODEL).
+
+int samodel_y_model(void) {
+	return Y_MODEL;
+}
+
+double samodel_backscatter_slope(double P, double G, double X, model_data *md, int k_scene, int k_region) {
+
+	double Y, chi, Rrs440 = md->Rrs440[k_region][k_scene], Rrs490 = md->Rrs490[k_region][k_scene];
+	(void) chi; (void) Rrs440; (void) Rrs490;
+
+#if Y_MODEL == 0
+	// chi = (Rrs440 - Rrs750)/(Rrs490 - Rrs750);
+	chi = Rrs440/Rrs490;
+	Y = 3.44*(1.0 - 3.17*exp(-2.01*chi));
+	if (Y < 0.0) Y = 0.0;
+	if (Y > 2.5) Y = 2.5;  
+#elif Y_MODEL == 3
+	Y = md->Y_scene[k_scene];
+#elif Y_MODEL == 4
+	{
+		double r443 = interp_1d(md->wavelengths[k_scene], md->Rrs_measured[k_region][k_scene], md->n_bands[k_scene], 443.0);
+		double r555 = interp_1d(md->wavelengths[k_scene], md->Rrs_measured[k_region][k_scene], md->n_bands[k_scene], 555.0);
+		r443 /= 0.52 + 1.7*r443;
+		r555 /= 0.52 + 1.7*r555;
+		Y = 2.0*(1.0 - 1.2*exp(-0.9*r443/r555));
+		if (Y < Y_MIN) Y = Y_MIN;
+		if (Y > Y_MAX) Y = Y_MAX;
+	}
+#else
+	Y = samodel_water_Y(P, G, X);
+#endif
+
+	return Y;
+}
+
+
+
 void samodel_Rrs(
 		 double P, double G, double X, double B[], double q[], double H, double Delta, // parameters
 	model_data *md, int k_scene, int k_band, int k_region) {
@@ -3718,7 +3843,7 @@ void samodel_Rrs(
 
 	const double S = 0.015;
 	int i;
-	double rho, a_phi, a_g, a, chi, Y, M, b_p, bb, u, K, DuC, DuB, 
+	double rho, a_phi, a_g, a, Y, M, b_p, bb, u, K, DuC, DuB, 
 	  f, kd, kup_water, kup_bottom, rrs_dp, rrs_C, rrs_B, rrs;
 
 	double a_0     = md->a_0[k_scene][k_band];
@@ -3726,8 +3851,6 @@ void samodel_Rrs(
 	double a_w     = md->a_w[k_scene][k_band];
 	double b_bw    = md->b_bw[k_scene][k_band];
 	double lambda  = md->wavelengths[k_scene][k_band];
-	double Rrs440  = md->Rrs440[k_region][k_scene];
-	double Rrs490  = md->Rrs490[k_region][k_scene];
 	double Rrs750  = md->Rrs750[k_region][k_scene];
 	double tide    = md->H_tide[k_scene];
 	double sec_theta_view = md->sec_theta_view[k_scene];
@@ -3762,27 +3885,7 @@ void samodel_Rrs(
 
 	// Compute bb - total backscattering coefficient.
 
-#if Y_MODEL == 0
-	// chi = (Rrs440 - Rrs750)/(Rrs490 - Rrs750);
-	chi = Rrs440/Rrs490;
-	Y = 3.44*(1.0 - 3.17*exp(-2.01*chi));
-	if (Y < 0.0) Y = 0.0;
-	if (Y > 2.5) Y = 2.5;  
-#elif Y_MODEL == 3
-	Y = md->Y_scene[k_scene];
-#elif Y_MODEL == 4
-	{
-		double r443 = interp_1d(md->wavelengths[k_scene], md->Rrs_measured[k_region][k_scene], md->n_bands[k_scene], 443.0);
-		double r555 = interp_1d(md->wavelengths[k_scene], md->Rrs_measured[k_region][k_scene], md->n_bands[k_scene], 555.0);
-		r443 /= 0.52 + 1.7*r443;
-		r555 /= 0.52 + 1.7*r555;
-		Y = 2.0*(1.0 - 1.2*exp(-0.9*r443/r555));
-		if (Y < Y_MIN) Y = Y_MIN;
-		if (Y > Y_MAX) Y = Y_MAX;
-	}
-#else
-	Y = samodel_water_Y(P, G, X);
-#endif
+	Y = samodel_backscatter_slope(P, G, X, md, k_scene, k_region);
 	// Y = 0.5; // Consistent with more turbid waters per Lee, 2001. 
 	b_p = X*pow(440.0/lambda, Y);
 
@@ -4009,7 +4112,7 @@ void partial_copy_md(model_data *md, model_data *md_out, bool allocate) {
 
 #if DELTA
 	if (allocate) {
-		prev = (double*) malloc(4*md->n_scenes*sizeof(double));
+		prev = (double*) malloc(MAX(4, N_WATER)*md->n_scenes*sizeof(double));
 		md_out->prev = prev;
 	}
 
@@ -4018,7 +4121,7 @@ void partial_copy_md(model_data *md, model_data *md_out, bool allocate) {
 	}
 #else
 	if (allocate) {
-		prev = (double*) malloc(4*md->n_scenes*sizeof(double));
+		prev = (double*) malloc(MAX(4, N_WATER)*md->n_scenes*sizeof(double));
 		md_out->prev = prev;
 	}
 

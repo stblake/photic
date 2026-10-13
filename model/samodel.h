@@ -31,6 +31,10 @@ double samodel_unpack_bottom(double *params, model_data *md, int k_region, doubl
 
 double samodel_water_Y(double P, double G, double X);
 
+int samodel_y_model(void);
+
+double samodel_backscatter_slope(double P, double G, double X, model_data *md, int k_scene, int k_region);
+
 double samodel_depth(double *params, int k_region);
 
 void samodel_unpack_region(double *params, model_data *md, int k_region, double *H, double *albedo, double q[]);

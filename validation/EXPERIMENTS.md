@@ -553,6 +553,62 @@ Each scene sees the same seabed through a different light path, M_s = sec θ_w,s
   - The tier 3 OSOAA scenes are black-sky, so test on tier 4, with f from ACOLITE's aerosol optical thickness.
 - **B15. Glint as a per-scene offset.** Restore the per-scene spectrally flat offset (`DELTA`), with its size limited by a Cox–Munk prior from each scene's sun–view geometry. Test on tier 4 (tier 3 has no glint).
 
+### B12 and B13 results (2026-10-13, branch `b12-geometry`)
+
+**B13, precision first (`b13_crb.py`).** Cramér–Rao bound on depth for one pixel, noise 0.0005 per band, water free per scene / water shared. Clear water:
+
+| Geometry | 5 m | 10 m | 15 m | 20 m |
+|---|---|---|---|---|
+| same sun, view 0° vs 12°, no tide | 99 / 2.7 | 99 / 13 | 88 / 25 | 99 / 45 |
+| same sun, tides 0 / 0.4 m | 3.0 / 0.69 | ∞ / 6.6 | ∞ / 17 | ∞ / 38 |
+| tier 3 sun angles (30°, 45°) + tides | 2.3 / 0.46 | 28 / 1.8 | 16 / 4.8 | ∞ / 11 |
+| wide sun angles (20°, 60°) + tides | 1.6 / 0.28 | 9.0 / 1.07 | 8.6 / 3.2 | 52 / 7.0 |
+| 4 scenes, tier 3 angles + tides | 0.86 / 0.22 | 15 / 0.94 | 10 / 2.8 | 64 / 6.4 |
+
+- Sun-angle and tide differences carry depth information, but almost only if the water is the same across scenes.
+- **View angle helps about ten times less than sun angle.** Sentinel-2's ≤ 12° (≤ 9° under water) changes the path about as much as a 2° change of sun. Parallax (H tan θ_v, about 2.5 m at 20 m depth) is below the pixel size. View angle stays in the forward model, but is not a separate experiment.
+
+**B12, water tied between scenes (`WATER_TIE`, negative).** On noisy OSOAA pixels, RMSE:
+
+| | free (now) | tied, σ 25% | tied, σ 10% |
+|---|---|---|---|
+| clear, 4 scenes, 10–15 m | **1.16** | 2.85 | 3.53 |
+| clear, 2 scenes, 5–10 m | **1.27** | 1.58 | 1.96 |
+| moderate, 2 scenes, 5–10 m | **2.74** | 3.01 | 4.07 |
+| turbid, 2 scenes, 2–5 m | 1.76 | 1.19 | **0.91** |
+
+- **Tying makes clear and moderate water worse** (depths pushed deeper). Tier 3's water genuinely varies between scenes, up to 2× in P for clear water. When the tie is wrong, the mismatch goes into depth.
+- **More scenes help without a tie:** clear 10–15 m RMSE 2.00 → 1.16 m with 4 scenes instead of 2, and coverage 31 → 38 of 48.
+- **Decision:** off. A tie is only justified where the water is known to be stable, which Phase D can check from deep-water pixels on real imagery.
+- **B13's closed-form angular-ratio depth is not pursued.** It needs the same water in both scenes, which B12 shows does not hold in general, so its consistency flag would mostly flag changes in water.
+- **B14 (direct and diffuse light) and B15 (glint offset)** need sky and glint, which tier 3 lacks, so they move to tier 4.
+
+### B14 and B15 results (2026-10-13)
+
+**B14, direct and diffuse light: not run (estimated effect ~1%).**
+- Skylight's mean underwater path is 1/μ̄_d ≈ 1.16, the same as direct sun at θ_w ≈ 31°.
+- Tier 4's scenes have θ_w = 24–36°, so splitting the downwelling light changes the path factor by about 2% at most, and depth by about 1%. That is well below the present errors.
+- It matters only for sun much lower than in these scenes; revisit if scenes with θ_w > 45° are used.
+
+**B15, residual glint as a per-scene flat offset (`GLINT_OFFSET`).**
+- Each scene gets an offset Δ_s in ±0.003 sr⁻¹, with a prior Δ_s/σ (σ = 5 × 10⁻⁴).
+- Test: noisy OSOAA pixels, with and without added flat offsets of +6, −3, +9 and 0 × 10⁻⁴ per scene.
+
+RMSE (coverage of 48):
+
+| | no offset fitted | offset fitted |
+|---|---|---|
+| clear, 2 scenes, with glint | 2.84 (31) | **2.03** (27) |
+| moderate, 2 scenes, with glint | 2.10 (21) | **1.62** (19) |
+| clear, 4 scenes, with glint | 3.20 (36) | **2.28** (34) |
+| moderate, 4 scenes, with glint | 2.60 (23) | **2.29** (21) |
+| clear, 2 scenes, no glint | 1.22 (31) | 1.18 (27) |
+| moderate, 2 scenes, no glint | 1.79 (21) | **1.25** (19) |
+| clear, 4 scenes, no glint | 1.32 (38) | 1.32 (35) |
+
+- **It absorbs residual glint and does no harm without it.** Coverage falls slightly, because the optically deep model gets the offset too.
+- **Decision:** candidate for tier 4, where residual glint is real. A Cox–Munk prior from each scene's sun–view azimuths could replace the fixed σ later.
+
 ### B3 result (2026-10-13, `Y_MODEL` switch in samodel.c)
 
 Phase A pixels, 2 scenes, noise-free, depth RMSE. Control scenes are generated with Y from the measured χ (`Y_MODEL 0`), so the other variants cannot reproduce them exactly; the OSOAA scenes are the real test.

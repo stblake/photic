@@ -81,6 +81,31 @@ def forward(lam, P, G, X, B, rho_table, H, tide, theta_sun, theta_view,
                 rrs=rrs, Rrs=Rrs)
 
 
+def deep_rrs(P, G, X, Y, a0, a1, aw, bbw, lam, coef=None):
+    """Deep-water rrs from the water alone (no bottom)."""
+    c = LEE_1999 if coef is None else coef
+    a = aw + (a0 + a1*np.log(P))*P + G*np.exp(-c["S"]*(lam - 440.0))
+    bb = bbw + X*(440.0/lam)**Y
+    u = bb/(a + bb)
+    return (c["g0"] + c["g1"]*u)*u
+
+
+def water_Y(P, G, X, t440, t490, iterations=50):
+    """Self-consistent Y (photic's Y_MODEL 2): Lee's chi relation applied to the model's own
+    deep-water rrs(440)/rrs(490), solved by fixed-point iteration. t440 and t490 are dicts of
+    a0, a1, aw, bbw at those wavelengths."""
+    P, G, X = (np.asarray(v, dtype=float) for v in (P, G, X))
+    Y = np.ones(np.broadcast(P, G, X).shape)
+    for _ in range(iterations):
+        chi = (deep_rrs(P, G, X, Y, t440["a0"], t440["a1"], t440["aw"], t440["bbw"], 440.0)
+               / deep_rrs(P, G, X, Y, t490["a0"], t490["a1"], t490["aw"], t490["bbw"], 490.0))
+        Y_new = np.clip(3.44*(1.0 - 3.17*np.exp(-2.01*chi)), 0.0, 2.5)
+        if np.max(np.abs(Y_new - Y)) < 1e-12:
+            return Y_new
+        Y = Y_new
+    return Y
+
+
 def bbw_lee(lam):
     """Pure seawater backscattering, Morel (1974) as used by Lee: 0.0038 (400/lambda)^4.32."""
     return 0.0038*(400.0/lam)**4.32

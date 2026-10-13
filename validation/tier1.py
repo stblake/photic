@@ -175,13 +175,29 @@ def run(driver, paper_tex, pope_fry_path):
     dump = run_driver(driver, cases)
     assert np.array_equal(dump["id"], cases["id"])
 
-    # 1. Equations.
-    ref = reference(cases, dump)
+    # 1. Equations, given the backscattering slope Y the C code used; then Y itself against the
+    # reference for the C build's Y model (0: chi of the measured spectrum, 2: self-consistent).
+    y_model = int(dump["y_model"][0])
+    ref = reference(cases, dump, Y=dump["Y"])
     eq = {k: float(np.max(rel(dump[k], ref[k]))) for k in ["K", "rrs_dp", "rrs", "Rrs"]}
     eq["rrs_B"] = float(np.max(rel(dump["rrs_B"], ref["rrs_B"])))
+    if y_model == 0:
+        Y_ref = reference(cases, dump)["Y"]
+    elif y_model == 2:
+        t = {lam: run_driver(driver, dict((k, np.array([v])) for k, v in dict(
+            id=0, lam=lam, P=0.05, G=0.1, X=0.01, B=1.0, bottom=0, H=5.0, tide=0.0, theta_sun=30.0,
+            theta_view=0.0, R440=0.01, R490=0.01, R750=0.0).items())) for lam in (440.0, 490.0)}
+        tab = {lam: dict(a0=t[lam]["a_0"][0], a1=t[lam]["a_1"][0], aw=t[lam]["a_w"][0], bbw=t[lam]["b_bw"][0])
+               for lam in t}
+        Y_ref = photic_ref.water_Y(cases["P"], cases["G"], cases["X"], tab[440.0], tab[490.0])
+    else:
+        Y_ref = dump["Y"]  # Y models 3 and 4 are not referenced independently.
+    eq["Y"] = float(np.max(np.abs(dump["Y"] - Y_ref)))
     equations_pass = max(eq.values()) <= TOL_EQUATIONS
 
-    # 2. Departures from the paper (each switched on alone, then all together).
+    # 2. Departures from the paper (each switched on alone, then all together), with Y from the
+    # measured chi as the paper has it.
+    ref = reference(cases, dump)
     departures = {}
     for name, kw in [("chi_750nm_correction", dict(chi_750=True)),
                      ("no_Y_clamp", dict(clamp_Y=False)),
@@ -220,7 +236,7 @@ def run(driver, paper_tex, pope_fry_path):
 
     out = dict(
         n_cases=int(len(cases["id"])),
-        equations=dict(max_rel_diff=eq, tolerance=TOL_EQUATIONS, passed=bool(equations_pass)),
+        equations=dict(max_rel_diff=eq, tolerance=TOL_EQUATIONS, passed=bool(equations_pass), y_model=y_model),
         departures_rel_Rrs=departures,
         tables=tables,
         sambuca=sambuca)
