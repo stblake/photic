@@ -145,6 +145,54 @@ The LM solver (`samodel_lm`) replaces Nelder–Mead, with box-bounded parameters
 
 Tier 3, moderate water, 2 scenes, noise 0.0005, by depth: 0–2 m RMSE 0.08 m; 2–5 m 0.68 m; 5–10 m 3.4 m. At 10–30 m the depth comes out far too shallow (RMSE 12–20 m) with albedo about 0.07. Below the noise, a shallow, near-black bottom fits as well as the truth (the optically-deep ambiguity).
 
+### B6 benchmark (commit a6d4847: B1 + B2 + B5 + LM; no optically deep test, glint offset or bottom bounds)
+
+**Tier 4, Exmouth Gulf** (baseline → B6):
+
+| Site | bias / RMSE | 0–2 m | 2–5 m | 10–20 m |
+|---|---|---|---|---|
+| Marina | +31.2 / 41.4 → **−3.9 / 4.9 m** (r 0.31 → 0.67) | 0.65 | 2.21 | 8.8 (bias −8.8) |
+| Tantabiddi | +19.4 / 24.9 → **−2.0 / 6.0 m** (within tol. 5% → 45%) | 0.63 | 1.57 | 12.2 |
+| Bundegi | +43.7 / 133 → **−5.4 / 8.1 m** | 0.68 | 1.80 | 15.3 |
+| Gulf entrance | +29.0 / 30.2 → **−13.1 / 13.3 m** | 0.66 | 1.86 | 13.7 |
+
+- **The first working result on real imagery.** Shallow water is good at every site: 0.6–0.7 m at 0–2 m, 1.6–2.2 m at 2–5 m.
+- **Deeper water comes out too shallow**: the dark-bottom ambiguity, which C2 and B8 address (not in B6).
+- Tier 4 takes 5–17 minutes per site.
+
+**Tier 3** (median RMSE, baseline → B6):
+- noise-free 30.4 → 4.1 m;
+- control 37.6 → 1.8 m (within tolerance 0% → 87%);
+- noisy 15.9 → 11.1 m.
+
+**Regression: the `DEPTHS` prior scenarios, 2.9 → 9.4 m.** With LM the prior is only a starting point, and the fit leaves it where depth is unidentifiable.
+- **B17:** fit the prior as a residual, (H − H_prior)/σ_prior, so it weighs in where the data say little.
+
+### Initial depth from physics (2026-10-13, `h0_estimate.py`)
+
+The bottom signal D_i = rrs_i − rrs_dp,i = (ρ_i/π − rrs_dp,i) exp(−M κ_i H). For the red–green pair, the bottom brightness cancels:
+
+H0 = [ln(D_560/D_665) − ln(ρ_560/ρ_665)] / (M(κ_665 − κ_560)),
+
+where the κ difference is dominated by known water absorption. A Stumpf-style ratio with coefficients from physics, not from soundings. Where the red signal is lost, H0 falls back to a bound from 560 nm with the brightest plausible bottom.
+
+**Water reference.** photic's starting water fails: X = 30 a_w(640) Rrs(640) reads a bright red bottom as backscatter, which inflates rrs_dp so the bottom signal vanishes (the bottom contamination of A-4 again). With the image's own deep-water reflectance (deepest rows) and κ from the water, noise 0.0005, RMSE (within tolerance):
+
+| | 0–2 m | 2–5 m | 5–10 m | 10–15 m |
+|---|---|---|---|---|
+| clear, tier 3 bottoms | 0.29 (100%) | 0.50 (100%) | 1.37 | 1.91 |
+| moderate, tier 3 bottoms | 0.35 (100%) | 0.37 (86%) | 1.04 (82%) | 3.01 |
+| turbid, tier 3 bottoms | 0.37 (83%) | 0.51 (100%) | 13.9 | – |
+| clear, realistic dark bottoms | 3.0 | 11.4 | 13.3 | 15.5 |
+
+- **Excellent for bright bottoms, with no optimisation.**
+- **It fails for dark seagrass and coral:** their reflectance is close to or below the deep-water reflectance, so D is small or negative, and the bright-bottom fallback overestimates depth.
+- **Next:**
+  - make H0 class-aware (try bright and dark bottom ratios, keep the consistent one);
+  - estimate κ without the bottom (red-band anchor, B7);
+  - use H0 to seed the search alongside the depth grid, not to replace it;
+  - then measure the speed and accuracy gain.
+
 ### Physics constraints (planned 2026-10-13)
 
 Each enters the LM fit as a bound or a weighted residual (a soft prior, weight 1/σ), and is switchable. Each is tested alone: Phase A pixels with noise, then tier 3 by depth bin, then tier 4 held-out sites. Any σ is tuned on the training split only.
