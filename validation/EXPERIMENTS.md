@@ -61,6 +61,11 @@ Invert the confident pixels, calibrate a band-ratio depth model on them, and use
 |---|---|---|---|---|---|
 | A0–A4 | 2026-10-13 | The inversion fails because of the search, not the physics | The truth scores lower than photic's fit on control pixels | Partly confirmed; the error function also excludes the truth in places (A-2 to A-4) | Phase B, in the order below |
 | A-extra | 2026-10-13 | The albedo starting value (4·Rrs490 ≈ 0.03–0.10) traps the search | Retrieved albedo tracks the start | Confirmed: albedo ends at its start (0.03, 0.29, 0.57) even with 50,000 evaluations | Reparameterise the bottom (B1) |
+| B1 | 2026-10-13 | A bounded bottom (one albedo per region plus mixing fractions) and bounded water parameters let the search fit albedo | Albedo error shrinks and depth improves | First version: noisy tier 3 scenes improved (moderate, 2 scenes: RMSE 18.1 → 5.7 m), but with albedo bounded, depth (still `|h|`) ran away to 10^13–10^20 m and corrupted tier 4. With depth bounded to [0.05, 60] m: see "Search ceiling" | Not accepted alone |
+| B2 (lab) | 2026-10-13 | The K prior is a wall at 5 m that blocks the shallow solution | Shallow pixels recover | Clear control: photic RMSE 11.9 → 7.6 m; the truth is the global minimum at 97% of pixels (was 70%) | Keep; benchmark with B5 |
+| Ceiling | 2026-10-13 | The error function is good enough if the search is good | The profiled argmin is near the truth | Confirmed for clear and moderate water (table below) | Do B5 (search) next |
+| B5 | 2026-10-13 | A profile search over depth (10 common depths, then refine the 2 best) with no deep-first early exit finds the minimum | Bias near 0, RMSE near the ceiling | Bias fell from +10–20 m to −1 to +2.5 m, but RMSE was still 4–9 m. With the true depth given, Nelder–Mead still left 6–12% Rrs error (20,000 evaluations) | Branch `b5-depth-search`; the optimiser must change |
+| C1 | 2026-10-13 | Bounded least squares on photic's Rrs misfit (same forward model, same window, same B5 search) recovers depth | RMSE near 1 m in clear and moderate water | Confirmed: control 0.1 m (clear) and 1.9 m (moderate); OSOAA 2.3 m and 4.4 m. Given the true depth, it fits to 0.000% in about 300 evaluations | Replace Nelder–Mead with bounded Levenberg–Marquardt in C |
 
 ### Phase A results (2026-10-13)
 
@@ -91,6 +96,74 @@ Invert the confident pixels, calibrate a band-ratio depth model on them, and use
   - **Benchmark gap:** tier 2 passed the true Y to photic, and the control scenes are built with photic's own Y, so neither tested this step. Tier 2 needs a variant that uses photic's Y from the simulated spectrum.
 - **A-5. The spatial window helps.** With `NSPATIAL 1`, photic's bias is +25 m against +3 m on moderate control. Keep it.
 - **A-6. Information limit.** In turbid water the profile is flat beyond a few metres (argmin RMSE 11 m on control), so those pixels should be flagged optically deep (C2).
+
+### Search ceiling (2026-10-13)
+
+Per-pixel depth RMSE (m), 33 pixels, 2 scenes, noise-free. *photic* is `samodel_optimise`. *Best start* takes the best of all 8 depth starts with no early exit. *Profiled* is a thorough search: the depth is fixed on a grid from 0.25 to 40 m and everything else is re-fitted from two starts with 20,000 evaluations; it uses the same error function as photic.
+
+| Scenario | baseline: photic / best start / profiled | B1 (bounded): photic / profiled | B1 + B2: photic / profiled |
+|---|---|---|---|
+| clear, control | 15.0 / 13.4 / 0.9 | 11.9 / 1.1 | 7.6 / 0.8 |
+| clear, OSOAA | 12.9 / 13.4 / 0.9 | 10.7 / 1.0 | 10.0 / 0.7 |
+| moderate, control | 14.1 / 14.2 / 1.9 | 16.2 / 2.0 | 7.9 / 1.8 |
+| moderate, OSOAA | 14.8 / 11.7 / 3.6 | 15.3 / 1.9 | 12.1 / 3.1 |
+| turbid, control | 20.3 / 9.2 / 11.7 | 22.3 / 12.0 | 18.1 / 12.0 |
+| turbid, OSOAA | 20.6 / 14.7 / 9.8 | 22.3 / 11.1 | 18.9 / 11.9 |
+
+The B1 + B2 column was run before depth was bounded.
+
+- **The search, not the error function, is the main failure:** about a 10 m gap in clear and moderate water. That includes the OSOAA scenes despite the χ → Y error (A-4).
+- **Turbid water's ~12 m is the information limit.** The deeper half of the scene is optically deep, so it needs an optically-deep flag (C2) rather than a better search.
+- **B5 moves to the front.** Use an outer search over depth (a coarse grid of common depths, re-fitting the other parameters at each), then refine all parameters from the best depth. Drop the deep-first order and the early exit.
+
+### C1: least squares in place of Nelder–Mead (2026-10-13)
+
+`c1_oracle.py`: photic_ref's forward model (which matches the C code exactly), photic's Rrs misfit with no K prior and no coherence terms, the B1 parameterisation, and SciPy's bounded trust-region least squares, using the B5 search. Per-pixel depth RMSE, 33 pixels, 2 scenes, noise-free:
+
+| Scenario | B5 (Nelder–Mead) | C1 (least squares) | within tol. | Rrs misfit (median) | evaluations / pixel |
+|---|---|---|---|---|---|
+| clear, control | 6.1 | **0.10** | 100% | 0.000% | 2,744 |
+| clear, OSOAA | 8.1 | **2.33** | 64% | 0.073% | 1,822 |
+| moderate, control | 5.6 | **1.91** | 91% | 0.000% | 2,565 |
+| moderate, OSOAA | 4.2 | 4.38 | 39% | 0.335% | 1,760 |
+| turbid, control | 6.4 | 10.8 | 67% | 0.000% | 3,086 |
+| turbid, OSOAA | 9.3 | 11.6 | 21% | 0.287% | 2,528 |
+
+- **The optimiser was the main failure.** The physics, the misfit and the B1 parameterisation are enough to retrieve depth when they are minimised properly, and in fewer evaluations than photic uses now.
+- **On OSOAA scenes, the fit is close but the depth is biased.** A misfit of 0.1–0.3% with depth errors of 2–4 m means the model reaches the data with wrong parameters, which is consistent with the χ → Y error (A-4). B3 is next after the optimiser.
+- **In turbid water the deep pixels are unidentifiable** (the information limit, C2). The shallow third is retrieved.
+
+### B6: bounded Levenberg–Marquardt (2026-10-13, branch `b6-lm`)
+
+The LM solver (`samodel_lm`) replaces Nelder–Mead, with box-bounded parameters. The bottom is now linear: one albedo per bottom type per region, B_k in [0, 1], because softmax fractions stalled approaching a pure bottom. Bounds are handled by an active set. Phase A pixels, 2 scenes, noise-free, depth RMSE (within tolerance):
+
+| | clear | moderate | turbid |
+|---|---|---|---|
+| control | 0.21 m (100%) | 1.22 m (97%) | 4.3 m (91%) |
+| OSOAA | 2.8 m (48%) | 4.5 m (42%) | 11.9 m (18%) |
+
+Tier 3, moderate water, 2 scenes, noise 0.0005, by depth: 0–2 m RMSE 0.08 m; 2–5 m 0.68 m; 5–10 m 3.4 m. At 10–30 m the depth comes out far too shallow (RMSE 12–20 m) with albedo about 0.07. Below the noise, a shallow, near-black bottom fits as well as the truth (the optically-deep ambiguity).
+
+### Physics constraints (planned 2026-10-13)
+
+Each enters the LM fit as a bound or a weighted residual (a soft prior, weight 1/σ), and is switchable. Each is tested alone: Phase A pixels with noise, then tier 3 by depth bin, then tier 4 held-out sites. Any σ is tuned on the training split only.
+
+- **B3. Self-consistent Y.** photic derives Y from χ = Rrs440/Rrs490 of the *measured* spectrum, which in shallow water includes the bottom (A-4: Y = 0 against a true 1).
+  - Compute Y instead from the model's own deep-water reflectance with QAA's relation, Y = 2.0[1 − 1.2 exp(−0.9 rrs_dp(443)/rrs_dp(560))], as a fixed point inside the forward model.
+  - Variant: fit Y per scene, bounded to [0, 2.5].
+  - Prediction: the OSOAA depth bias falls (moderate OSOAA RMSE 4.5 m → about 2 m); the control scenes are unchanged only if they are rebuilt with the same Y.
+- **C2. Bottom detectability.**
+  - From the forward model, rrs(H) − rrs_dp ≈ (ρ/π − rrs_dp) exp(−M K H). The bottom is detectable in band λ only while that contrast exceeds zσ, so H_max = max_λ ln(|ρ/π − rrs_dp|/(zσ))/(M K).
+  - Report pixels whose solution exceeds H_max, or whose contrast is below the noise at every band, as optically deep ("deeper than H_max") rather than giving a depth.
+  - Also report the depth uncertainty from the LM Jacobian, σ_H² = σ_r²[(JᵀJ)⁻¹]_HH, which could replace the Monte Carlo depth-σ pass.
+  - Prediction: the shallow, black-bottom solutions are flagged, and RMSE on the reported pixels falls, at a stated loss of coverage.
+- **B7. Red and near-infrared backscatter anchor.**
+  - Where a ≈ a_w (665 nm and beyond) the bottom is invisible below a few metres, and rrs fixes b_b, hence X.
+  - Add Sentinel-2 B5 (705 nm, and possibly B6 at 740 nm) as fitted bands, after renormalising the bottom spectra (which exceed 1 at 705 nm), with a larger σ to allow for atmospheric correction error.
+  - Prediction: the trade-off between a dark bottom and high X disappears, and deep pixels stop collapsing shallow.
+- **B8. Physical bottom library.** ρ(λ) = s Σ f_k R_k(λ), using absolute reflectances, fractions on the simplex and a brightness scale s in [0.7, 1.3]; ρ ≤ 1 at every band. A dark bottom must then have a dark spectral shape.
+- **B4. Seabed continuity.** Penalise the second difference of depth across the window (a plane is free), in place of departure from the window mean (A-3).
+- **B9. Water-mass priors.** Weak priors keeping P, G and X per scene within natural ranges, from the training data.
 
 ### Phase B order (from Phase A)
 
