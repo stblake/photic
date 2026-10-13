@@ -15,7 +15,7 @@ ALL_CFLAGS = $(CSTD) $(CFLAGS) $(WARN) -I$(MODEL) $(NETCDF_CFLAGS) $(PGPLOT_CFLA
 .PHONY: all model clean
 
 all: model
-	$(MAKE) drivers/forward_dump
+	$(MAKE) drivers/forward_dump drivers/invert_lab
 
 model:
 	$(MAKE) -C $(MODEL) photic
@@ -23,5 +23,8 @@ model:
 drivers/forward_dump: drivers/forward_dump.c $(MODEL_OBJS)
 	$(CC) $(ALL_CFLAGS) $^ $(NETCDF_LIBS) $(PGPLOT_LIBS) -lm -o $@
 
+drivers/invert_lab: drivers/invert_lab.c $(MODEL_OBJS)
+	$(CC) $(ALL_CFLAGS) $^ $(NETCDF_LIBS) $(PGPLOT_LIBS) -lm -o $@
+
 clean:
-	rm -f drivers/forward_dump
+	rm -f drivers/forward_dump drivers/invert_lab

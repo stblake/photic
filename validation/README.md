@@ -21,6 +21,10 @@ $PY bench.py compare baseline <commit>                  # what changed
 
 `make` builds `drivers/forward_dump` against `../model`. Results for each commit go to `$PHOTIC_VALIDATION_DATA/runs/<commit>/` (default `~/photic_dev/validation_data`); only scorecards are kept in git.
 
+## Diagnosing the inversion
+
+`EXPERIMENTS.md` is the experiment plan and log for making the model work without a depth prior. `phaseA.py` runs photic's own error function and optimiser on single tier 3 pixels through `drivers/invert_lab`, against the known truth.
+
 ## Data and tools (all under `$PHOTIC_VALIDATION_DATA`, not in git)
 
 The steps are idempotent: anything already present is reused.

@@ -189,6 +189,12 @@ New finding:
 - The **published photic Exmouth Gulf product** (README) scores well on the same cells (right-hand columns); it does not cover Tantabiddi.
 - So either the published runs used an empirical depth prior and settings this benchmark does not reproduce, or the code that produced them differs from the code in this repository. Establishing which is the first task for improving the core.
 
+**Phase A diagnosis (`validation/EXPERIMENTS.md`).** A per-pixel diagnosis with photic's own error function and optimiser (`validation/drivers/invert_lab`) found four causes:
+- the search does not reach the minimum, and the albedo stays at its starting value;
+- the K prior excludes the true solution in shallow clear and moderate water;
+- the depth-coherence term penalises real slopes;
+- **high: photic's χ → Y relation gives Y = 0 in moderate and turbid water** (true Y = 1), so the forward model cannot fit the true state (12–21% reflectance error at the truth). Tier 2 missed this because it passed the true Y.
+
 ---
 
 ## 3. Interpreter (`bam.c`)
