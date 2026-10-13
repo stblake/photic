@@ -138,6 +138,21 @@
 #define LEE_B1 5.4
 #endif
 
+// Bottom-surface interreflection (EXPERIMENTS.md B11). Light reflected by the bottom is partly
+// reflected back down by the water-air interface and the water column, and re-reflected by the
+// bottom, so the bottom term is rho/pi exp(-M K H)/(1 - c rho), where the reflectance seen
+// from the bottom looking up is
+//   c = R_INTERNAL exp(-2 D_DIFFUSE K H) + pi rrs_dp (1 - exp(-2 D_DIFFUSE K H)):
+// the interface's internal reflectance for diffuse light over the round trip, plus the water
+// column's own reflectance. R_INTERNAL and D_DIFFUSE were fitted to OSOAA (0.464, theory about
+// 0.48; 2.07, about 1/mu for diffuse light). Lee's model (INTERREFLECTION 0) is linear in rho.
+
+#ifndef INTERREFLECTION
+#define INTERREFLECTION 0
+#endif
+#define R_INTERNAL 0.464
+#define D_DIFFUSE 2.07
+
 #ifndef Y_MODEL
 #define Y_MODEL 0
 #endif
@@ -3346,6 +3361,12 @@ void samodel_Rrs(
 
 	M = sec_theta_sun + DuB*sec_theta_view;
 	rrs_B = rho/PI*exp(-M*K*H_scene); // Contribution of the bottom. 
+#if INTERREFLECTION
+	{
+		double T = exp(-2.0*D_DIFFUSE*K*H_scene);
+		rrs_B /= 1.0 - (R_INTERNAL*T + PI*rrs_dp*(1.0 - T))*rho;
+	}
+#endif
 
 	md->rrs_bottom[k_region][k_scene][k_band] = rrs_B;
 	// printf("\nrrs_bottom = %.7f\n", md->rrs_bottom[k_region][k_scene][k_band]);

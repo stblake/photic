@@ -221,6 +221,16 @@ The same OSOAA scenes were run with the four usual bands and with Sentinel-2 B5 
 
 **Decision:** adopt. The 705 nm band constrains backscattering and lifts both accuracy and coverage in every water type. Tier 4 should give photic B5 as a fifth band; ACOLITE already outputs it. The tier 3 benchmark scenes stay at four bands with albedo 0.6, so a 705 nm tier 3 set would need these realistic albedos.
 
+### B11: bottom–surface interreflection (2026-10-13, `INTERREFLECTION` switch, negative)
+
+OSOAA's bottom response saturates, R = R0 + Aρ/(1 − cρ), with c up to 0.42 in clear water at 0.5 m, while Lee's model is linear in ρ.
+- **Derivation:** c is the reflectance seen from the bottom looking up: c = r_i exp(−2 D K H) + π rrs_dp (1 − exp(−2 D K H)), the interface's internal reflectance over the round trip plus the water column's reflectance.
+- **Fit to OSOAA:** clear and moderate water give r_i = 0.464 (theory about 0.48) and D = 2.07; held-out turbid water is fitted to 0.02 rms.
+- **Effect on depth:** with the term in the forward model, shallow pixels get slightly worse (0–2 m bias +0.06 → −0.12 m) and the deep bias is unchanged. Lee's empirical coefficients already absorb this effect at typical albedos, so adding it double-counts.
+- **Decision:** off by default.
+
+**Unexplained so far:** the remaining OSOAA depth bias (clear 10–30 m about +3.5 m with too bright an albedo; moderate 5–10 m about +2.7 m). It survives B3, B10 and B11.
+
 ### B10 result (2026-10-13, `LEE_*` macros in samodel.c, `b10_fit.py`)
 
 Lee's coefficients were refitted to tier 2's OSOAA cases: 732 clear and moderate cases for training, 366 turbid for testing, physical albedo only. Subsurface rrs relative error:
