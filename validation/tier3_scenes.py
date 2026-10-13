@@ -33,6 +33,13 @@ BANDS = [443.0, 490.0, 560.0, 665.0]
 DEPTH_NODES = [0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 15.0,
                18.0, 22.0, 27.0, 32.0]
 B_ALBEDO = 0.6
+# Optional albedo per bottom ({"sand": .., "seagrass": .., "coral": ..}) in place of B_ALBEDO,
+# for scenes with realistic bottoms (EXPERIMENTS.md B8). The benchmark's scenes use B_ALBEDO.
+ALBEDO_BY_BOTTOM = None
+
+
+def albedo_for(name):
+    return ALBEDO_BY_BOTTOM[name] if ALBEDO_BY_BOTTOM else B_ALBEDO
 ALBEDO_NODES = (0.0, 0.5, 1.0)
 BOTTOM_COLUMNS = [(0, 16, "sand"), (16, 24, "seagrass"), (24, 32, "coral")]
 DEPTH_BINS = [(0, 2), (2, 5), (5, 10), (10, 20), (20, 30)]
@@ -49,6 +56,11 @@ SCENE_SETS = {
 
 FULL = dict(water=["clear", "moderate", "turbid"], n_scenes=[1, 2, 4], noise=[0.0, 5e-4],
             prior=[False, True])
+# Scenes with realistic bottoms (medians of in situ classes at 560 nm, Heron Reef and Moreton
+# Bay; EXPERIMENTS.md B8): the default scenes give every bottom albedo 0.6, which is
+# realistic for sand but 6-10 times too bright for seagrass and coral.
+REALISTIC_ALBEDO = {"sand": 0.5, "seagrass": 0.07, "coral": 0.10}
+REALISTIC = dict(n_scenes=[2, 4], noise=[0.0, 5e-4])
 QUICK = dict(water=["moderate"], n_scenes=[2], noise=[5e-4], prior=[False])
 
 
@@ -150,7 +162,7 @@ def scene_bands(water, k, H, bottom, tables, lut, control):
         for lam in BANDS:
             rho = np.zeros(H.shape)
             for name, b in t2.BOTTOMS.items():
-                rho[bottom == name] = B_ALBEDO*tables[(lam, b)]["rho"]
+                rho[bottom == name] = albedo_for(name)*tables[(lam, b)]["rho"]
             out[lam] = lut_rrs(lut, lam, H + tide, rho)
         return out
     # Control: photic's forward model with its own chi -> Y relation (fixed point, as in
@@ -165,7 +177,7 @@ def scene_bands(water, k, H, bottom, tables, lut, control):
             vals = {}
             for lam in BANDS:
                 t = tables[(lam, b)]
-                vals[lam] = photic_ref.forward(lam, P, G, X, B_ALBEDO, t["rho"], H[m], tide, tw, 0.0,
+                vals[lam] = photic_ref.forward(lam, P, G, X, albedo_for(name), t["rho"], H[m], tide, tw, 0.0,
                                                R440, R490, 0.0, t["a0"], t["a1"], t["aw"], t["bbw"])["Rrs"]
             spec = np.array([vals[l] for l in BANDS])
             # photic's interp_1d extrapolates linearly from the first two bands (440 < 443).
@@ -188,7 +200,7 @@ def read_nc(path):
         return np.ma.filled(ds.variables[name][:].astype(float), np.nan)
 
 
-def score(H_true, H_model, albedo_model, kmin_model, kmin_true, elapsed):
+def score(H_true, H_model, albedo_model, kmin_model, kmin_true, elapsed, albedo_true=None):
     valid = np.isfinite(H_model) & (H_model > 0)
     err = H_model - H_true
     e = err[valid]
@@ -209,8 +221,9 @@ def score(H_true, H_model, albedo_model, kmin_model, kmin_true, elapsed):
     a = albedo_model[valid]
     a = a[np.isfinite(a)]
     if a.size:
-        out["albedo_bias"] = float(np.mean(a - B_ALBEDO))
-        out["albedo_mae"] = float(np.mean(np.abs(a - B_ALBEDO)))
+        at = B_ALBEDO if albedo_true is None else albedo_true[valid][np.isfinite(albedo_model[valid])]
+        out["albedo_bias"] = float(np.mean(a - at))
+        out["albedo_mae"] = float(np.mean(np.abs(a - at)))
     k = kmin_model[valid]
     k = k[np.isfinite(k)]
     if k.size:
@@ -257,7 +270,8 @@ def run_photic(photic, rundir, water, n, H, bottom, tables, luts, noise, prior, 
     alb = read_nc(os.path.join(rundir, "modelled_albedo.nc"))
     kmin = read_nc(os.path.join(rundir, "modelled_min_K.nc"))
     kmin_true = min(min(photic_side_K(water, k, lam, tables) for lam in BANDS) for k in range(n))
-    out = score(H, Hm, alb, kmin, kmin_true, elapsed)
+    alb_true = np.vectorize(albedo_for)(bottom).astype(float)
+    out = score(H, Hm, alb, kmin, kmin_true, elapsed, albedo_true=alb_true)
     if prior:
         # The prior on its own: photic only adds skill if it beats this.
         p = score(H, -est, np.full(H.shape, np.nan), np.full(H.shape, np.nan), kmin_true, 0.0)
@@ -275,8 +289,13 @@ def photic_side_K(water, k, lam, tables):
     return float(r["K"])
 
 
-def run(driver, photic, data, workroot, quick=False, jobs=12):
+def run(driver, photic, data, workroot, quick=False, jobs=12, photic_work=None, only=None):
+    """Run the scenarios. workroot holds the shared OSOAA lookup tables; photic_work (default
+    workroot/photic) holds this run's photic directories. only: run just the scenarios whose
+    names contain this string (the lookup-table check is then skipped)."""
+    global ALBEDO_BY_BOTTOM
     sel = QUICK if quick else FULL
+    photic_work = photic_work or os.path.join(workroot, "photic")
     osoaa = dict(root=os.path.join(data, "tools", "OSOAA_scalar"),
                  exe=os.path.join(data, "tools", "OSOAA_scalar", "exe", "OSOAA_MAIN.exe"),
                  black_ocean=os.path.join(data, "tools", "OSOAA_blackocean", "exe", "OSOAA_MAIN.exe"),
@@ -286,19 +305,35 @@ def run(driver, photic, data, workroot, quick=False, jobs=12):
     tables = t2.photic_tables(driver, BANDS)
     H, bottom = truth()
     results = {}
+    wanted = lambda name: only is None or only in name
     for water in sel["water"]:
-        n_max = max(sel["n_scenes"])
+        n_max = max(sel["n_scenes"] + ([] if quick else REALISTIC["n_scenes"]))
         luts = [build_lut(water, k, tables, osoaa, workroot, jobs) for k in range(n_max)]
         for n in sel["n_scenes"]:
             for noise in sel["noise"]:
                 for prior in sel["prior"]:
                     name = "%s_n%d_noise%g%s" % (water, n, noise, "_prior" if prior else "")
-                    results[name] = run_photic(photic, os.path.join(workroot, "photic", name), water, n,
-                                               H, bottom, tables, luts, noise, prior, control=False)
+                    if wanted(name):
+                        results[name] = run_photic(photic, os.path.join(photic_work, name), water, n,
+                                                   H, bottom, tables, luts, noise, prior, control=False)
         name = "%s_n%d_control" % (water, 2)
-        results[name] = run_photic(photic, os.path.join(workroot, "photic", name), water, 2, H, bottom,
-                                   tables, None, 0.0, False, control=True)
-    results["lut_check"] = lut_check(tables, osoaa, workroot, sel["water"][0])
+        if wanted(name):
+            results[name] = run_photic(photic, os.path.join(photic_work, name), water, 2, H, bottom,
+                                       tables, None, 0.0, False, control=True)
+        if quick:
+            continue
+        for n in REALISTIC["n_scenes"]:
+            for noise in REALISTIC["noise"]:
+                name = "%s_n%d_noise%g_realistic" % (water, n, noise)
+                if wanted(name):
+                    ALBEDO_BY_BOTTOM = REALISTIC_ALBEDO
+                    try:
+                        results[name] = run_photic(photic, os.path.join(photic_work, name), water, n,
+                                                   H, bottom, tables, luts, noise, False, control=False)
+                    finally:
+                        ALBEDO_BY_BOTTOM = None
+    if only is None:
+        results["lut_check"] = lut_check(tables, osoaa, workroot, sel["water"][0])
     return dict(grid="%dx%d" % (NROWS, NCOLS), depth_range=[float(H.min()), float(H.max())],
                 scenarios=results)
 

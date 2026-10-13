@@ -92,7 +92,7 @@ def pixel_setup(water, n, i, j, H, bottom, grids, nspatial, noise=0.0):
     pgx = []
     for k in range(n):
         pgx += list(t3.SCENE_SETS[water][k][:3])
-    phys = [H[a, b] for a, b in cells] + [t3.B_ALBEDO]*nr + q + pgx
+    phys = [H[a, b] for a, b in cells] + [t3.albedo_for(bottom[a, b]) for a, b in cells] + q + pgx
     setup = "\n".join(lines) + "\n"
     truth = lab(setup, ["PACK " + vec(phys)])[0]["PACKED"]
     return setup, np.array(truth), nr, origin, np.array(phys)

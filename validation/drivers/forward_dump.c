@@ -64,7 +64,7 @@ int main(void) {
   md.bottom_reflectance = bottom_reflectance; md.rho = rho; md.rrs_dp = rrs_dp;
   md.rrs_bottom = rrs_bottom; md.rrs_modelled = rrs_modelled; md.Rrs_modelled = Rrs_modelled;
 
-  printf("id,wavelength,a_0,a_1,a_w,b_bw,rho_table,K,rrs_dp,rrs_B,rrs,Rrs\n");
+  printf("id,wavelength,a_0,a_1,a_w,b_bw,rho_table,K,rrs_dp,rrs_B,rrs,Rrs,Y,y_model\n");
 
   while (fgets(line, sizeof(line), stdin) != NULL) {
 
@@ -95,9 +95,10 @@ int main(void) {
 
     samodel_Rrs(P, G, X, B, q, H, 0.0, &md, 0, 0, 0);
 
-    printf("%ld,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g\n",
+    printf("%ld,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%d\n",
       id, lambda, a_0[0][0], a_1[0][0], a_w[0][0], b_bw[0][0], bottom_reflectance[0][0][0],
-      K[0][0], rrs_dp[0][0][0], rrs_bottom[0][0][0], rrs_modelled[0][0][0], Rrs_modelled[0][0][0]);
+      K[0][0], rrs_dp[0][0][0], rrs_bottom[0][0][0], rrs_modelled[0][0][0], Rrs_modelled[0][0][0],
+      samodel_backscatter_slope(P, G, X, &md, 0, 0), samodel_y_model());
   }
 
   return 0;

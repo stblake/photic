@@ -166,6 +166,164 @@ Each enters the LM fit as a bound or a weighted residual (a soft prior, weight 1
 - **B4. Seabed continuity.** Penalise the second difference of depth across the window (a plane is free), in place of departure from the window mean (A-3).
 - **B9. Water-mass priors.** Weak priors keeping P, G and X per scene within natural ranges, from the training data.
 
+### Lee's HOPE spreadsheet (2026-10-13)
+
+`Lee_2_QAA_HOPE_hyper.xls` (Z.-P. Lee, 2009/2014) has QAA, deep HOPE and shallow HOPE sheets, with every intermediate value. Recomputing the columns shows the same equations as photic, with these differences:
+
+| Term | photic (Lee 1999) | Lee's spreadsheet (Lee 2002) |
+|---|---|---|
+| deep-water rrs | (0.084 + 0.170u)u | (0.089 + 0.125u)u |
+| Rrs from rrs | 0.5 rrs/(1 − 1.5 rrs) | 0.52 rrs/(1 − 1.7 rrs) |
+| D_B (bottom) | 1.04 √(1 + 5.4u) | 1.05 √(1 + 5.5u) |
+| Y | χ relation on the measured Rrs440/Rrs490 | QAA's relation on the measured rrs (443/555), from the QAA sheet |
+| sand | `bottom_type_sand` | `bottom_sand_Lee` (in photic's tables, unused) |
+
+- **Identical:** a_φ, a_dg (S = 0.015), D_C, the sun path (secant 1.2) and the error (√mean d²/mean Rrs).
+- **Tier 1 now checks the spreadsheet:** `photic_ref` with the spreadsheet's coefficients reproduces its modelled Rrs to 10⁻¹⁶ (deep) and 2 × 10⁻⁵ (shallow), so the equations' structure is identical. With photic's coefficients, Rrs differs by 7–9%.
+- **Against exact radiative transfer (tier 2's OSOAA cases), photic's 1999 set is closer:**
+  - subsurface rrs: median 1.91% vs 2.60% (clear and moderate), 3.12% vs 3.26% (turbid);
+  - Rrs from rrs: 1.7% vs 6.3% (bias +1.5% vs +6.7%).
+  - The 2002 set was fitted to Hydrolight with other surface and sky assumptions than OSOAA's black-sky, low-wind runs. Tier 4 decides on real data.
+- **QAA's Y on the measured spectrum, Lee's own practice (`Y_MODEL 4`).** Tested against Y0 (photic now) and Y2 (self-consistent χ) on the OSOAA pixels, RMSE:
+
+| | Y0 | Y2 | Y4 |
+|---|---|---|---|
+| clear, no noise, 5–10 m | 1.70 | **0.59** | 0.98 |
+| clear, no noise, 10–15 m | 3.52 | **1.74** | 2.19 |
+| moderate, no noise, 5–10 m | 3.12 | **2.49** | 3.05 |
+| turbid, no noise, 2–5 m | 2.25 | **1.19** | 2.20 |
+| moderate + noise, 5–10 m | 2.74 | **1.91** | 2.29 |
+| turbid + noise, 2–5 m | 1.76 | 1.30 | **1.28** |
+| clear + noise, 5–10 m | 1.27 | 1.51 | **1.17** |
+
+- **Y2 is best overall.** Keeping the bottom out of the Y estimate halves the clear-water deep bias (10–15 m: +3.4 → +1.65 m), which explains part of the residual OSOAA bias.
+- **Lee's practice (Y4) sits between Y0 and Y2.**
+- **Decision:** benchmark Y2 as a second integrated candidate. Tier 3's control scenes are generated with Y0, so they will regress by construction; judge Y2 on the OSOAA scenarios and tier 4.
+
+### Error budget (2026-10-13, `error_budget.py`)
+
+photic's search (profile, then refine, by LM; Y fitted per scene) on tier 3's OSOAA pixels, with one component held at its true value. Depth bias (RMSE), m.
+
+Clear, no noise:
+
+| held true | 5–10 m | 10–15 | 15–20 | 20–30 |
+|---|---|---|---|---|
+| nothing | +0.59 (1.01) | +2.51 (2.53) | +3.25 (3.29) | +3.70 (3.73) |
+| Y | +0.42 (0.64) | +1.82 (1.85) | +2.85 (2.87) | +3.30 (3.31) |
+| water (P, G, X, Y) | +0.23 (0.25) | +0.52 (0.53) | +0.79 (0.83) | +1.31 (1.39) |
+| **bottom** | **+0.12 (0.13)** | **+0.07 (0.08)** | **+0.09 (0.10)** | +0.28 (0.30) |
+| Y + bottom | +0.08 (0.09) | +0.05 (0.06) | +0.08 (0.09) | +0.31 (0.32) |
+
+Moderate, noise 0.0005:
+
+| held true | 5–10 m | 10–15 | 15–20 |
+|---|---|---|---|
+| nothing | −1.43 (3.50) | −8.16 (8.40) | −12.85 (12.96) |
+| water | +0.94 (1.38) | −6.02 (6.31) | −9.08 (9.41) |
+| **bottom** | **−0.16 (0.52)** | **0.00 (0.90)** | +2.16 (5.10) |
+
+- **The residual bias is the depth–albedo trade-off.** Given the bottom, depth is right to 20–30 m in clear water and to 15 m in noisy moderate water.
+- **The fit absorbs the forward model's small error differently by water type:** in clear water as a brighter bottom placed deeper; in noisy moderate water as a darker bottom placed shallower.
+- **Y and the water matter much less.**
+- **Turbid water beyond about 5 m stays unresolvable whatever is given**, the information limit flagged by C2.
+- **Anomaly:** the 0–5 m bin with the bottom held true has one outlier pixel (+2.7 m mean), to check.
+- **Next:** constrain the bottom.
+  - **B16, bottom coherence:** a soft prior pulling a pixel's B_k towards the window mean (the seabed locally uniform at about 60 m).
+  - **B8, realistic albedo ranges per bottom type:** needs absolute library reflectances.
+
+### B16: bottom coherence across the window (2026-10-13, `COHERENCE`, mixed)
+
+Prior residuals (B_r,k − mean B_·,k)/σ_B pull each region's bottom albedos towards the window mean. OSOAA pixels, RMSE:
+
+| | off | σ 0.2 | σ 0.1 | σ 0.05 |
+|---|---|---|---|---|
+| clear, no noise, 5–10 m | 1.70 | 0.84 | 0.63 | **0.45** |
+| clear, no noise, 10–15 m | 3.52 | 2.29 | 2.14 | **1.98** |
+| clear, no noise, 20–30 m | **3.77** | 5.00 | 4.86 | 4.75 |
+| moderate + noise, 2–5 m | 1.03 | 0.23 | **0.13** | 0.15 |
+| moderate + noise, 5–10 m | **2.74** | 2.91 | 3.55 | 3.21 |
+| clear + noise, 10–15 m | **2.00** | 2.23 | 2.42 | 2.67 |
+
+- **It helps shallow and mid depths, and hurts the deepest and noisy mid-depth bins.**
+- **Why it is limited:** coherence makes a window's regions agree with each other, but the whole window can still trade brightness against depth together. The error budget showed that the *absolute* bottom brightness is what removes the bias.
+- **Decision:** off by default (σ 0.2 is the mildest if it is wanted). **Next:** B8 with a bottom library built from first principles, which bounds absolute brightness per type.
+
+### B8 step 1: bottom reflectance from first principles (2026-10-13, `bottom_rt.py`)
+
+Physical models of submerged bottom reflectance, each a family over parameter ranges:
+- **sand:** Kubelka–Munk semi-infinite layer, with k/s from mineral, iron-oxide, organic and microphytobenthos absorption;
+- **seagrass:** PROSPECT-D leaves with the leaf–water relative refractive index, in a Kubelka–Munk canopy over sand;
+- **coral:** zooxanthellae tissue over an aragonite skeleton.
+
+Absorption data:
+- PROSPECT-D coefficients (from the `prosail` package data);
+- extracted-pigment spectra from Clementson & Wojtasiewicz (2019, CC BY 4.0), with in-vivo shifts.
+
+Both are stored in `raw/bottom/`.
+
+| 443 / 490 / 560 / 665 / 705 nm | model, shape (÷560) | photic's table |
+|---|---|---|
+| sand | 0.80 / 0.90 / 1.01 / 1.08 / 1.10 (absolute 0.47–0.64) | 0.75 / 0.88 / 1.01 / 1.09 / 1.19 |
+| seagrass | 0.04 / 0.08 / 0.92 / 0.07 / 1.40 | 0.55 / 0.65 / 1.03 / 0.81 / 3.33 |
+| coral | 0.09 / 0.12 / 1.11 / 0.62 / 1.41 | 0.37 / 0.52 / 1.16 / 0.80 / 2.91 |
+
+- **Sand reproduces photic's measured shape from first principles**, with an absolute reflectance (0.4–0.7) typical of bright carbonate sand.
+- **Seagrass and coral are far too dark in the blue and red**, because the assumed pigment loads and full canopy cover absorb almost everything at chlorophyll's peaks. Measured spectra include canopy gaps, the sand beneath and epiphytes.
+- **The models' structure is sound, but their parameter ranges are not yet anchored.** Step 2 needs measured benthic spectra to calibrate the ranges (pigment load, cover fraction, packaging), first to see whether the families then contain photic's shapes.
+- **No measured library is at hand:** sambuca_core ships none.
+
+### B8 step 2: calibration against measured spectra (2026-10-13)
+
+**Measured data**, both open on PANGAEA, stored in `raw/bottom/measured/`:
+- **Heron Reef:** in situ underwater reflectance of 105 benthic types (Roelfsema & Phinn 2012, PANGAEA.804589).
+- **Moreton Bay:** underwater seagrass and sediment (Roelfsema, Phinn & Joyce 2016, PANGAEA.864310, CC BY 3.0). Samples measured in air are excluded.
+- Data quality: Heron reads 0 at 400 nm, and every spectrum is noisy beyond about 680 nm (water absorbs the red), so the fits use 410–680 nm.
+
+**Fit:** each measured spectrum, by its family with bounded least squares. The families were widened from step 1:
+- seagrass: a canopy cover fraction and epiphyte (brown) absorption;
+- coral: a darker skeleton range and broad host absorption;
+- sediment: mineral background absorption from bright sand to mud.
+
+| Class (n) | Fit error, median (90th pct) | Calibrated parameters (median) | Measured R at 560 nm, 10th–90th pct |
+|---|---|---|---|
+| sediment (5) | **6.6%** (10.2%) | q_mineral 0.09, iron oxide 0.55, microalgae | 0.24–0.69 |
+| seagrass (6) | **7.7%** (11.3%) | Cab 14 µg cm⁻², N 1.24, LAI 1.3, epiphytes (Cbrown 1.4), cover ≈ 1 | 0.05–0.10 |
+| live coral (40) | 17% (29%) | chl about 23 mg m⁻² (with packaging), skeleton under tissue about 0.2, brown τ 0.34 | 0.04–0.20 |
+
+- **The physical families reproduce real spectra.** Coral's larger error is mostly Heron's 0.01 quantisation at R ≈ 0.02–0.06.
+- **Absolute brightness separates the classes:** sediment is bright, while seagrass and coral are dark. That is the constraint the error budget asks for.
+- **Benchmark gap:** tier 3's truth gives every bottom albedo 0.6, so its "seagrass" has R(560) ≈ 0.6 against 0.05–0.10 measured. Realistic bounds would make tier 3's truth unreachable.
+- **Step 3:**
+  1. Add a tier 3 scene set with realistic albedos per class.
+  2. Parameterise photic's bottom as cover fractions and a brightness per type, bounded by the measured classes, with the shapes from the calibrated families or photic's tables.
+  3. Test with `error_budget.py` and the pixel harness.
+
+### B8 step 3: bottom brightness bounded by class (2026-10-13, `BOTTOM_BOUNDS`)
+
+**Parameterisation.** Each region has cover weights w_k in [0, 1] and a brightness b_k per type, with ρ = Σ (w_k/Σw) b_k ρ_k(λ). b_k is bounded by the in situ classes (step 2, 10th–90th percentile at 560 nm, widened): sediment 0.15–0.75, seagrass 0.03–0.15, coral 0.03–0.25.
+- A pure type still lies on the bounds (the other weights 0), but "sand at albedo 0.07" is now impossible.
+- The default (0) is the linear B_k in [0, 1].
+- **Bug fixed:** the optically deep test's k now counts the bottom's degrees of freedom, n_regions(1 + n_bottoms), whatever the parameterisation; bounds had doubled it.
+
+**Realistic scenes.** `tier3_scenes.ALBEDO_BY_BOTTOM` sets each bottom's albedo from the medians of the measured classes (sand 0.5, seagrass 0.07, coral 0.10). The benchmark's default scenes still use 0.6 for every bottom, which is unrealistic for seagrass and coral.
+
+**Results** (Phase A OSOAA pixels, 2 scenes, noise 0 and 0.0005 pooled; depth and Δχ² recorded for every pixel, then thresholded). Coverage / RMSE / within tolerance:
+
+| | Training (clear + moderate) | Turbid (held out) |
+|---|---|---|
+| 1×BIC, no bounds | 41% / 2.20 m / 60% | 26% / 9.9 m / 28% |
+| 1×BIC, **bounds** | 41% / **1.33 m** / 73% | 26% / 9.9 m / 36% |
+| 2×BIC, no bounds | 29% / 2.23 m / 62% | 8% / 1.14 m / 62% |
+| 2×BIC, **bounds** | 29% / **1.21 m** / 77% | 8% / **0.55 m** / 88% |
+
+- **The bounds cut RMSE by 40–50% at equal coverage**, and the gain holds on held-out turbid water.
+- **DEEP_PENALTY stays 2.** 1×BIC adds training coverage but fails on turbid water.
+- **Coverage is limited by physics:** dark seagrass (R ≈ 0.07) has little contrast against the water column, so only 14% of seagrass pixels get a depth even at 1×BIC (RMSE 0.48 m). Sand is covered to 20 m.
+- **Decision:** adopt `BOTTOM_BOUNDS` in the next candidate.
+- **Caveats:**
+  - The class bounds come from two Australian sites; check them against Exmouth's real bottoms (tier 4).
+  - The tier 3 benchmark needs a realistic-albedo scene set, otherwise its 0.6 seagrass and coral make the bounds look like a regression.
+
 ### Geometry constraints across scenes (planned 2026-10-13)
 
 Each scene sees the same seabed through a different light path, M_s = sec θ_w,s + D sec θ_v,s, and a different water column H + τ_s. The forward model already contains both, but P, G and X are free per scene, so a change in water can absorb most of the angular signal.

@@ -35,6 +35,7 @@ The steps are idempotent: anything already present is reused.
   - `tools/OSOAA_blackocean`: also `EXPERT_MODE_FORCED_FSEA_NULL .TRUE.` (surface reflection only, used to remove sun glint).
 - `tools/acolite` (github.com/acolite/acolite).
 - `raw/tables/pope97.txt`: Pope & Fry (1997), from omlc.org.
+- `raw/lee/Lee_2_QAA_HOPE_hyper.xls`: Lee's own QAA and HOPE spreadsheet (supplied by the user; not redistributed). Tier 1 checks that `photic_ref` with the spreadsheet's coefficients reproduces its modelled Rrs, and reports the effect of photic's coefficients.
 - `raw/s2/*.SAFE`: Sentinel-2 L1C tile 49KHR, downloaded from the public `gcp-public-data-sentinel-2` bucket (`tier4_fetch_s2.py`).
 - `raw/bathymetry/exmouth`: WA DoT Exmouth point surveys (`EX.zip`; singlebeam; x/y/z in GDA94 MGA zones 49/50; metres relative to AHD; CC BY 4.0) and the 5 m marina composite.
 - `raw/tides`: WA DoT Exmouth 02 tide gauge, 1997–2025, 5-minute data, cm above LAT, AWST (CC BY 4.0).
