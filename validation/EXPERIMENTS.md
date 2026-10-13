@@ -62,6 +62,7 @@ Invert the confident pixels, calibrate a band-ratio depth model on them, and use
 | A0–A4 | 2026-10-13 | The inversion fails because of the search, not the physics | The truth scores lower than photic's fit on control pixels | Partly confirmed; the error function also excludes the truth in places (A-2 to A-4) | Phase B, in the order below |
 | A-extra | 2026-10-13 | The albedo starting value (4·Rrs490 ≈ 0.03–0.10) traps the search | Retrieved albedo tracks the start | Confirmed: albedo ends at its start (0.03, 0.29, 0.57) even with 50,000 evaluations | Reparameterise the bottom (B1) |
 | B1 | 2026-10-13 | A bounded bottom (one albedo per region plus mixing fractions) and bounded water parameters let the search fit albedo | Albedo error shrinks and depth improves | First version: noisy tier 3 scenes improved (moderate, 2 scenes: RMSE 18.1 → 5.7 m), but with albedo bounded, depth (still `|h|`) ran away to 10^13–10^20 m and corrupted tier 4. With depth bounded to [0.05, 60] m: see "Search ceiling" | Not accepted alone |
+| B1 benchmark | 2026-10-13 | (B1 with depth bounded, commit 946b44d, full benchmark) | Depth improves | Tier 3: noisy median RMSE 15.9 → 12.5 m, noise-free 30.4 → 35.2 m. Tier 4: worse at every site (bias +38 to +53 m, against +19 to +31 m), because Nelder–Mead still cannot fit and depth sits near the bound | Not accepted alone; scorecards b569a8e and 946b44d |
 | B2 (lab) | 2026-10-13 | The K prior is a wall at 5 m that blocks the shallow solution | Shallow pixels recover | Clear control: photic RMSE 11.9 → 7.6 m; the truth is the global minimum at 97% of pixels (was 70%) | Keep; benchmark with B5 |
 | Ceiling | 2026-10-13 | The error function is good enough if the search is good | The profiled argmin is near the truth | Confirmed for clear and moderate water (table below) | Do B5 (search) next |
 | B5 | 2026-10-13 | A profile search over depth (10 common depths, then refine the 2 best) with no deep-first early exit finds the minimum | Bias near 0, RMSE near the ceiling | Bias fell from +10–20 m to −1 to +2.5 m, but RMSE was still 4–9 m. With the true depth given, Nelder–Mead still left 6–12% Rrs error (20,000 evaluations) | Branch `b5-depth-search`; the optimiser must change |
@@ -203,6 +204,39 @@ Pixels failing the test get no depth, and coverage is reported. A plain Δχ² >
 | **2 × k ln n** (chosen) | **1.7–1.9 / 62–71% / 44%** | **1.1–1.2 / 55–70% / 21–23%** |
 
 Without noise, 2 × k ln n also cuts moderate water off at about 11 m (the true limit is about 15 m), and clear water at about 24 m. Tier 3 now passes the simulated noise to photic as RSIGMA. For tier 4 no noise estimate exists yet, so only ε applies; estimating noise from the image is a follow-up.
+
+### B7 result (2026-10-13, `b7_nir.py`)
+
+The same OSOAA scenes were run with the four usual bands and with Sentinel-2 B5 (705 nm) added; the comparison is paired (same pixels, same noise). Albedos are realistic per bottom (sand 0.6, seagrass 0.2, coral 0.25). photic now bounds each bottom type's albedo so that its reflectance is at most 1 at every fitted band (B_k ≤ 1/max ρ_k), because seagrass and coral exceed 1 at 705 nm. The scenes use 2 scenes, LM and the optically deep test (C2). RMSE (within tolerance), coverage:
+
+| | 4 bands | 5 bands (+705 nm) |
+|---|---|---|
+| clear + noise, 2–5 m | 1.26 m (43%) | **0.36 m (100%)** |
+| clear + noise, 10–15 m | 2.57 m (0%) | **1.21 m (100%)** |
+| clear + noise, coverage | 21/48 | 24/48 |
+| clear, no noise, 10–15 m | 3.52 m | 2.65 m |
+| moderate + noise, 5–10 m | 2.28 m | 1.48 m |
+| moderate, no noise, 5–10 m | 2.87 m (8/11 covered) | 2.06 m (10/11) |
+| turbid + noise, 2–5 m | 1.50 m (33%) | **0.57 m (100%)** |
+
+**Decision:** adopt. The 705 nm band constrains backscattering and lifts both accuracy and coverage in every water type. Tier 4 should give photic B5 as a fifth band; ACOLITE already outputs it. The tier 3 benchmark scenes stay at four bands with albedo 0.6, so a 705 nm tier 3 set would need these realistic albedos.
+
+### B10 result (2026-10-13, `LEE_*` macros in samodel.c, `b10_fit.py`)
+
+Lee's coefficients were refitted to tier 2's OSOAA cases: 732 clear and moderate cases for training, 366 turbid for testing, physical albedo only. Subsurface rrs relative error:
+
+| Coefficients (g0 g1 c0 c1 b0 b1) | train median / p95 | turbid (held out) median / p95 / bias |
+|---|---|---|
+| Lee: 0.084 0.170 1.03 2.4 1.04 5.4 | 1.91% / 5.94% | 3.12% / 7.78% / +1.84% |
+| free fit: 0.083 0.149 2.95 7.2 1.01 8.3 (c0, c1 at their bounds) | 1.16% / 4.69% | 2.67% / 6.97% / −0.23% |
+| rrs_dp and D_uB only: 0.083 0.147 1.03 2.4 1.024 5.25 | 1.55% / 5.33% | 2.83% / 7.48% / −0.46% |
+| all within ×0.5–2: 0.083 0.147 2.06 4.8 1.015 7.30 | 1.30% / 5.02% | 2.81% / 7.27% / −0.40% |
+
+Lee's bias by κH (+1.6 to +2.0% at κH 1–8) is removed by the refits. **The effect on depth is small.** On Phase A OSOAA pixels, noise-free:
+- moderate 5–10 m: bias +2.76 → +2.58 m (constrained fit) or +2.32 m (×0.5–2 fit);
+- clear 10–30 m: bias +3.4 to +3.8 m, almost unchanged.
+
+The free fit pushes the water-column elongation (c0) to about 3, which is not physical. **Decision:** not adopted. Lee's coefficients stay the default; the refits stay available through the macros. The remaining depth bias is not mainly from Lee's coefficients.
 
 ### Phase B order (from Phase A)
 

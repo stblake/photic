@@ -125,6 +125,19 @@
 #define DEEP_PENALTY 2.0
 #endif
 
+// Coefficients of Lee's shallow-water model (Lee et al. 1998, 1999), fitted to Hydrolight:
+// rrs_dp = (G0 + G1 u) u; D_uC = C0 sqrt(1 + C1 u); D_uB = B0 sqrt(1 + B1 u). EXPERIMENTS.md B10
+// refits them to exact radiative transfer (OSOAA).
+
+#ifndef LEE_G0
+#define LEE_G0 0.084
+#define LEE_G1 0.170
+#define LEE_C0 1.03
+#define LEE_C1 2.4
+#define LEE_B0 1.04
+#define LEE_B1 5.4
+#endif
+
 #ifndef Y_MODEL
 #define Y_MODEL 0
 #endif
@@ -1850,15 +1863,28 @@ int samodel_n_params(model_data *md) {
 
 void samodel_bounds(model_data *md, double *lo, double *hi) {
 
-	int k, k_scene, n_regions = md->n_regions, offset = md->n_regions*(1 + md->n_bottoms);
+	int k, k_scene, k_band, k_bottom, n_regions = md->n_regions, offset = md->n_regions*(1 + md->n_bottoms);
+	double shape_max;
 
 	for (k = 0; k < n_regions; k++) {
 		lo[k] = H_MIN;
 		hi[k] = H_MAX;
 	}
-	for (k = n_regions; k < offset; k++) {
-		lo[k] = 0.0;
-		hi[k] = 1.0;
+	// A bottom type's albedo is bounded so that its reflectance B_k rho_k(lambda) is at most 1 at
+	// every fitted band: the tabulated shapes are normalised near 550 nm, and the red edge of
+	// seagrass and coral exceeds 1 (3.3 and 2.9 at 705 nm).
+
+	for (k_bottom = 0; k_bottom < md->n_bottoms; k_bottom++) {
+		shape_max = 1.0;
+		for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+			for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
+				shape_max = MAX(shape_max, md->bottom_reflectance[md->bottom_type_indexes[k_bottom]][k_scene][k_band]);
+			}
+		}
+		for (k = 0; k < n_regions; k++) {
+			lo[n_regions + k*md->n_bottoms + k_bottom] = 0.0;
+			hi[n_regions + k*md->n_bottoms + k_bottom] = 1.0/shape_max;
+		}
 	}
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 		lo[offset + N_WATER*k_scene]     = log(P_MIN);
@@ -3182,7 +3208,7 @@ static double deep_rrs(int k, double lambda, double P, double G, double X, doubl
 	a  = a_w[k] + (a_0[k] + a_1[k]*log(P))*P + G*exp(-S*(lambda - 440.0));
 	bb = b_bw[k] + X*pow(440.0/lambda, Y);
 	u  = bb/(a + bb);
-	return (0.084 + 0.170*u)*u;
+	return (LEE_G0 + LEE_G1*u)*u;
 }
 
 double samodel_water_Y(double P, double G, double X) {
@@ -3304,14 +3330,14 @@ void samodel_Rrs(
 
 	// Compute rrs_dp - the remote sensing reflectance for optically deep water.
 
-	rrs_dp = (0.084 + 0.170*u)*u;
+	rrs_dp = (LEE_G0 + LEE_G1*u)*u;
 
 	md->rrs_dp[k_region][k_scene][k_band] = rrs_dp;
 
 	// Compute the optical path elongation factors for scattered photons.
 
-	DuC = 1.03*sqrt(1.0 + 2.4*u); // Water column. 
-	DuB = 1.04*sqrt(1.0 + 5.4*u); // Bottom. 
+	DuC = LEE_C0*sqrt(1.0 + LEE_C1*u); // Water column. 
+	DuB = LEE_B0*sqrt(1.0 + LEE_B1*u); // Bottom. 
 
 	// Compute rrs. 
 
