@@ -253,6 +253,35 @@ The deep-water fit recovers P, G and X within about 5–40% and Y within about 3
 - **Without noise it is mixed.** The joint fit can bend the water to absorb the forward model's own error, while fixed water pushes that error into depth. In clear water the deep-water fit's P/G split (G 0.013 against 0.02) costs it the ceiling's gain.
 - **Caveat:** tier 3 is the best case, with uniform water and a deep reference of the same water. Real lagoons can differ, hence step 3, a water shared over a tile within a scene and fitted with its pixels.
 
+### Decoupling, step 3: water shared over a tile (2026-10-13, `tile_fit.py`, negative on tier 3)
+
+**Method.** Per 8×8-pixel tile and per scene, one water (ln P, ln G, ln X, Y). The fit alternates two steps:
+- **pixel step:** water fixed, each pixel fits depth and bottom in its 3×3 window, as photic;
+- **water step:** depths and bottoms fixed, the tile's water is fitted to all 64 pixels.
+
+Round 1 from the deep-water water reproduces decouple.py's deep result exactly. Realistic bottoms, noise 0.0005, RMSE (mean misfit):
+
+| | 2–5 m | 5–10 m | 10–15 m | misfit |
+|---|---|---|---|---|
+| clear: deep-water water, fixed | 0.35 | **1.22** | **1.63** | 7.40% |
+| clear: … then refitted on the tile (3 rounds) | 0.34 | 1.71 | 1.98 | 7.26% |
+| clear: tile fit from photic's starting water (4 rounds) | 1.60 | 3.00 | 6.06 | 11.95% |
+| moderate: deep-water water, fixed | **1.00** | **1.77** | **5.23** | 7.50% |
+| moderate: … then refitted on the tile | 1.63 | 2.68 | 6.77 | 7.03% |
+
+- **Refitting the water to the shallow pixels lowers the misfit but worsens depth.** The water bends to absorb the forward model's own 2–3% error (tier 2), and the depths pay.
+- **The deep-water fit never sees the bottom term, so its water stays closer to the truth.**
+- **From photic's bottom-contaminated starting water, the alternation stalls in a poor state.** Restricting the water step to pixels fitted shallower than 8 m made no difference.
+- **Decision:**
+  - prefer water from a deep-water reference when one exists (step 2);
+  - otherwise keep the joint fit;
+  - do not adopt the tile-shared water.
+- **Before revisiting it:**
+  - a forward model with smaller structural error (the root cause);
+  - a water prior towards the deep-water estimate rather than a free refit;
+  - a joint solver (Schur complement, as in bundle adjustment) instead of alternation;
+  - and judge it on tier 4, where the water really varies.
+
 ### Physics constraints (planned 2026-10-13)
 
 Each enters the LM fit as a bound or a weighted residual (a soft prior, weight 1/σ), and is switchable. Each is tested alone: Phase A pixels with noise, then tier 3 by depth bin, then tier 4 held-out sites. Any σ is tuned on the training split only.
