@@ -25,6 +25,8 @@
 //       table and no carry-over from a previous pixel. h_empirical < 0 means no prior
 //       (h_empirical is then 0, as with a fresh allocation). Prints depth, albedo, K_min,
 //       errors, P, G, X per scene and the bottom type percentages.
+//   LM p_1 .. p_m  f_1 .. f_m
+//       bounded Levenberg-Marquardt (samodel_lm) from p; f_i = 0 holds parameter i fixed.
 //   START h [albedo]
 //       photic's starting vector and steps for depth h (samodel_initial).
 //   PACK H.. albedo.. q.. P G X..
@@ -264,6 +266,23 @@ int main(void) {
       printf("depths");
       for (i = 0; i < n_regions; i++) printf(" %.10g", samodel_depth(lab_full, i));
       printf("\n");
+      print_errors(md);
+
+    } else if (strcmp(word, "LM") == 0) {
+
+      // Bounded Levenberg-Marquardt (samodel_lm) from p over the parameters with f != 0.
+
+      int n_eval;
+      if (! read_doubles(&s, v, n_params) || ! read_doubles(&s, step, n_params)) { printf("ERROR: bad LM\n"); continue; }
+      md->n_bottoms = n_bottoms;
+      md->n_params = n_params;
+      error = samodel_lm(md, v, step, 100, 1.0e-8, &n_eval);
+      printf("LM rrs_error %.10g evaluations %d\nparams", error, n_eval);
+      for (i = 0; i < n_params; i++) printf(" %.10g", v[i]);
+      printf("\ndepths");
+      for (i = 0; i < n_regions; i++) printf(" %.10g", samodel_depth(v, i));
+      printf("\n");
+      samodel_error(v, md);
       print_errors(md);
 
     } else if (strcmp(word, "START") == 0) {

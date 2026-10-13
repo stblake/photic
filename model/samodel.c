@@ -1791,67 +1791,66 @@ min/mean/max min(K) = %.4f %.4f %.4f\n",
 
 
 
-// The parameter vector. Nelder-Mead searches transformed values, which bounds the physical
-// parameters:
+// The parameter vector, each element within a box (samodel_bounds):
 //
-//   [H (n_regions) | albedo (n_regions) | mixing (n_regions*(n_bottoms - 1)) | P, G, X per scene]
+//   [H (n_regions) | B (n_regions*n_bottoms) | ln P, ln G, ln X per scene]
 //
-// H is log-uniform in [H_MIN, H_MAX] through a logistic; albedo = logistic(z) in (0, 1); the bottom-type fractions q are a softmax of
-// (0, z_1, .., z_{n_bottoms-1}); P, G and X are log-uniform between their bounds through
-// a logistic.
+// H is depth (m) in [H_MIN, H_MAX]. B_k in [0, 1] is the albedo of bottom type k in the
+// region, so the bottom reflectance is the linear mixture sum_k B_k rho_k(lambda); a pure
+// bottom lies on the bounds. The region's albedo is sum_k B_k and its fractions are
+// B_k/sum_k B_k. P, G and X lie within their bounds. Values are clamped to the box when
+// unpacked.
+
+static double clamp(double v, double lo, double hi) {
+	return v < lo ? lo : (v > hi ? hi : v);
+}
 
 int samodel_n_params(model_data *md) {
 	return md->n_regions*(1 + md->n_bottoms) + 3*md->n_scenes;
 }
 
-static double to_bounded(double z, double lo, double hi);
+void samodel_bounds(model_data *md, double *lo, double *hi) {
+
+	int k, k_scene, n_regions = md->n_regions, offset = md->n_regions*(1 + md->n_bottoms);
+
+	for (k = 0; k < n_regions; k++) {
+		lo[k] = H_MIN;
+		hi[k] = H_MAX;
+	}
+	for (k = n_regions; k < offset; k++) {
+		lo[k] = 0.0;
+		hi[k] = 1.0;
+	}
+	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+		lo[offset + 3*k_scene]     = log(P_MIN);
+		hi[offset + 3*k_scene]     = log(P_MAX);
+		lo[offset + 3*k_scene + 1] = log(G_MIN);
+		hi[offset + 3*k_scene + 1] = log(G_MAX);
+		lo[offset + 3*k_scene + 2] = log(X_MIN);
+		hi[offset + 3*k_scene + 2] = log(X_MAX);
+	}
+}
 
 double samodel_depth(double *params, int k_region) {
-	return to_bounded(params[k_region], H_MIN, H_MAX);
-}
-
-static double logistic(double z) {
-	return 1.0/(1.0 + exp(-z));
-}
-
-static double logit(double p) {
-	if (p < 1.0e-9) p = 1.0e-9;
-	if (p > 1.0 - 1.0e-9) p = 1.0 - 1.0e-9;
-	return log(p/(1.0 - p));
-}
-
-static double to_bounded(double z, double lo, double hi) {
-	return lo*pow(hi/lo, logistic(z));
-}
-
-static double from_bounded(double v, double lo, double hi) {
-	if (v < lo) v = lo;
-	if (v > hi) v = hi;
-	return logit(log(v/lo)/log(hi/lo));
+	return clamp(params[k_region], H_MIN, H_MAX);
 }
 
 void samodel_unpack_region(double *params, model_data *md, int k_region, double *H, double *albedo, double q[]) {
 
-	int k, n_regions = md->n_regions, n_bottoms = md->n_bottoms;
-	double z, z_max, sum;
+	int k, n_bottoms = md->n_bottoms;
+	double sum;
 
 	*H = samodel_depth(params, k_region);
-	*albedo = logistic(params[n_regions + k_region]);
 
-	z_max = 0.0;
-	for (k = 1; k < n_bottoms; k++) {
-		z = params[2*n_regions + k_region*(n_bottoms - 1) + k - 1];
-		if (z > z_max) z_max = z;
-	}
-
-	q[0] = exp(-z_max);
-	sum = q[0];
-	for (k = 1; k < n_bottoms; k++) {
-		q[k] = exp(params[2*n_regions + k_region*(n_bottoms - 1) + k - 1] - z_max);
+	sum = 0.0;
+	for (k = 0; k < n_bottoms; k++) {
+		q[k] = clamp(params[md->n_regions + k_region*n_bottoms + k], 0.0, 1.0);
 		sum += q[k];
 	}
+	*albedo = sum;
+
 	for (k = 0; k < n_bottoms; k++) {
-		q[k] /= sum;
+		q[k] = sum > 0.0 ? q[k]/sum : 1.0/n_bottoms;
 	}
 }
 
@@ -1859,9 +1858,9 @@ void samodel_unpack_scene(double *params, model_data *md, int k_scene, double *P
 
 	int offset = md->n_regions*(1 + md->n_bottoms);
 
-	*P = to_bounded(params[offset + 3*k_scene], P_MIN, P_MAX);
-	*G = to_bounded(params[offset + 3*k_scene + 1], G_MIN, G_MAX);
-	*X = to_bounded(params[offset + 3*k_scene + 2], X_MIN, X_MAX);
+	*P = exp(clamp(params[offset + 3*k_scene],     log(P_MIN), log(P_MAX)));
+	*G = exp(clamp(params[offset + 3*k_scene + 1], log(G_MIN), log(G_MAX)));
+	*X = exp(clamp(params[offset + 3*k_scene + 2], log(X_MIN), log(X_MAX)));
 }
 
 // Pack physical values into a parameter vector. q holds n_bottoms fractions per region.
@@ -1871,32 +1870,28 @@ void samodel_pack(model_data *md, double *H, double *albedo, double *q, double *
 
 	int k_region, k_scene, k, n_regions = md->n_regions, n_bottoms = md->n_bottoms,
 		offset = md->n_regions*(1 + md->n_bottoms);
-	double q0;
-
 	for (k_region = 0; k_region < n_regions; k_region++) {
-		params[k_region] = from_bounded(H[k_region], H_MIN, H_MAX);
-		params[n_regions + k_region] = logit(albedo[k_region]);
-		q0 = MAX(q[k_region*n_bottoms], 1.0e-9);
-		for (k = 1; k < n_bottoms; k++) {
-			params[2*n_regions + k_region*(n_bottoms - 1) + k - 1] = log(MAX(q[k_region*n_bottoms + k], 1.0e-9)/q0);
+		params[k_region] = clamp(H[k_region], H_MIN, H_MAX);
+		for (k = 0; k < n_bottoms; k++) {
+			params[n_regions + k_region*n_bottoms + k] = clamp(albedo[k_region]*q[k_region*n_bottoms + k], 0.0, 1.0);
 		}
 	}
 
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
-		params[offset + 3*k_scene]     = from_bounded(P[k_scene], P_MIN, P_MAX);
-		params[offset + 3*k_scene + 1] = from_bounded(G[k_scene], G_MIN, G_MAX);
-		params[offset + 3*k_scene + 2] = from_bounded(X[k_scene], X_MIN, X_MAX);
+		params[offset + 3*k_scene]     = log(clamp(P[k_scene], P_MIN, P_MAX));
+		params[offset + 3*k_scene + 1] = log(clamp(G[k_scene], G_MIN, G_MAX));
+		params[offset + 3*k_scene + 2] = log(clamp(X[k_scene], X_MIN, X_MAX));
 	}
 }
 
-// Starting point and Nelder-Mead steps for depth h and bottom albedo: equal bottom fractions,
-// and P, G, X estimated from each scene's mean Rrs(490), Rrs(550) and Rrs(640). Requires
-// md->Rrs490, Rrs550 and Rrs640 (set in samodel_optimise).
+// Starting point for depth h and bottom albedo: equal bottom fractions, and P, G, X estimated
+// from each scene's mean Rrs(490), Rrs(550) and Rrs(640). is_free[i] is set non-zero for every
+// parameter (callers clear the ones they hold fixed). Requires md->Rrs490, Rrs550 and
+// Rrs640 (set in samodel_optimise).
 
-void samodel_initial(model_data *md, double h, double albedo, double *start, double *step) {
+void samodel_initial(model_data *md, double h, double albedo, double *start, double *is_free) {
 
-	int k_region, k_scene, k, n_regions = md->n_regions, n_bottoms = md->n_bottoms,
-		offset = md->n_regions*(1 + md->n_bottoms);
+	int k_region, k_scene, k, n_regions = md->n_regions, n_bottoms = md->n_bottoms;
 	double *H, *A, *q, P[MAX_SCENES], G[MAX_SCENES], X[MAX_SCENES], mean_Rrs490, mean_Rrs550, mean_Rrs640;
 
 	H = malloc(n_regions*sizeof(double));
@@ -1935,16 +1930,344 @@ void samodel_initial(model_data *md, double h, double albedo, double *start, dou
 	free(A);
 	free(q);
 
-	for (k_region = 0; k_region < n_regions; k_region++) {
-		step[k_region] = 0.5;
-		step[n_regions + k_region] = 1.0;
-		for (k = 1; k < n_bottoms; k++) {
-			step[2*n_regions + k_region*(n_bottoms - 1) + k - 1] = 1.0;
+	for (k = 0; k < samodel_n_params(md); k++) {
+		is_free[k] = 1.0;
+	}
+}
+
+// Residuals of the modelled Rrs, scaled so that their sum of squares is the square of the
+// Rrs error in samodel_error (the RMS difference as a percentage of the mean measured Rrs).
+// Residuals are ordered by region, then scene, then band. Returns the number of residuals
+// (n_regions*sum(n_bands)).
+
+static int residuals_per_region(model_data *md) {
+	int k_scene, n = 0;
+	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) n += md->n_bands[k_scene];
+	return n;
+}
+
+static double residual_scale(model_data *md) {
+	int k_region, k_scene, k_band, n = 0;
+	double mean = 0.0;
+	for (k_region = 0; k_region < md->n_regions; k_region++) {
+		for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+			for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
+				mean += md->Rrs_measured[k_region][k_scene][k_band];
+				n++;
+			}
 		}
 	}
-	for (k = 0; k < 3*md->n_scenes; k++) {
-		step[offset + k] = 1.0;
+	mean /= (double) n;
+	return 100.0/(mean*sqrt((double) n));
+}
+
+// The residuals of one region, written to r (residuals_per_region values).
+
+static void region_residuals(double *params, model_data *md, int k_region, double scale, double *r) {
+
+	int k_scene, k_band, k_bottom, n = 0;
+	double P, G, X, H, albedo, B[MAX_BOTTOMS], q[MAX_BOTTOMS];
+
+	samodel_unpack_region(params, md, k_region, &H, &albedo, q);
+	for (k_bottom = 0; k_bottom < md->n_bottoms; k_bottom++) {
+		B[k_bottom] = albedo;
 	}
+
+	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+		samodel_unpack_scene(params, md, k_scene, &P, &G, &X);
+		for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
+			samodel_Rrs(P, G, X, B, q, H, 0.0, md, k_scene, k_band, k_region);
+			r[n++] = scale*(md->Rrs_modelled[k_region][k_scene][k_band] - md->Rrs_measured[k_region][k_scene][k_band]);
+		}
+	}
+}
+
+int samodel_residuals(double *params, model_data *md, double *r) {
+
+	int k_region, n_region = residuals_per_region(md);
+	double scale = residual_scale(md);
+
+	for (k_region = 0; k_region < md->n_regions; k_region++) {
+		region_residuals(params, md, k_region, scale, &r[k_region*n_region]);
+	}
+
+	return md->n_regions*n_region;
+}
+
+// Bounded Levenberg-Marquardt on samodel_residuals, over the parameters with is_free[i] != 0
+// (the others are held at their values in x). The Jacobian is by forward differences, taken
+// inwards at the bounds. Steps are projected onto the box, and a parameter at a bound whose
+// gradient points out of the box is held there for that iteration. Damping is Marquardt's
+// (scaled by the diagonal of J'J). On return x holds the solution; returns the Rrs error
+// (the root sum of squares of the residuals) and the number of residual evaluations. Stops
+// after max_iterations, or when the relative fall in the cost is below ftol.
+
+static int cholesky_solve(double *A, double *b, int n) {
+
+	// Solves A y = b in place (y in b) for symmetric positive definite A; A is overwritten.
+
+	int i, j, k;
+	double s;
+
+	for (j = 0; j < n; j++) {
+		s = A[j*n + j];
+		for (k = 0; k < j; k++) s -= A[j*n + k]*A[j*n + k];
+		if (s <= 0.0) return 0;
+		A[j*n + j] = sqrt(s);
+		for (i = j + 1; i < n; i++) {
+			s = A[i*n + j];
+			for (k = 0; k < j; k++) s -= A[i*n + k]*A[j*n + k];
+			A[i*n + j] = s/A[j*n + j];
+		}
+	}
+	for (i = 0; i < n; i++) {
+		s = b[i];
+		for (k = 0; k < i; k++) s -= A[i*n + k]*b[k];
+		b[i] = s/A[i*n + i];
+	}
+	for (i = n - 1; i >= 0; i--) {
+		s = b[i];
+		for (k = i + 1; k < n; k++) s -= A[k*n + i]*b[k];
+		b[i] = s/A[i*n + i];
+	}
+	return 1;
+}
+
+double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations, double ftol,
+	int *n_evaluations) {
+
+	int i, j, k, m, n, n_free, iteration, accepted, pass, solved, new_bounds, *index, *active, *bound,
+		n_region, offset, k_region;
+	double *lo, *hi, *r, *r_new, *J, *JTJ, *A, *g, *delta, *x_new, *diag,
+		cost, cost_new, lambda, nu, h, step_norm, x_norm, predicted, gain, *fixed_step, scale;
+
+	n = samodel_n_params(md);
+	n_region = residuals_per_region(md);
+	m = md->n_regions*n_region;
+	scale = residual_scale(md);
+	offset = md->n_regions*(1 + md->n_bottoms);
+
+	lo     = malloc(n*sizeof(double));
+	hi     = malloc(n*sizeof(double));
+	index  = malloc(n*sizeof(int));
+	active = malloc(n*sizeof(int));
+	r      = malloc(m*sizeof(double));
+	r_new  = malloc(m*sizeof(double));
+	J      = malloc(m*n*sizeof(double));
+	JTJ    = malloc(n*n*sizeof(double));
+	A      = malloc(n*n*sizeof(double));
+	g      = malloc(n*sizeof(double));
+	delta  = malloc(n*sizeof(double));
+	diag   = malloc(n*sizeof(double));
+	x_new  = malloc(n*sizeof(double));
+	bound  = malloc(n*sizeof(int));
+	fixed_step = malloc(n*sizeof(double));
+
+	samodel_bounds(md, lo, hi);
+
+	n_free = 0;
+	for (i = 0; i < n; i++) {
+		x[i] = clamp(x[i], lo[i], hi[i]);
+		if (is_free[i] != 0.0) index[n_free++] = i;
+	}
+
+	samodel_residuals(x, md, r);
+	*n_evaluations = 1;
+	cost = 0.0;
+	for (k = 0; k < m; k++) cost += r[k]*r[k];
+
+	lambda = 1.0e-3;
+	nu = 2.0;
+
+	for (iteration = 0; iteration < max_iterations && n_free > 0; iteration++) {
+
+		// Jacobian of the free parameters (column j of J is parameter index[j]). A region's
+		// depth and bottom albedos affect only that region's residuals, so only that region is
+		// re-evaluated; the water parameters affect every region.
+
+		copy_double_vec(x, x_new, n);
+		for (j = 0; j < n_free; j++) {
+			i = index[j];
+			h = 1.0e-6*MAX(fabs(x[i]), 1.0);
+			if (x[i] + h > hi[i]) h = -h;
+			x_new[i] = x[i] + h;
+			if (i < offset) {
+				k_region = i < md->n_regions ? i : (i - md->n_regions)/md->n_bottoms;
+				for (k = 0; k < m; k++) J[k*n_free + j] = 0.0;
+				region_residuals(x_new, md, k_region, scale, &r_new[k_region*n_region]);
+				for (k = k_region*n_region; k < (k_region + 1)*n_region; k++) {
+					J[k*n_free + j] = (r_new[k] - r[k])/h;
+				}
+			} else {
+				samodel_residuals(x_new, md, r_new);
+				for (k = 0; k < m; k++) J[k*n_free + j] = (r_new[k] - r[k])/h;
+			}
+			(*n_evaluations)++;
+			x_new[i] = x[i];
+		}
+
+		// Gradient J'r and J'J.
+
+		for (j = 0; j < n_free; j++) {
+			g[j] = 0.0;
+			for (k = 0; k < m; k++) g[j] += J[k*n_free + j]*r[k];
+			for (i = 0; i <= j; i++) {
+				JTJ[j*n_free + i] = 0.0;
+				for (k = 0; k < m; k++) JTJ[j*n_free + i] += J[k*n_free + j]*J[k*n_free + i];
+				JTJ[i*n_free + j] = JTJ[j*n_free + i];
+			}
+			diag[j] = MAX(JTJ[j*n_free + j], 1.0e-12);
+		}
+
+		// Hold parameters at a bound whose descent direction (-g) points out of the box.
+
+		for (j = 0; j < n_free; j++) {
+			i = index[j];
+			active[j] = (x[i] <= lo[i] && g[j] > 0.0) || (x[i] >= hi[i] && g[j] < 0.0);
+		}
+
+		// Try damped steps until the cost falls.
+
+		accepted = 0;
+		while (lambda < 1.0e12) {
+
+			// Solve the damped system for the free parameters. Any parameter the step would take
+			// out of the box is put on its bound and held there, and the rest are solved again
+			// (bound[j]: 0 free, -1 at its lower bound, +1 at its upper bound, 2 held by the
+			// gradient test above).
+
+			for (j = 0; j < n_free; j++) {
+				bound[j] = active[j] ? 2 : 0;
+			}
+
+			solved = 1;
+			for (pass = 0; pass <= n_free; pass++) {
+
+				for (j = 0; j < n_free; j++) {
+					i = index[j];
+					fixed_step[j] = bound[j] == -1 ? lo[i] - x[i] : (bound[j] == 1 ? hi[i] - x[i] : 0.0);
+				}
+
+				for (j = 0; j < n_free; j++) {
+					for (i = 0; i < n_free; i++) {
+						A[j*n_free + i] = (bound[j] || bound[i]) ? 0.0 : JTJ[j*n_free + i];
+					}
+					if (bound[j]) {
+						A[j*n_free + j] = 1.0;
+						delta[j] = 0.0;
+					} else {
+						A[j*n_free + j] = JTJ[j*n_free + j] + lambda*diag[j];
+						delta[j] = -g[j];
+						for (i = 0; i < n_free; i++) {
+							if (bound[i]) delta[j] -= JTJ[j*n_free + i]*fixed_step[i];
+						}
+					}
+				}
+
+				if (! cholesky_solve(A, delta, n_free)) {
+					solved = 0;
+					break ;
+				}
+
+				for (j = 0; j < n_free; j++) {
+					if (bound[j]) delta[j] = fixed_step[j];
+				}
+
+				new_bounds = 0;
+				for (j = 0; j < n_free; j++) {
+					i = index[j];
+					if (! bound[j] && x[i] + delta[j] < lo[i]) {
+						bound[j] = -1;
+						new_bounds++;
+					} else if (! bound[j] && x[i] + delta[j] > hi[i]) {
+						bound[j] = 1;
+						new_bounds++;
+					}
+				}
+				if (new_bounds == 0) break ;
+			}
+
+			if (! solved) {
+				lambda *= nu;
+				nu *= 2.0;
+				continue ;
+			}
+
+			copy_double_vec(x, x_new, n);
+			step_norm = 0.0;
+			x_norm = 0.0;
+			for (j = 0; j < n_free; j++) {
+				i = index[j];
+				x_new[i] = clamp(x[i] + delta[j], lo[i], hi[i]);
+				delta[j] = x_new[i] - x[i]; // The projected step.
+				step_norm += delta[j]*delta[j];
+				x_norm += x[i]*x[i];
+			}
+
+			// Reduction predicted by the linear model for the projected step:
+			// -(2 g'd + d'J'Jd).
+
+			predicted = 0.0;
+			for (j = 0; j < n_free; j++) {
+				h = 0.0;
+				for (i = 0; i < n_free; i++) h += JTJ[j*n_free + i]*delta[i];
+				predicted -= 2.0*g[j]*delta[j] + delta[j]*h;
+			}
+
+			samodel_residuals(x_new, md, r_new);
+			(*n_evaluations)++;
+			cost_new = 0.0;
+			for (k = 0; k < m; k++) cost_new += r_new[k]*r_new[k];
+
+			if (cost_new < cost) {
+				accepted = 1;
+				break ;
+			}
+			lambda *= nu;
+			nu *= 2.0;
+			if (sqrt(step_norm) < 1.0e-10*(sqrt(x_norm) + 1.0e-10)) break ;
+		}
+
+		if (! accepted) break ;
+
+		// Nielsen's update of the damping from the gain ratio.
+
+		gain = predicted > 0.0 ? (cost - cost_new)/predicted : 0.0;
+		lambda *= MAX(1.0/3.0, 1.0 - pow(2.0*gain - 1.0, 3.0));
+		lambda = MAX(lambda, 1.0e-12);
+		nu = 2.0;
+
+		copy_double_vec(x_new, x, n);
+		copy_double_vec(r_new, r, m);
+
+		// Converged: the cost is negligible, has stopped falling (relative change below ftol)
+		// or the step is negligible.
+
+		if (cost_new < 1.0e-12 || cost - cost_new < ftol*cost ||
+				sqrt(step_norm) < 1.0e-8*(sqrt(x_norm) + 1.0e-8)) {
+			cost = cost_new;
+			break ;
+		}
+		cost = cost_new;
+	}
+
+	free(lo);
+	free(hi);
+	free(index);
+	free(active);
+	free(r);
+	free(r_new);
+	free(J);
+	free(JTJ);
+	free(A);
+	free(g);
+	free(delta);
+	free(diag);
+	free(x_new);
+	free(bound);
+	free(fixed_step);
+
+	return sqrt(cost);
 }
 
 
@@ -2224,65 +2547,8 @@ void samodel_optimise(model_data *md) {
 
 
 
-// Nelder-Mead over a subset of the parameters, the rest held fixed. The fixed values and the
-// mapping live in file-scope state, so this is not thread-safe (nor is samodel(); see CLAUDE.md).
-
-static model_data *subset_md;
-static double *subset_full;
-static int *subset_index, subset_n;
-
-static double samodel_subset_error(double *x, model_data *md) {
-	int i;
-	for (i = 0; i < subset_n; i++) {
-		subset_full[subset_index[i]] = x[i];
-	}
-	return samodel_error(subset_full, subset_md);
-}
-
-// Minimise from start over the parameters with a non-zero step; the result is written back to
-// start. Returns the error, and the number of evaluations and the fault code through the
-// pointers.
-
-static double samodel_minimise(model_data *md, double *start, double *step, double reqmin,
-	int kcount, int *icount, int *ifault) {
-
-	int i, n = md->n_params, konvge = 100, numres = 0;
-	double error, *x, *xstep, *xmin;
-
-	x = malloc(n*sizeof(double));
-	xstep = malloc(n*sizeof(double));
-	xmin = malloc(n*sizeof(double));
-	subset_index = malloc(n*sizeof(int));
-	subset_full = start;
-	subset_md = md;
-	subset_n = 0;
-
-	for (i = 0; i < n; i++) {
-		if (step[i] != 0.0) {
-			x[subset_n] = start[i];
-			xstep[subset_n] = step[i];
-			subset_index[subset_n++] = i;
-		}
-	}
-
-	*icount = 0;
-	*ifault = 0;
-	nelmin(samodel_subset_error, md, subset_n, x, xmin, &error, reqmin, xstep, konvge, kcount,
-		icount, &numres, ifault);
-
-	for (i = 0; i < subset_n; i++) {
-		start[subset_index[i]] = xmin[i];
-	}
-
-	free(x);
-	free(xstep);
-	free(xmin);
-	free(subset_index);
-
-	return samodel_error(start, md);
-}
-
-// Search for the best parameters for one combination of bottom types.
+// Search for the best parameters for one combination of bottom types, by bounded
+// Levenberg-Marquardt (samodel_lm) on the Rrs misfit.
 //
 // Without an empirical depth, the search is in two stages:
 //   1. Profile: at each depth on a coarse grid, hold every regional depth there and fit the
@@ -2293,26 +2559,28 @@ static double samodel_minimise(model_data *md, double *start, double *step, doub
 
 #define N_REFINE 2
 
+// Levenberg-Marquardt limits: the profile only ranks depths, so it stops earlier.
+
+#define LM_PROFILE_ITERATIONS 30
+#define LM_PROFILE_FTOL 1.0e-4
+#define LM_ITERATIONS 100
+#define LM_FTOL 1.0e-8
+
 void samodel_optimise_one_bottom_combination(model_data *md, double *params) { 
 
-	int i, k, k_h, n_h, offset, icount, ifault, total_count, order[N_REFINE];
-	double error, lowest_error, *start, *step, *best, *profile, profile_error[N_REFINE];
+	int i, k, k_h, n_h, offset, n_eval, total_count;
+	double error, lowest_error, *start, *is_free, *best, *profile, profile_error[N_REFINE];
 
 	double H_grid[] = {0.5, 1.0, 2.0, 3.5, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0};
 	int n_grid = sizeof(H_grid)/sizeof(H_grid[0]);
 	double H_refine[N_REFINE];
-
-	// Nelder-Mead budgets: termination variance and maximum evaluations.
-
-	double reqmin_profile = 1.0e-4, reqmin_refine = 1.0e-6;
-	int kcount_profile = 2000, kcount_refine = 5000;
 
 #if DEBUG
 	printf("\nENTER samodel_optimise_one_bottom_combination\n");
 #endif
 
 	start   = malloc(md->n_params*sizeof(double));
-	step    = malloc(md->n_params*sizeof(double));
+	is_free = malloc(md->n_params*sizeof(double));
 	best    = malloc(md->n_params*sizeof(double));
 	profile = malloc(N_REFINE*md->n_params*sizeof(double));
 	offset  = md->n_regions*(1 + md->n_bottoms);
@@ -2322,27 +2590,31 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 
 	for (k = 0; k < N_REFINE; k++) {
 		profile_error[k] = 1.0e30;
-		order[k] = k;
 	}
 
 	if (md->empirical_depth_present) {
 		n_h = 1;
 		H_refine[0] = md->h_empirical;
-		samodel_initial(md, md->h_empirical, ALBEDO_START, profile, step);
+		samodel_initial(md, md->h_empirical, ALBEDO_START, profile, is_free);
+		if (md->start_at_previous) {
+			for (i = 0; i < 3*md->n_scenes; i++) {
+				profile[offset + i] = md->prev[i];
+			}
+		}
 		profile_error[0] = 0.0;
 	} else {
 		for (k_h = 0; k_h < n_grid; k_h++) {
-			samodel_initial(md, H_grid[k_h], ALBEDO_START, start, step);
+			samodel_initial(md, H_grid[k_h], ALBEDO_START, start, is_free);
 			if (md->start_at_previous) {
 				for (i = 0; i < 3*md->n_scenes; i++) {
 					start[offset + i] = md->prev[i];
 				}
 			}
 			for (i = 0; i < md->n_regions; i++) {
-				step[i] = 0.0;
+				is_free[i] = 0.0;
 			}
-			error = samodel_minimise(md, start, step, reqmin_profile, kcount_profile, &icount, &ifault);
-			total_count += icount;
+			error = samodel_lm(md, start, is_free, LM_PROFILE_ITERATIONS, LM_PROFILE_FTOL, &n_eval);
+			total_count += n_eval;
 
 			// Insert into the sorted list of the best depths.
 
@@ -2366,26 +2638,24 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 	// Stage 2: refine all parameters from the best depths.
 
 	lowest_error = 1.0e30;
+	copy_double_vec(profile, best, md->n_params);
 
 	for (k = 0; k < n_h; k++) {
 		if (profile_error[k] > 1.0e29) continue ;
-		samodel_initial(md, H_refine[k], ALBEDO_START, start, step);
 		copy_double_vec(&profile[k*md->n_params], start, md->n_params);
-		if (md->empirical_depth_present && md->start_at_previous) {
-			for (i = 0; i < 3*md->n_scenes; i++) {
-				start[offset + i] = md->prev[i];
-			}
+		for (i = 0; i < md->n_params; i++) {
+			is_free[i] = 1.0;
 		}
-		error = samodel_minimise(md, start, step, reqmin_refine, kcount_refine, &icount, &ifault);
-		total_count += icount;
+		error = samodel_lm(md, start, is_free, LM_ITERATIONS, LM_FTOL, &n_eval);
+		total_count += n_eval;
 		if (error < lowest_error) {
 			lowest_error = error;
 			copy_double_vec(start, best, md->n_params);
-			md->converged = (ifault == 0);
 		}
 	}
 
 	md->n_iterations = total_count;
+	md->converged = true;
 
 	// Recompute all model-derived data at the optimum. 
 
@@ -2396,7 +2666,7 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 	}
 
 	free(start);
-	free(step);
+	free(is_free);
 	free(best);
 	free(profile);
 

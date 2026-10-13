@@ -121,7 +121,7 @@ def lab(setup, commands):
             cur[w[0]] = [float(v) for v in w[1:]]
         elif w[0] == "Rrs_modelled":
             cur.setdefault("Rrs_modelled", []).append([float(v) for v in w[3:]])
-        elif w[0] in ("model_error", "NM", "PHOTIC"):
+        elif w[0] in ("model_error", "NM", "PHOTIC", "LM"):
             kv = w[1:] if w[0] != "model_error" else w
             for a, b in zip(kv[0::2], kv[1::2]):
                 cur[a] = float(b)

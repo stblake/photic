@@ -31,7 +31,14 @@ void samodel_unpack_scene(double *params, model_data *md, int k_scene, double *P
 void samodel_pack(model_data *md, double *H, double *albedo, double *q, double *P, double *G, double *X,
 	double *params);
 
-void samodel_initial(model_data *md, double h, double albedo, double *start, double *step);
+void samodel_initial(model_data *md, double h, double albedo, double *start, double *is_free);
+
+void samodel_bounds(model_data *md, double *lo, double *hi);
+
+int samodel_residuals(double *params, model_data *md, double *r);
+
+double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations, double ftol,
+	int *n_evaluations);
 
 void samodel_optimise_one_bottom_combination(model_data *md, double *params);
 
