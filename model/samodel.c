@@ -104,7 +104,9 @@
 //   1  self-consistent: QAA's Y = 2[1 - 1.2 exp(-0.9 rrs_dp(443)/rrs_dp(555))] from the
 //      model's own deep-water reflectance (no bottom contamination);
 //   2  self-consistent: Lee's chi relation applied to the model's rrs_dp(440)/rrs_dp(490);
-//   3  fitted per scene, in [Y_MIN, Y_MAX].
+//   3  fitted per scene, in [Y_MIN, Y_MAX];
+//   4  QAA's relation on the measured spectrum, rrs = Rrs/(0.52 + 1.7 Rrs) at 443 and 555 nm
+//      (Lee's own practice, in his HOPE spreadsheet).
 
 // Optically deep test (EXPERIMENTS.md C2): the bottom counts as detected only if the best fit
 // beats an optically deep fit (no bottom; the water re-fitted) by
@@ -3407,6 +3409,16 @@ void samodel_Rrs(
 	if (Y > 2.5) Y = 2.5;  
 #elif Y_MODEL == 3
 	Y = md->Y_scene[k_scene];
+#elif Y_MODEL == 4
+	{
+		double r443 = interp_1d(md->wavelengths[k_scene], md->Rrs_measured[k_region][k_scene], md->n_bands[k_scene], 443.0);
+		double r555 = interp_1d(md->wavelengths[k_scene], md->Rrs_measured[k_region][k_scene], md->n_bands[k_scene], 555.0);
+		r443 /= 0.52 + 1.7*r443;
+		r555 /= 0.52 + 1.7*r555;
+		Y = 2.0*(1.0 - 1.2*exp(-0.9*r443/r555));
+		if (Y < Y_MIN) Y = Y_MIN;
+		if (Y > Y_MAX) Y = Y_MAX;
+	}
 #else
 	Y = samodel_water_Y(P, G, X);
 #endif

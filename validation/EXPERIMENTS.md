@@ -184,7 +184,21 @@ Each enters the LM fit as a bound or a weighted residual (a soft prior, weight 1
   - subsurface rrs: median 1.91% vs 2.60% (clear and moderate), 3.12% vs 3.26% (turbid);
   - Rrs from rrs: 1.7% vs 6.3% (bias +1.5% vs +6.7%).
   - The 2002 set was fitted to Hydrolight with other surface and sky assumptions than OSOAA's black-sky, low-wind runs. Tier 4 decides on real data.
-- **Follow-up:** QAA's Y on the measured spectrum (Lee's own practice) as a `Y_MODEL` variant. It shares A-4's bottom contamination in shallow water.
+- **QAA's Y on the measured spectrum, Lee's own practice (`Y_MODEL 4`).** Tested against Y0 (photic now) and Y2 (self-consistent χ) on the OSOAA pixels, RMSE:
+
+| | Y0 | Y2 | Y4 |
+|---|---|---|---|
+| clear, no noise, 5–10 m | 1.70 | **0.59** | 0.98 |
+| clear, no noise, 10–15 m | 3.52 | **1.74** | 2.19 |
+| moderate, no noise, 5–10 m | 3.12 | **2.49** | 3.05 |
+| turbid, no noise, 2–5 m | 2.25 | **1.19** | 2.20 |
+| moderate + noise, 5–10 m | 2.74 | **1.91** | 2.29 |
+| turbid + noise, 2–5 m | 1.76 | 1.30 | **1.28** |
+| clear + noise, 5–10 m | 1.27 | 1.51 | **1.17** |
+
+- **Y2 is best overall.** Keeping the bottom out of the Y estimate halves the clear-water deep bias (10–15 m: +3.4 → +1.65 m), which explains part of the residual OSOAA bias.
+- **Lee's practice (Y4) sits between Y0 and Y2.**
+- **Decision:** benchmark Y2 as a second integrated candidate. Tier 3's control scenes are generated with Y0, so they will regress by construction; judge Y2 on the OSOAA scenarios and tier 4.
 
 ### Geometry constraints across scenes (planned 2026-10-13)
 
