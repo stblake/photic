@@ -304,6 +304,9 @@ float frand();
 float frand2(float max);
 float vec_mean2_double(double *vec, int len, double spval);
 bool commensurate_grids(geogrid a, geogrid b);
+bool grid_matches(int n, const char *name);
+bool grid_name_taken(int n, const char *name);
+void release_orphan_grids();
 
 #if PLOTTING
 extern int n_fn_evals;

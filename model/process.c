@@ -128,7 +128,7 @@ WINDOWSIZE /window size/ NSIGMA /n sigma threshold/ \n");
 // Check input grid is present. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps_in = n;
       break;
@@ -151,7 +151,7 @@ WINDOWSIZE /window size/ NSIGMA /n sigma threshold/ \n");
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[5]) == 0) {
+    if (grid_name_taken(n, parsed[5])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[5]);
       return ;
     }
@@ -421,7 +421,7 @@ void run_process_add() {
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps_in_1 = n;
       break;
@@ -436,7 +436,7 @@ void run_process_add() {
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[4]) == 0) {
+    if (grid_matches(n, parsed[4])) {
       present = true;
       ps_in_2 = n;
       break;
@@ -458,7 +458,7 @@ void run_process_add() {
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[6]) == 0) {
+    if (grid_name_taken(n, parsed[6])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[6]);
       return ;
     }
@@ -588,7 +588,7 @@ void run_process_relativeerror() {
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps_in = n;
       break;
@@ -611,7 +611,7 @@ ERROR /error grid name/ THRESHOLD /error thereshold/\n");
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[5]) == 0) {
+    if (grid_name_taken(n, parsed[5])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[5]);
       return ;
     }
@@ -645,7 +645,7 @@ ERROR /error grid name/ THRESHOLD /error thereshold/\n");
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[7]) == 0) {
+    if (grid_matches(n, parsed[7])) {
       present = true;
       ps_error = n;
       break;
@@ -745,7 +745,7 @@ ERROR /error grid name/ THRESHOLD /error thereshold/\n");
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps_in = n;
       break;
@@ -768,7 +768,7 @@ ERROR /error grid name/ THRESHOLD /error thereshold/\n");
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[5]) == 0) {
+    if (grid_name_taken(n, parsed[5])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[5]);
       return ;
     }
@@ -802,7 +802,7 @@ ERROR /error grid name/ THRESHOLD /error thereshold/\n");
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[7]) == 0) {
+    if (grid_matches(n, parsed[7])) {
       present = true;
       ps_error = n;
       break;
@@ -942,7 +942,7 @@ POLYGONS /file name 1/ /file name 2/ ... FILL /fill value 1/ /fill value 2/ ... 
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps_in = n;
       break;
@@ -965,7 +965,7 @@ POLYGONS /file name 1/ /file name 2/ ... FILL /fill value 1/ /fill value 2/ ... 
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[5]) == 0) {
+    if (grid_name_taken(n, parsed[5])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[5]);
       return ;
     }
@@ -1188,7 +1188,7 @@ void run_process_overlay() {
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps_in = n;
       break;
@@ -1211,7 +1211,7 @@ void run_process_overlay() {
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[5]) == 0) {
+    if (grid_name_taken(n, parsed[5])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[5]);
       return ;
     }
@@ -1254,7 +1254,7 @@ void run_process_overlay() {
     present = false;
 
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[k]) == 0) {
+      if (grid_matches(n, parsed[k])) {
         overlay_indexes[n_overlays++] = n;
         present = true;
         break ;
@@ -1364,7 +1364,7 @@ THRESHOLD /radiance threshold/ COORDINATES /xa/ /ya/ /xb/ /yb/\n");
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps_in = n;
       break;
@@ -1387,7 +1387,7 @@ THRESHOLD /radiance threshold/ COORDINATES /xa/ /ya/ /xb/ /yb/\n");
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[5]) == 0) {
+    if (grid_name_taken(n, parsed[5])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[5]);
       return ;
     }
@@ -1548,7 +1548,7 @@ THRESHOLD /radiance threshold/ COORDINATES /xa/ /ya/ /xb/ /yb/\n");
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps_spec = n;
       break;
@@ -1565,7 +1565,7 @@ THRESHOLD /radiance threshold/ COORDINATES /xa/ /ya/ /xb/ /yb/\n");
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[4]) == 0) {
+    if (grid_matches(n, parsed[4])) {
       present = true;
       ps_nir = n;
       break;
@@ -1601,7 +1601,7 @@ THRESHOLD /radiance threshold/ COORDINATES /xa/ /ya/ /xb/ /yb/\n");
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[6]) == 0) {
+    if (grid_name_taken(n, parsed[6])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[6]);
       return ;
     }
@@ -1767,7 +1767,7 @@ void run_process_mask() {
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps_in = n;
       break;
@@ -1789,7 +1789,7 @@ void run_process_mask() {
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[5]) == 0) {
+    if (grid_name_taken(n, parsed[5])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[5]);
       return ;
     }
@@ -1824,7 +1824,7 @@ void run_process_mask() {
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[7]) == 0) {
+    if (grid_matches(n, parsed[7])) {
       present = true;
       ps_mask = n;
       break;
@@ -1971,7 +1971,7 @@ CLOUD /cloud mask grid name/ [optional] RADIUS /integer radius/ \n");
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps_in = n;
       break;
@@ -1994,7 +1994,7 @@ CLOUD /cloud mask grid name/ [optional] RADIUS /integer radius/ \n");
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[5]) == 0) {
+    if (grid_name_taken(n, parsed[5])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[5]);
       return ;
     }
@@ -2026,7 +2026,7 @@ CLOUD /cloud mask grid name/ [optional] RADIUS /integer radius/ \n");
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[7]) == 0) {
+    if (grid_matches(n, parsed[7])) {
       present = true;
       ps_cloud = n;
       break;
@@ -2142,7 +2142,7 @@ COMBINE AND||OR WEIGHTS /weight for grid 1/ ... /weight for grid 2/\n");
     present = false;
 
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[k]) == 0) {
+      if (grid_matches(n, parsed[k])) {
         ps_in[n_in++] = n;
         present = true;
         break ;
@@ -2174,7 +2174,7 @@ COMBINE AND||OR WEIGHTS /weight for grid 1/ ... /weight for grid 2/\n");
   k++;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[k]) == 0) {
+    if (grid_name_taken(n, parsed[k])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[k]);
       return ;
     }
@@ -2472,7 +2472,7 @@ MAXPOINTS /maximum number of noise points/ FILTER NODATA\n");
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps_in = n;
       break;
@@ -2495,7 +2495,7 @@ MAXPOINTS /maximum number of noise points/ FILTER NODATA\n");
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[5]) == 0) {
+    if (grid_name_taken(n, parsed[5])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[5]);
       return ;
     }
@@ -2600,7 +2600,7 @@ NIR /nir band grid name/ REGION /wlon/ /slat/ /elon/ /nlat/ [optional] SCALE /sc
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps_in = n;
       break;
@@ -2623,7 +2623,7 @@ NIR /nir band grid name/ REGION /wlon/ /slat/ /elon/ /nlat/ [optional] SCALE /sc
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[5]) == 0) {
+    if (grid_name_taken(n, parsed[5])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[5]);
       return ;
     }
@@ -2655,7 +2655,7 @@ NIR /nir band grid name/ REGION /wlon/ /slat/ /elon/ /nlat/ [optional] SCALE /sc
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[7]) == 0) {
+    if (grid_matches(n, parsed[7])) {
       present = true;
       ps_nir = n;
       break;
@@ -2847,7 +2847,7 @@ PAN /panchromatic band grid name/\n");
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps_in = n;
       break;
@@ -2871,7 +2871,7 @@ PAN /panchromatic band grid name/\n");
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[5]) == 0) {
+    if (grid_name_taken(n, parsed[5])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[5]);
       return ;
     }
@@ -2910,7 +2910,7 @@ PAN /panchromatic band grid name/\n");
     present = false;
 
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[k]) == 0) {
+      if (grid_matches(n, parsed[k])) {
         spectral_indexes[nspec++] = n;
         present = true;
         break ;
@@ -2941,7 +2941,7 @@ PAN /panchromatic band grid name/\n");
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[k]) == 0) {
+    if (grid_matches(n, parsed[k])) {
       present = true;
       ps_pan = n;
       break;
@@ -3163,7 +3163,7 @@ void run_process_interpolate() {
   present = false;
 
 	for (n = 0; n < MAX_GRIDS; n++) {
-	 	if (strcmp(grid_names[n], parsed[3]) == 0) {
+	 	if (grid_matches(n, parsed[3])) {
 	   	present = true;
 	   	ps_in = n;
 	   	break;
@@ -3192,7 +3192,7 @@ void run_process_interpolate() {
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-  	if (strcmp(grid_names[n], parsed[5]) == 0) {
+  	if (grid_name_taken(n, parsed[5])) {
   		printf("\nERROR: grid '%s' already in use.\n", parsed[5]);
   		return ;
   	}
@@ -3220,7 +3220,7 @@ void run_process_interpolate() {
     n++;
     grid_region = false;
     for (k = 0; k < MAX_GRIDS; k++) {
-      if (strcmp(grid_names[k], parsed[n]) == 0) {
+      if (grid_matches(k, parsed[n])) {
         grid_region = true;
         ps_region = k;
         break;
@@ -3250,7 +3250,7 @@ void run_process_interpolate() {
   	n++;
     gridres = false;
 		for (k = 0; k < MAX_GRIDS; k++) {
-	 		if (strcmp(grid_names[k], parsed[n]) == 0) {
+	 		if (grid_matches(k, parsed[n])) {
 	   		gridres = true;
 	   		ps_res = k;
 	   		break;
@@ -3340,7 +3340,7 @@ NPASSES /number of passes/ WEIGHT /weight/ \n");
 // Check input grid is present. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps_in = n;
       break;
@@ -3363,7 +3363,7 @@ NPASSES /number of passes/ WEIGHT /weight/ \n");
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[5]) == 0) {
+    if (grid_name_taken(n, parsed[5])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[5]);
       return ;
     }
@@ -3468,7 +3468,7 @@ THRESHOLD /min radiance level/ /max radiance level/\n");
 // Check input grid is present. 
 
 	for (n = 0; n < MAX_GRIDS; n++) {
-	 	if (strcmp(grid_names[n], parsed[3]) == 0) {
+	 	if (grid_matches(n, parsed[3])) {
 	   	present = true;
 	   	ps_in = n;
 	   	break;
@@ -3491,7 +3491,7 @@ THRESHOLD /min radiance level/ /max radiance level/\n");
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-  	if (strcmp(grid_names[n], parsed[5]) == 0) {
+  	if (grid_name_taken(n, parsed[5])) {
   		printf("\nERROR: grid '%s' already in use.\n", parsed[5]);
   		return ;
   	}
@@ -3563,7 +3563,7 @@ THRESHOLD /min radiance level/ /max radiance level/\n");
       present = false;
 
       for (n = 0; n < MAX_GRIDS; n++) {
-        if (strcmp(grid_names[n], parsed[k]) == 0) {
+        if (grid_matches(n, parsed[k])) {
           ps_grids[n_grids++] = n;
           present = true;
           break ;

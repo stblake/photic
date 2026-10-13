@@ -654,6 +654,8 @@ void free_int_array_2d(int **grid, int nrows) {
 
 void free_float_array_2d(float **grid, int nrows) {
   int n;
+  if (grid == NULL) 
+    return ;
   for (n = 0; n < nrows; n++) 
     free(grid[n]);
   free(grid);
@@ -1406,6 +1408,47 @@ void array_sample_arg_max(float **array, int nrows, int ncols, float spval, int 
 
 
 //
+//    GRID REGISTRY
+//
+
+// Does slot n hold a grid called name? Only allocated slots with data match, and an 
+// empty name (a missing argument) never matches. 
+
+bool grid_matches(int n, const char *name) {
+  return allocated_grids[n] && gridded_data[n].array != NULL && 
+    name[0] != '\0' && strcmp(grid_names[n], name) == 0;
+}
+
+// Is name unavailable for a new grid because slot n uses it? An empty name is never 
+// available. 
+
+bool grid_name_taken(int n, const char *name) {
+  if (name[0] == '\0') 
+    return true;
+  return allocated_grids[n] && strcmp(grid_names[n], name) == 0;
+}
+
+// Release slots left marked as allocated without data by a command that failed part 
+// way through, clear the names of unallocated slots, and recount the grids in use. 
+// Called after every command. 
+
+void release_orphan_grids() {
+
+  int n;
+
+  n_grids_in_use = 0;
+
+  for (n = 0; n < MAX_GRIDS; n++) {
+    if (allocated_grids[n] && gridded_data[n].array == NULL) 
+      allocated_grids[n] = false;
+    if (allocated_grids[n]) 
+      n_grids_in_use++;
+    else 
+      grid_names[n][0] = '\0';
+  }
+}
+
+//
 //    READ (NEW/OLD) GRID FROM COMMAND LINE
 //
 
@@ -1415,7 +1458,7 @@ bool parse_old_grid(int *ps_in, int k) {
   bool present = false; 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[k]) == 0) {
+    if (grid_matches(n, parsed[k])) {
       *ps_in = n;
       present = true;
       break ;
@@ -1439,7 +1482,7 @@ bool parse_new_grid(int *ps_out, int k) {
 // Check output grid name is not in use. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[k]) == 0) {
+    if (grid_name_taken(n, parsed[k])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[k]);
       return false;
     }
@@ -1452,6 +1495,11 @@ bool parse_new_grid(int *ps_out, int k) {
     *ps_out = n;
     break;
     }
+  }
+
+  if (n == MAX_GRIDS) {
+    printf("\nERROR: unable to store grid.\n");
+    return false;
   }
 
 // Copy grid name. 
@@ -1479,7 +1527,7 @@ bool parse_old_scene(int *ps_in, int k) {
   bool present = false; 
 
   for (n = 0; n < MAX_SCENES; n++) {
-    if (strcmp(scene_names[n], parsed[k]) == 0) {
+    if (allocated_scenes[n] && parsed[k][0] != '\0' && strcmp(scene_names[n], parsed[k]) == 0) {
       *ps_in = n;
       present = true;
       break ;
@@ -1501,7 +1549,7 @@ bool parse_new_scene(int *ps_out, int k) {
 // Check output scene name is not in use. 
 
   for (n = 0; n < MAX_SCENES; n++) {
-    if (strcmp(scene_names[n], parsed[k]) == 0) {
+    if (parsed[k][0] == '\0' || (allocated_scenes[n] && strcmp(scene_names[n], parsed[k]) == 0)) {
       printf("\nERROR: scene '%s' already in use.\n", parsed[k]);
       return false;
     }
@@ -1514,6 +1562,11 @@ bool parse_new_scene(int *ps_out, int k) {
     *ps_out = n;
     break;
     }
+  }
+
+  if (n == MAX_SCENES) {
+    printf("\nERROR: unable to store scene.\n");
+    return false;
   }
 
 // Copy scene name. 

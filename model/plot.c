@@ -61,7 +61,7 @@ COORDINATES /x1/ /y1/ /x2/ /y2/ ... [optional] LSM /Lsm band 1/ /Lsm band 2/\n")
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[2]) == 0) {
+    if (grid_matches(n, parsed[2])) {
       present = true;
       ps1 = n;
       break;
@@ -78,7 +78,7 @@ COORDINATES /x1/ /y1/ /x2/ /y2/ ... [optional] LSM /Lsm band 1/ /Lsm band 2/\n")
   present = false;
   
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       present = true;
       ps2 = n;
       break;
@@ -407,7 +407,7 @@ void run_plot_line() {
   	// Check grid is present. 
 
 		for (n = 0; n < MAX_GRIDS; n++) {
-			if (strcmp(grid_names[n], parsed[2]) == 0) {
+			if (grid_matches(n, parsed[2])) {
 				present = true;
 				ps = n;
 				break;
@@ -696,7 +696,7 @@ PALETTE /palette name/ LAND /land grid name/\n");
   	// Check grid is present. 
 
 		for (n = 0; n < MAX_GRIDS; n++) {
-			if (strcmp(grid_names[n], parsed[2]) == 0) {
+			if (grid_matches(n, parsed[2])) {
 				present = true;
 				ps = n;
 				break;
@@ -773,7 +773,7 @@ PALETTE /palette name/ LAND /land grid name/\n");
     present = false;
     n++;
     for (k = 0; k < MAX_GRIDS; k++) {
-      if (strcmp(grid_names[k], parsed[n]) == 0) {
+      if (grid_matches(k, parsed[n])) {
         present = true;
         ps_land = k;
         break;

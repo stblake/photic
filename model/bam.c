@@ -158,9 +158,10 @@
 #define COMMENT 1001
 #define EXIT 1002
 #define STOP 1005
+#define INVALID 1006
 
 int parse_input(char line[MAX_LINE]);
-void tokenize(char line[MAX_LINE]);
+bool tokenize(char line[MAX_LINE]);
 void run_read_grid();
 void run_read_soundings();
 void run_read_commands();
@@ -350,8 +351,12 @@ void interpreter() {
 
     raw_line = linenoise(">> ");
 
-    if (strlen(raw_line) > MAX_LINE) {
+    if (raw_line == NULL) // EOF (Ctrl-D). 
+      break ;
+
+    if (strlen(raw_line) >= MAX_LINE) {
       printf("\nERROR: input commands too long.\n");
+      free(raw_line);
       continue ;
     }
 
@@ -402,6 +407,7 @@ void interpreter() {
 
   	switch (code) {
   		case COMMENT:
+  		case INVALID:
   			break ;
   		case EXIT:
   			printf("\nAre you sure you want to exit? (yes/no) ");
@@ -471,6 +477,10 @@ void run_command() {
 	} else if (strcmp(parsed[0], "") != 0) {
 		printf("\nERROR: unknown command '%s'\n", parsed[0]);
 	}
+
+// Release grid slots left half-registered by a command that failed. 
+
+	release_orphan_grids();
 }
 
 
@@ -706,7 +716,7 @@ void run_combine() {
     // Check output grid name is not in use. 
 
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], band_name) == 0) {
+      if (grid_name_taken(n, band_name)) {
         printf("\nERROR: grid '%s' already in use.\n", band_name);
         return ;
       }
@@ -840,7 +850,7 @@ CHARTDATUM /chart datum for file/ DEPTHRANGE /depth min/ /depth max/ SPVAL /soun
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[2]) == 0) {
+    if (grid_matches(n, parsed[2])) {
       present = true;
       ps_grid = n;
       break;
@@ -865,7 +875,7 @@ CHARTDATUM /chart datum for file/ DEPTHRANGE /depth min/ /depth max/ SPVAL /soun
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[4]) == 0) {
+    if (grid_matches(n, parsed[4])) {
       present = true;
       ps_grid2 = n;
       break;
@@ -1349,7 +1359,7 @@ RINF /R_inf band 1/ /R_inf band 2/ ... HTIDE /tidal offset to MSL/ K /K band 1/ 
   nbands = 0;
   k = 4;
 
-  while (k < MAX_GRIDS && strcmp(parsed[k], "WAVELENGTHS") != 0) {
+  while (k < MAX_ARGS && strcmp(parsed[k], "WAVELENGTHS") != 0) {
 
     success = parse_old_grid(&(scene_data[ps_scene].band_indexes[nbands++]), k++);
     if (! success) return ;
@@ -1948,7 +1958,7 @@ void run_compute_k() {
   float wavelengths[MAX_GRIDS], Alpha_computed[MAX_GRIDS], 
     wlen_i, wlen_j, lsm_i, lsm_j, x1, y1, x2, y2, manual_ratio = 0.0, 
     dist, grad, del, x, y, rad, ki, kj, *Li, *Lj, *Ri, *Rj, m, c, r,
-    error, xmin, xmax, ymin, ymax, w, water_type, *bpl_i, *bpl_j, *bpl_xi, *bpl_xj, *bpl_ratio, 
+    error, xmin, xmax, ymin, ymax, w, water_type, *bpl_i = NULL, *bpl_j = NULL, *bpl_xi = NULL, *bpl_xj = NULL, *bpl_ratio = NULL, 
     bp_max, bin_min, bin_max, bp_Ri, bp_Rj, bp_xi, bp_xj, xi, xj, ratio, i_delta, 
     raw_xmin, raw_xmax, raw_ymin, raw_ymax, threshold = 0.0, m_all, c_all, r_all;
   bool present, success, line = false, region = false, region_all = false;
@@ -1967,7 +1977,7 @@ void run_compute_k() {
     present = false;
 
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[k]) == 0) {
+      if (grid_matches(n, parsed[k])) {
         spectral_indexes[nspec++] = n;
         present = true;
         break ;
@@ -2793,7 +2803,7 @@ void run_compute_lsb() {
     k++;
 
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[k]) == 0) {
+      if (grid_matches(n, parsed[k])) {
         shallow_index = n;
         shallow_present = true;
         break ;
@@ -2861,7 +2871,7 @@ void run_compute_area() {
   // Check grid name is present. 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[3]) == 0) {
+    if (grid_matches(n, parsed[3])) {
       ps_in = n;
       present = true;
       break ;
@@ -3376,7 +3386,7 @@ void run_model_lee_zsd() {
 // Do we already have a grid with this name? 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[8]) == 0) {
+    if (grid_name_taken(n, parsed[8])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[8]);
       return ;
     }
@@ -3550,7 +3560,7 @@ void run_model_lee_kd() {
 // Do we already have a grid with this name? 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[8]) == 0) {
+    if (grid_name_taken(n, parsed[8])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[8]);
       return ;
     }
@@ -3664,7 +3674,7 @@ void run_model_morel() {
 // Do we already have a grid with this name? 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[6]) == 0) {
+    if (grid_name_taken(n, parsed[6])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[6]);
       return ;
     }
@@ -3786,7 +3796,7 @@ void run_model_mueller_secchi() {
 // Do we already have a grid with this name? 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[6]) == 0) {
+    if (grid_name_taken(n, parsed[6])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[6]);
       return ;
     }
@@ -3907,7 +3917,7 @@ void run_model_mueller() {
 // Do we already have a grid with this name? 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[6]) == 0) {
+    if (grid_name_taken(n, parsed[6])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[6]);
       return ;
     }
@@ -3983,6 +3993,7 @@ void run_empirical_model() {
 
 	if (zdepth != NULL) {
 		free(mparams);
+		mparams = NULL;
 		zdepth = NULL;
 	}
 
@@ -4028,13 +4039,13 @@ WEIGHTS /sounding weight/ /line weight/ BOTTOM /output bottom type grid name/ ER
 
 	while (true) {
 
-		if (n_model_bands >= MAX_GRIDS || strcmp(parsed[k], "BATHYMETRY") == 0)
+		if (k == MAX_ARGS || n_model_bands >= MAX_GRIDS || strcmp(parsed[k], "BATHYMETRY") == 0)
 			break ;
 
 		present = false;
 
 		for (n = 0; n < MAX_GRIDS; n++) {
-  		if (strcmp(grid_names[n], parsed[k]) == 0) {
+  		if (grid_matches(n, parsed[k])) {
   			bands_indexes[n_model_bands++] = n;
   			present = true;
   			break ;
@@ -4068,7 +4079,7 @@ WEIGHTS /sounding weight/ /line weight/ BOTTOM /output bottom type grid name/ ER
 
   k++;
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[k]) == 0) {
+    if (grid_name_taken(n, parsed[k])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[k]);
       return ;
     }
@@ -4087,7 +4098,7 @@ WEIGHTS /sounding weight/ /line weight/ BOTTOM /output bottom type grid name/ ER
 	  k++;
 	  land_present = false;
 	  for (n = 0; n < MAX_GRIDS; n++) {
-    	if (strcmp(grid_names[n], parsed[k]) == 0) {
+    	if (grid_matches(n, parsed[k])) {
     		land_index = n; // Global.
     		land_present = true;
      		break ;
@@ -4107,7 +4118,7 @@ WEIGHTS /sounding weight/ /line weight/ BOTTOM /output bottom type grid name/ ER
     k++;
     shallow_present = false;
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[k]) == 0) {
+      if (grid_matches(n, parsed[k])) {
         shallow_index = n; // Global.
         shallow_present = true;
         break ;
@@ -4157,7 +4168,7 @@ WEIGHTS /sounding weight/ /line weight/ BOTTOM /output bottom type grid name/ ER
 
     k++;
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[k]) == 0) {
+      if (grid_name_taken(n, parsed[k])) {
         printf("\nERROR: grid '%s' already in use.\n", parsed[k]);
         return ;
       }
@@ -4195,7 +4206,7 @@ WEIGHTS /sounding weight/ /line weight/ BOTTOM /output bottom type grid name/ ER
 
     k++;
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[k]) == 0) {
+      if (grid_name_taken(n, parsed[k])) {
         printf("\nERROR: grid '%s' already in use.\n", parsed[k]);
         return ;
       }
@@ -4302,7 +4313,7 @@ WEIGHTS /sounding weight/ /line weight/ BOTTOM /output bottom type grid name/ ER
     present = false;
 
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[k]) == 0) {
+      if (grid_matches(n, parsed[k])) {
         ps_boundary = n;
         present = true;
         break ;
@@ -4449,7 +4460,8 @@ WEIGHTS /sounding weight/ /line weight/ BOTTOM /output bottom type grid name/ ER
   } else if (strcmp(model_name, "polcyn_log_ratio") == 0) {
 		polcyn_log_ratio();
   } else if (strcmp(model_name, "stumpf_log_ratio") == 0) {
-  	// stumpf_log_ratio();
+  	printf("\nERROR: model 'stumpf_log_ratio' is not implemented.\n");
+  	return ;
   } else {
   	printf("\nERROR: unknown model '%s'.\n", model_name);
   	return ;
@@ -4653,9 +4665,9 @@ prefer to keep them as no data values.
     }
   }
 
-// Display model.
+// Display model. (model_error() needs the fitted parameters of the Lyzenga model.) 
 
-  if (nsoundings != 0) {
+  if (nsoundings != 0 && mparams != NULL) {
 	  model_error();
 
 	  printf("\n");
@@ -5561,7 +5573,7 @@ void run_delete() {
 // Check grid name is present. 
 
 	for (n = 0; n < MAX_GRIDS; n++) {
-  	if (strcmp(grid_names[n], parsed[1]) == 0) {
+  	if (grid_matches(n, parsed[1])) {
   		np = n;
   		present = true;
   		break ;
@@ -5610,6 +5622,7 @@ void run_delete() {
 // Free memory. 
 
 	free_float_array_2d(gridded_data[np].array, nrows);
+	gridded_data[np].array = NULL;
 
 	n_grids_in_use--;
 }
@@ -5660,7 +5673,7 @@ void run_set() {
   if (strcmp(parsed[1], "K") == 0) {
     grid_present = false; 
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[2]) == 0) {
+      if (grid_matches(n, parsed[2])) {
         Alpha[n] = atof(parsed[3]);
         grid_present = true; 
         break;
@@ -5677,7 +5690,7 @@ void run_set() {
   if (strcmp(parsed[1], "LSM") == 0) {
     grid_present = false; 
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[2]) == 0) {
+      if (grid_matches(n, parsed[2])) {
         Lsm[n] = atof(parsed[3]);
         grid_present = true; 
         break;
@@ -6123,7 +6136,7 @@ void run_print() {
   	// Check grid is present. 
 
 	for (n = 0; n < MAX_GRIDS; n++) {
-		if (strcmp(grid_names[n], parsed[2]) == 0) {
+		if (grid_matches(n, parsed[2])) {
 			present = true;
 			ps = n;
 			break;
@@ -6274,12 +6287,14 @@ void run_read_commands() {
   // Run commands. 
 
   fp = fopen(parsed[2], "r");
+  if (fp == NULL) {
+    printf("\nERROR: unable to open '%s'\n", parsed[2]);
+    return ;
+  }
 
-  while (!feof(fp)) {
+  // Read lines until EOF. 
 
-    // Read line.
-
-    fgets(line, sizeof(line), fp);
+  while (fgets(line, sizeof(line), fp) != NULL) {
 
     trim(line);
 
@@ -6335,6 +6350,7 @@ void run_read_commands() {
         goto finish;
         break ;
       case COMMENT:
+      case INVALID:
         break ;
       case EXIT:
         // goto finish;
@@ -6367,18 +6383,21 @@ void run_read_soundings() {
   int i, k;
   float *x, *y, *z, scale = 1.0, chart_datum = 0.0, offsetX = 0.0, offsetY = 0.0;
 
-// Check if we have previously read in sounding data. 
-
-  if (read_soundings) {
-    free_float_array_2d(soundings, nsoundings);
-    meminuse -= (1.0e-6*(float) 3*nsoundings)*((float) sizeof(float));
-  }
-
 // Check file exists.  
 
   if (! file_exists(parsed[2])) {
     printf("\nERROR: missing file '%s'\n", parsed[2]);
     return ;
+  }
+
+// Check if we have previously read in sounding data. 
+
+  if (read_soundings) {
+    free_float_array_2d(soundings, nsoundings);
+    free(sounding_errors);
+    free(model_depths);
+    free(sounding_depths);
+    meminuse -= (1.0e-6*(float) 3*nsoundings)*((float) sizeof(float));
   }
 
 // Read SCALE. 
@@ -6486,7 +6505,7 @@ OFFSET /add offset/ THETA /sun elevation angle/\n");
   // Do we already have a grid with this name? 
 
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[2]) == 0) {
+      if (grid_name_taken(n, parsed[2])) {
         printf("\nERROR: grid '%s' already in use.\n", parsed[2]);
         return ;
       }
@@ -6587,7 +6606,11 @@ int parse_input(char line[MAX_LINE]) {
 
 // Tokenize. 
 
-  tokenize(line);
+  if (! tokenize(line)) {
+    for (n = 0; n < MAX_ARGS; n++)
+      parsed[n][0] = '\0';
+    return INVALID;
+  }
 
 // Check for high priority commands. 
 
@@ -6601,20 +6624,37 @@ int parse_input(char line[MAX_LINE]) {
     return OK;
 }
 
-void tokenize(char line[MAX_LINE]) {
+// Split line into parsed[] on runs of spaces, tabs and newlines. Returns false 
+// (with an error message) if there are more than MAX_ARGS tokens or a token is 
+// longer than MAX_ARG_SIZE - 1 characters. 
 
-  int n, m = 0, tok = 0; 
+bool tokenize(char line[MAX_LINE]) {
 
-  for (n = 0; n < strlen(line); n++) {
-//    printf("\n'%c' ", line[n]);
-    if (line[n] == ' ' || line[n] == '\0' || line[n] == '\n') {
-      parsed[tok][m++] = '\0';
-      tok++;
-      m = 0;
-//      printf("%s\n", parsed[tok - 1]);
+  int n, m = 0, tok = 0, len = strlen(line); 
+
+  for (n = 0; n < len; n++) {
+    if (line[n] == ' ' || line[n] == '\t' || line[n] == '\n' || line[n] == '\r') {
+      if (m > 0) {
+        parsed[tok][m] = '\0';
+        tok++;
+        m = 0;
+      }
     } else {
+      if (tok == MAX_ARGS) {
+        printf("\nERROR: too many arguments (maximum %d).\n", MAX_ARGS);
+        return false;
+      }
+      if (m == MAX_ARG_SIZE - 1) {
+        printf("\nERROR: argument too long (maximum %d characters).\n", MAX_ARG_SIZE - 1);
+        return false;
+      }
       parsed[tok][m++] = line[n];
     }
   }
+
+  if (m > 0) 
+    parsed[tok][m] = '\0';
+
+  return true;
 }
 

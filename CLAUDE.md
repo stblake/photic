@@ -38,7 +38,7 @@ Build notes:
 
 - `./photic` starts the REPL; `./photic cmds.bam` runs a command file, then drops into the REPL unless the file ends with `EXIT`.
 - Command syntax:
-  - Tokens are UPPERCASE, case-sensitive and positional, split on **single spaces** (double spaces create empty tokens; tabs are not separators).
+  - Tokens are UPPERCASE, case-sensitive and positional, separated by runs of spaces or tabs. A line with more than 128 tokens, or a token longer than 127 characters, is rejected.
   - Optional keywords must appear in the order each handler expects.
   - `//` starts a comment line. `STOP` ends the current command file. `EXIT` quits immediately (no cleanup). `%` and `%1`..`%9` recall previous lines.
 - Files are written to the current directory as side effects: `history.bam`, `k.bam`, `model.bam`, `output.csv`, and the SA-model outputs `modelled_*.nc` and `<scene>_K_*.nc`.
@@ -63,7 +63,7 @@ Main commands (dispatch in `bam.c:run_command`):
 ## Architecture
 
 - **`common.h`/`common.c`**: constants (`MAX_GRIDS` 265, `MAX_SCENES` 32, `MAX_ARGS`/`MAX_ARG_SIZE` 128, `BAM_NODATA` −99999), the structs `geogrid`, `scene` and `model_data`, all global state, and helpers (statistics, allocation, `approx_equal`, grid and scene lookup through `parse_old_grid`/`parse_new_grid`/`parse_*_scene`, `commensurate_grids`).
-- **Grid registry**: parallel global arrays `gridded_data[]`, `grid_names[]` and `allocated_grids[]`, plus `n_grids_in_use`, with per-slot parameter arrays (`Lsm`, `Lsb`, `Alpha`, `thetas`, …). Handlers read arguments from the global `parsed[][]` and look grids up by linear `strcmp` over names.
+- **Grid registry**: parallel global arrays `gridded_data[]`, `grid_names[]` and `allocated_grids[]`, plus `n_grids_in_use`, with per-slot parameter arrays (`Lsm`, `Lsb`, `Alpha`, `thetas`, …). Handlers read arguments from the global `parsed[][]` and look grids up by name with `grid_matches(n, name)`, which matches only allocated slots that hold data, never an empty name. "Already in use" checks use `grid_name_taken(n, name)`. After every command, `run_command()` calls `release_orphan_grids()`, which frees slots left marked allocated without data, clears stale names and recounts `n_grids_in_use`.
 - **`bam.c`**: `main`, REPL, command-file runner, tokenizer, dispatcher, and most `run_*` handlers (SCENE, MODEL, COMPUTE, COMPARE, SET/PRINT, empirical models). `#define BAM_VERSION "1.95"`.
 - **`samodel.c`**: the semi-analytical model.
   - `samodel()` sets up IOP spectra, sorts pixels into a processing order, loops over pixels with a 16000-entry LUT, then estimates depth σ by re-modelling with noise and writes NetCDF outputs.
@@ -85,13 +85,12 @@ Main commands (dispatch in `bam.c:run_command`):
 - **Band order**: the SA model and Secchi code assume scene bands 0–3 are coastal, blue, green, red.
 - **"Radius" r** in smoothing and spatial-region code means a (2r−1)-wide window, so r=1 is a single pixel.
 - **Nodata comparisons** are inconsistent: some code uses exact `==`, some `approx_equal` (a *relative* tolerance, so nodata 0 needs exact equality), and some treats values ≤ 0 as invalid. NaN is never handled. When editing a function, match the convention it already uses.
-- **Adding a command handler**: follow the existing `run_*` pattern of reading `parsed[k]` and looking grids up. When creating an output grid, set the name, `allocated_grids[ps]=true` and `n_grids_in_use++` only **after** validation succeeds and the array is allocated. Many existing handlers get this wrong.
+- **Adding a command handler**: follow the existing `run_*` pattern of reading `parsed[k]`. Look grids up with `parse_old_grid`/`grid_matches`, never a bare `strcmp` on `grid_names`. Create outputs with `parse_new_grid`/`grid_name_taken`. Prefer registering the output only after validation succeeds; the per-command sweep cleans up after handlers that don't, but each one still leaks its `meminuse` accounting. Set `gridded_data[n].array = NULL` whenever you free a grid.
 - Style: 2-space indentation in newer files, tabs in older ones (`samodel.c`, `common.c`). Comments are `//` section headers in sentence case ending with a full stop. Australian/British spelling (`normalise`, `colour`).
 
 ## Gotchas / known hazards
 
-- **Empty names match unused slots.** Unused grid and scene slots have name `""`, so a missing argument resolves to an unallocated slot (NULL array, use-after-free after `DELETE`). Lookups should also check `allocated_grids[n]`.
-- **`tokenize()` has no bounds checks** on `MAX_ARGS`/`MAX_ARG_SIZE`.
+- **Missing arguments are empty strings** in `parsed[]`. The lookup helpers reject them, but handlers still read fixed `parsed[k]` positions, so a missing option is usually silently ignored rather than reported.
 - **The OpenMP design in `samodel()` is unsafe.** The whole function is one `omp parallel` region: setup, `rand()`, the depth-σ pass, `depth *= -1` and file writes all run on every thread. It is latent only because OpenMP is off.
 - **Tidal convention**: `H` (fitted and output) is depth below the common datum. In `samodel_Rrs`, each scene's water column is `H + HTIDE`, clamped at 0. `HTIDE` defaults to 0.
 - **`write_nc` packs to 16-bit** (`compress_2d`), so every NetCDF round trip quantises to (max−min)/32767. NaN cells are written as nodata.

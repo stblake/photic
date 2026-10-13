@@ -8,7 +8,7 @@
 - Small standalone test drivers for the I/O and numeric helpers, some run under AddressSanitizer.
 - Physics checked against `paper/photic.tex`.
 
-**Status update:** the build items (priority 1–2 and §1) the physics items (priority 3–5) and the data-corruption items (priority 6–8, 11–12) were fixed after this review; items marked **[fixed]** are resolved, see the git history. The code now builds with Apple clang 17 and GCC 16.
+**Status update:** the build items (priority 1–2 and §1) the physics items (priority 3–5) and the data-corruption items (priority 6–8, 11–12) and the memory-safety items (priority 9–10, plus most of §3 critical/high) were fixed after this review; items marked **[fixed]** are resolved, see the git history. The code now builds with Apple clang 17 and GCC 16.
 
 **Labels:** severity is critical / high / medium / low. **[verified]** means the finding was reproduced by a test program or by compiling. Items marked *uncertain* depend on intent that the code doesn't record.
 
@@ -28,8 +28,8 @@ Fix these first; each is either a build blocker or silently corrupts scientific 
 | 6 | I/O | **[fixed]** `compress_2d` starts from `grmax = FLT_MIN` and uses `else if`, so the true maximum can be missed and wraps in the 16-bit pack. A constant grid gives scale 0, then NaN. This affects every NetCDF write (nc.c:286-316). [verified: 10 → 1.99979] |
 | 7 | I/O | **[fixed]** Bilinear interpolation is wrong on the last row and column; bicubic never reads the last row or column (interp.c:73, 124). This affects UNITE, INTERPOLATE, PANSHARPEN, OVERLAY and SRTM. [verified] |
 | 8 | memory | **[fixed]** `smooth()` reads `[j-1]` at `j=0` (smoothutils.c:96-121). [verified: ASan heap-buffer-overflow] |
-| 9 | memory | `tokenize()` has no bounds on `MAX_ARGS` or `MAX_ARG_SIZE` (bam.c:6597), so it overflows the global `parsed`. |
-| 10 | memory | Empty names match unused slots in every grid and scene lookup. Missing arguments therefore cause NULL dereferences, use-after-free and double free (e.g. `DELETE` with no argument). |
+| 9 | memory | **[fixed]** `tokenize()` has no bounds on `MAX_ARGS` or `MAX_ARG_SIZE` (bam.c:6597), so it overflows the global `parsed`. |
+| 10 | memory | **[fixed]** Empty names match unused slots in every grid and scene lookup. Missing arguments therefore cause NULL dereferences, use-after-free and double free (e.g. `DELETE` with no argument). |
 | 11 | process | **[fixed]** `PROCESS ADD`: the inverted `!= 0` tests mean the default output is all zeros and `COEFFICIENTS` is ignored (process.c:488-502). [verified] |
 | 12 | process | **[fixed]** `PROCESS UNITE`: `\|\| method_median_no_spval` tests the constant 6 (always true), so nodata is mixed into MEAN/MIN/EXP and the MEDIAN path writes `scene_list[-1]` (process.c:2359, 2379). [verified] |
 | 13 | align | `ALIGN` resamples soundings with replacement by default, which drops ~37% of them; `MAXSOUNDINGS > n` overflows (align.c:252-266). |
@@ -132,26 +132,26 @@ Standalone utilities (they build with `common.c nc.c io.c` plus a helper, and `-
 ## 3. Interpreter (`bam.c`)
 
 ### Critical
-1. `tokenize` (L6597-6613): no bounds checks. A run of about 130 spaces, or a token of 128 or more characters, overflows `parsed`.
-2. `DELETE` (L5556-5605): the pointer is not set to NULL after `free`, and an empty name matches a free slot. The result is a double free, and `n_grids_in_use` can go negative.
-3. Empty-name lookups (`parse_old_grid`, `parse_old_scene`, and inline lookups at L835, 1962, 2788, 2856, 4030, 5556, 5656, 6119, …) resolve to unallocated slots. All lookups should also require `allocated_grids[n]`.
+1. **[fixed]** `tokenize` (L6597-6613): no bounds checks. A run of about 130 spaces, or a token of 128 or more characters, overflows `parsed`.
+2. **[fixed]** `DELETE` (L5556-5605): the pointer is not set to NULL after `free`, and an empty name matches a free slot. The result is a double free, and `n_grids_in_use` can go negative.
+3. **[fixed]** Empty-name lookups (`parse_old_grid`, `parse_old_scene`, and inline lookups at L835, 1962, 2788, 2856, 4030, 5556, 5656, 6119, …) resolve to unallocated slots. All lookups should also require `allocated_grids[n]`.
 
 ### High
-4. `COMPUTE K … COORDINATES` frees the `bpl_*` buffers even though they are only allocated in REGION mode (L2587-2591).
+4. **[fixed]** `COMPUTE K … COORDINATES` frees the `bpl_*` buffers even though they are only allocated in REGION mode (L2587-2591).
 5. `COMPUTE LSM DEEP` uses the uninitialised `lon`/`lat` instead of `londeep`/`latdeep`, so DEEP never works (L2714-2727).
-6. `READ COMMANDS`: the `while(!feof)` loop does not check `fgets`, so the last line runs twice (L6268-6278). The same bug is in `srtm.c:99`.
-7. `READ GRID`: the name is registered before the file-existence check, which leaves a poisoned slot (L6474-6489).
-8. `READ SOUNDINGS`: the old soundings are freed before the file is checked, leaving a dangling pointer (L6365-6375).
-9. `free(mparams)` does not set the pointer to NULL, and the polcyn model never allocates it. Running lyzenga, then polcyn, then any model gives a double free or use-after-free (L3977-3980, L4652, L4947, L5160-5214).
-10. `MODEL stumpf_log_ratio` is accepted, but `zdepth` stays NULL, so it crashes (L4444-4467).
-11. Orphaned "allocated" slots with NULL arrays are left after early returns (L1700/1715/1754, 3043-3086, 4071-4423, 4147/4185). Exit cleanup then crashes.
-12. Loops bounded by `MAX_GRIDS` (265) index `parsed[k]` (max 128) (L1345, L4024).
+6. **[fixed]** `READ COMMANDS`: the `while(!feof)` loop does not check `fgets`, so the last line runs twice (L6268-6278). The same bug is in `srtm.c:99`.
+7. **[fixed]** `READ GRID`: the name is registered before the file-existence check, which leaves a poisoned slot (L6474-6489).
+8. **[fixed]** `READ SOUNDINGS`: the old soundings are freed before the file is checked, leaving a dangling pointer (L6365-6375).
+9. **[fixed]** `free(mparams)` does not set the pointer to NULL, and the polcyn model never allocates it. Running lyzenga, then polcyn, then any model gives a double free or use-after-free (L3977-3980, L4652, L4947, L5160-5214).
+10. **[fixed]** `MODEL stumpf_log_ratio` is accepted, but `zdepth` stays NULL, so it crashes (L4444-4467).
+11. **[fixed]** Orphaned "allocated" slots with NULL arrays are left after early returns (L1700/1715/1754, 3043-3086, 4071-4423, 4147/4185). Exit cleanup then crashes.
+12. **[fixed]** Loops bounded by `MAX_GRIDS` (265) index `parsed[k]` (max 128) (L1345, L4024).
 13. Unchecked user-coordinate indexing in `COMPUTE K` line mode (L2156-2187) and `COMPUTE LSM REGION` (L2660-2686).
 14. `COMPUTE LSB` continues with uninitialised `land_index`/`shallow_index` when they are missing (L2759-2801).
 15. `COMBINE`: `R_blue` is never set (L786 is commented out). `best_scene = -1` then indexes `scene_data[-1]` (L790-799).
 
 ### Medium
-16. A NULL return from `linenoise` on EOF (Ctrl-D) leads to `strlen(NULL)`. The `> MAX_LINE` check is off by one, and `raw_line` leaks (L344-354).
+16. **[fixed]** A NULL return from `linenoise` on EOF (Ctrl-D) leads to `strlen(NULL)`. The `> MAX_LINE` check is off by one, and `raw_line` leaks (L344-354).
 17. `COMBINE` resets `Rinf_mean`/`nobs` inside the scene loop, and averages `ps_in[0]` instead of `ps_in[m]` (L580-598).
 18. `model_error()` divides the global `weight_local_constraints` by `n_model_bands` on every call, so the weight decays towards 0 (L5355).
 19. `COMPUTE PERCENTILE 100` reads `vec[k]`, one past the end (L1922).
@@ -193,7 +193,7 @@ Standalone utilities (they build with `common.c nc.c io.c` plus a helper, and `-
 7. `OVERLAY`: bicubic interpolation extrapolates outside the layer, so a small layer overwrites the whole base grid (L1304-1318).
 8. `SHALLOW GRIDS`: the bands are not checked for matching dimensions or for nodata (L3655-3683).
 9. `MNDWI` is actually NDWI: it uses NIR, where MNDWI uses SWIR. The automatic threshold is a radiance value compared against an index in [−1, 1], the NIR band's nodata is not checked, and it can divide by zero (L1667-1720).
-10. Grids are registered before validation in ADD, RELATIVEERROR, ERROR, OVERLAY, MASK and SHALLOW. CLOUD, NOISE, DEGLINT and PANSHARPEN leave stale names.
+10. **[fixed by the per-command sweep]** Grids are registered before validation in ADD, RELATIVEERROR, ERROR, OVERLAY, MASK and SHALLOW. CLOUD, NOISE, DEGLINT and PANSHARPEN leave stale names.
 
 ### Medium
 11. `DEGLINT`: divides by zero when nobs = 0 or var = 0, and NIR nodata is not checked. It subtracts relative to mean(NIR), where Hedley et al. (2005) use min(NIR). *uncertain*
@@ -290,7 +290,7 @@ Standalone utilities (they build with `common.c nc.c io.c` plus a helper, and `-
 17. `xyz2nc.c:85-97`: the spacing-detection loop has no bound. Cell placement uses `floor()`, collisions overwrite earlier points, and dx ≠ dy is not handled.
 18. `io.c:285,299,352,440`: `char c = fgetc()` is an EOF bug where `char` is unsigned (ARM Linux). `read_csv` adds a phantom row when the file ends with a newline.
 19. `fopen` is never checked in `io.c` or `srtm.c`. Every tool copies `argv` values into 512-byte buffers with unbounded `strcpy`.
-20. `common.c:1449-1458`: when the table is full, `parse_new_grid` and `parse_new_scene` leave `*ps_out` unset and then `strcpy` through it.
+20. **[fixed]** `common.c:1449-1458`: when the table is full, `parse_new_grid` and `parse_new_scene` leave `*ps_out` unset and then `strcpy` through it.
 21. `common.c:307-330`: `interp_1d` with descending X uses uninitialised values when x is out of range.
 
 ### Low

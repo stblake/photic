@@ -55,7 +55,7 @@ void run_align() {
     present = false;
 
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[k]) == 0) {
+      if (grid_matches(n, parsed[k])) {
         ps_in[n_grids++] = n;
         present = true;
         break ;
@@ -101,7 +101,7 @@ void run_align() {
   k++;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[k]) == 0) {
+    if (grid_name_taken(n, parsed[k])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[k]);
       return ;
     }
@@ -139,7 +139,7 @@ SPVAL /no data value/ MAXSOUNDINGS /maximum number of soundins/ NEGATEGRID NEGAT
   present = false;
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[k]) == 0) {
+    if (grid_matches(n, parsed[k])) {
       present = true;
       ps_grid2 = n;
       break;

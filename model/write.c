@@ -37,7 +37,7 @@ void run_write_points() {
   // Get position of grid name.
       
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[2]) == 0) {
+    if (grid_matches(n, parsed[2])) {
       present = true;
       ps = n;
       break;
@@ -110,7 +110,7 @@ void run_write_line() {
   // Get position of grid name.
       
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[2]) == 0) {
+    if (grid_matches(n, parsed[2])) {
       present = true;
       ps = n;
       break;
@@ -246,7 +246,7 @@ void run_write_grid() {
   // Get position of grid name.
   	  
 	for (n = 0; n < MAX_GRIDS; n++) {
-	 	if (strcmp(grid_names[n], parsed[2]) == 0) {
+	 	if (grid_matches(n, parsed[2])) {
     	present = true;
 			ps = n;
 			break;

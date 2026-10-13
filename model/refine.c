@@ -35,7 +35,7 @@ CLIP /clipped min/ /clipped max/ SCALE /rescaled min/ /rescaled max/ POWER /expo
 // Check input grid name is present. 
 
 	for (n = 0; n < MAX_GRIDS; n++) {
-  	if (strcmp(grid_names[n], parsed[2]) == 0) {
+  	if (grid_matches(n, parsed[2])) {
   		ps_in = n;
   		present = true;
   		break ;
@@ -73,7 +73,7 @@ CLIP /clipped min/ /clipped max/ SCALE /rescaled min/ /rescaled max/ POWER /expo
 // Do we already have a grid with this name? 
 
   for (n = 0; n < MAX_GRIDS; n++) {
-    if (strcmp(grid_names[n], parsed[4]) == 0) {
+    if (grid_name_taken(n, parsed[4])) {
       printf("\nERROR: grid '%s' already in use.\n", parsed[4]);
       return ;
     }
@@ -119,7 +119,7 @@ CLIP /clipped min/ /clipped max/ SCALE /rescaled min/ /rescaled max/ POWER /expo
     // Check grid name is present. 
     k++;
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[k]) == 0) {
+      if (grid_matches(n, parsed[k])) {
         land_index = n;
         land_present = true;
         break ;
@@ -141,7 +141,7 @@ CLIP /clipped min/ /clipped max/ SCALE /rescaled min/ /rescaled max/ POWER /expo
 
     k++;
     for (n = 0; n < MAX_GRIDS; n++) {
-      if (strcmp(grid_names[n], parsed[k]) == 0) {
+      if (grid_matches(n, parsed[k])) {
         shallow_index = n;
         shallow_present = true;
         break ;
