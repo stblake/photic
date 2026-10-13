@@ -166,6 +166,26 @@ Each enters the LM fit as a bound or a weighted residual (a soft prior, weight 1
 - **B4. Seabed continuity.** Penalise the second difference of depth across the window (a plane is free), in place of departure from the window mean (A-3).
 - **B9. Water-mass priors.** Weak priors keeping P, G and X per scene within natural ranges, from the training data.
 
+### Lee's HOPE spreadsheet (2026-10-13)
+
+`Lee_2_QAA_HOPE_hyper.xls` (Z.-P. Lee, 2009/2014) has QAA, deep HOPE and shallow HOPE sheets, with every intermediate value. Recomputing the columns shows the same equations as photic, with these differences:
+
+| Term | photic (Lee 1999) | Lee's spreadsheet (Lee 2002) |
+|---|---|---|
+| deep-water rrs | (0.084 + 0.170u)u | (0.089 + 0.125u)u |
+| Rrs from rrs | 0.5 rrs/(1 − 1.5 rrs) | 0.52 rrs/(1 − 1.7 rrs) |
+| D_B (bottom) | 1.04 √(1 + 5.4u) | 1.05 √(1 + 5.5u) |
+| Y | χ relation on the measured Rrs440/Rrs490 | QAA's relation on the measured rrs (443/555), from the QAA sheet |
+| sand | `bottom_type_sand` | `bottom_sand_Lee` (in photic's tables, unused) |
+
+- **Identical:** a_φ, a_dg (S = 0.015), D_C, the sun path (secant 1.2) and the error (√mean d²/mean Rrs).
+- **Tier 1 now checks the spreadsheet:** `photic_ref` with the spreadsheet's coefficients reproduces its modelled Rrs to 10⁻¹⁶ (deep) and 2 × 10⁻⁵ (shallow), so the equations' structure is identical. With photic's coefficients, Rrs differs by 7–9%.
+- **Against exact radiative transfer (tier 2's OSOAA cases), photic's 1999 set is closer:**
+  - subsurface rrs: median 1.91% vs 2.60% (clear and moderate), 3.12% vs 3.26% (turbid);
+  - Rrs from rrs: 1.7% vs 6.3% (bias +1.5% vs +6.7%).
+  - The 2002 set was fitted to Hydrolight with other surface and sky assumptions than OSOAA's black-sky, low-wind runs. Tier 4 decides on real data.
+- **Follow-up:** QAA's Y on the measured spectrum (Lee's own practice) as a `Y_MODEL` variant. It shares A-4's bottom contamination in shallow water.
+
 ### Geometry constraints across scenes (planned 2026-10-13)
 
 Each scene sees the same seabed through a different light path, M_s = sec θ_w,s + D sec θ_v,s, and a different water column H + τ_s. The forward model already contains both, but P, G and X are free per scene, so a change in water can absorb most of the angular signal.

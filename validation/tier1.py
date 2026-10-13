@@ -13,6 +13,8 @@ import math
 import re
 import subprocess
 
+import os
+
 import numpy as np
 
 import photic_ref
@@ -135,6 +137,39 @@ def sambuca_check(cases, dump, ref):
                 rrs_rel_diff_same_bbw=stats(np.array(out_same_bbw)))
 
 
+def lee_sheet_check(path):
+    """Lee's own HOPE spreadsheet (Lee_2_QAA_HOPE_hyper.xls) as an independent implementation.
+
+    For the deep (HOPE-h) and shallow (HOPE_shallow) sheets, the sheet's solution (P, G, X,
+    B, H, S, Y), its tables (a0, a1, a_w, b_bw, sand) and its sun path (1.2) are put
+    through photic_ref with the sheet's coefficients, which must reproduce its modelled Rrs;
+    then with photic's coefficients, which measures what the coefficient choice changes.
+    """
+    import xlrd
+    book = xlrd.open_workbook(path)
+    out = {}
+    for name, shallow in (("HOPE-h", False), ("HOPE_shallow", True)):
+        sh = book.sheet_by_name(name)
+        sol = {sh.cell_value(r, 16).split(" ")[0]: sh.cell_value(r, 17) for r in range(sh.nrows)
+               if isinstance(sh.cell_value(r, 16), str) and sh.cell_value(r, 16)}
+        rows = [r for r in range(14, sh.nrows) if isinstance(sh.cell_value(r, 0), float) and sh.cell_value(r, 0) > 0]
+        col = lambda c: np.array([sh.cell_value(r, c) for r in rows])
+        lam, a0, a1, aw, bbw, Rrs_sheet = col(0), col(1), col(2), col(3), col(4), col(13)
+        sun = 1.2  # The sheet's path factor for the sun (sec of the subsurface zenith).
+        theta_sun = np.degrees(np.arccos(1.0/sun))
+        rho = col(24) if shallow else np.zeros(len(rows))
+        B = sol["B"] if shallow else 0.0
+        H = sol["H"] if shallow else 1.0e6
+        res = {}
+        for label, coef in (("lee_2002", photic_ref.LEE_2002), ("photic_1999", photic_ref.LEE_1999)):
+            c = dict(coef, S=sol["S"])
+            r = photic_ref.forward(lam, sol["P"], sol["G"], sol["X"], B, rho, H, 0.0, theta_sun, 0.0,
+                                   0.01, 0.01, 0.0, a0, a1, aw, bbw, Y=sol["Y"], clamp_kappa=False, coef=c)
+            res[label] = stats(rel(r["Rrs"], Rrs_sheet))
+        out[name] = res
+    return out
+
+
 def run(driver, paper_tex, pope_fry_path):
     cases = make_cases()
     dump = run_driver(driver, cases)
@@ -183,9 +218,15 @@ def run(driver, paper_tex, pope_fry_path):
     # 4. SAMBUCA.
     sambuca = sambuca_check(cases, dump, ref)
 
-    return dict(
+    out = dict(
         n_cases=int(len(cases["id"])),
         equations=dict(max_rel_diff=eq, tolerance=TOL_EQUATIONS, passed=bool(equations_pass)),
         departures_rel_Rrs=departures,
         tables=tables,
         sambuca=sambuca)
+
+    # 5. Lee's own HOPE spreadsheet, if present (raw/lee/; not redistributable, so not in git).
+    lee_path = os.path.join(os.path.dirname(os.path.dirname(pope_fry_path)), "lee", "Lee_2_QAA_HOPE_hyper.xls")
+    if os.path.exists(lee_path):
+        out["lee_spreadsheet"] = lee_sheet_check(lee_path)
+    return out
