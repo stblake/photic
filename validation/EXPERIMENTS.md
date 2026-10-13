@@ -282,6 +282,49 @@ Round 1 from the deep-water water reproduces decouple.py's deep result exactly. 
   - a joint solver (Schur complement, as in bundle adjustment) instead of alternation;
   - and judge it on tier 4, where the water really varies.
 
+### Reducing the forward model's structural error (2026-10-13)
+
+**Where the error is** (tier 2, OSOAA, black sky). Lee's deep-water rrs has no sun-angle dependence, and OSOAA's does:
+- deep-water bias +4.9% at θ_w 15°, +2.4% at 29°, −2.0% at 40°;
+- shallow error follows the same pattern, more weakly (+2.0 / +0.9 / −1.2%);
+- bottom albedo hardly matters (+0.6% bias at every albedo).
+
+Scenes with different sun angles therefore get inconsistent model errors, which a multi-scene fit can only absorb through depth.
+
+**What a perfect forward model would be worth.** The same realistic-bottom pixels, scenes from photic's own model against OSOAA (RMSE on the pixels given a depth):
+
+| | photic's model | OSOAA |
+|---|---|---|
+| clear, no noise | 0.08 | 1.41 |
+| moderate, no noise | 2.82 (only 12 of 48 pixels) | 1.31 |
+| clear, noise | 0.54 | 0.48 |
+| moderate, noise | 1.34 | 1.10 |
+| turbid, noise | 0.22 | 0.54 |
+
+- Without noise the model error costs about 1.3 m in clear water.
+- **With realistic noise, the gap disappears**: noise and coverage limit depth, not the model.
+
+**Candidate models**, against tier 2's OSOAA cases; median error, bias by sun angle (θ_w 15 / 29 / 40°):
+
+| | clear + moderate (training) | turbid (held out) |
+|---|---|---|
+| Lee (photic) | 1.91%, +0.8 / +0.3 / −1.0 | **3.12%**, +4.9 / +2.3 / −1.6 |
+| Lee × (1 + a(sec θ_w − 1.1)), a = 0.083 | 1.75%, +0.5 / +0.5 / +0.1 | 2.84%, +4.4 / +2.6 / −0.2 |
+| Albert & Mobley (2003) as published (Eqs. 9, 13; Tables 3–4) | 3.41%, deep +8.1% | 10.6%, deep +13.2% |
+| AM03, scale refitted (p1, A2) | 3.34% | 4.32%, deep +5.6% |
+| AM03, 7 coefficients refitted | 1.44% | 4.74%, deep +7.6% |
+
+- **Albert & Mobley do not beat Lee against OSOAA.**
+  - Their model was fitted to Hydrolight runs of Lake Constance, with skylight, Raman scattering and fluorescence, which add light: hence the high bias.
+  - Their deep-water polynomial drifts in turbid water.
+  - Fully refitted, it overfits.
+- **The sun-angle effect is sky-dependent.** AM03's published angular term (p5 = 0.11, Hydrolight with skylight) is much weaker than black-sky OSOAA's (the refit wants p5 ≈ 0.5). A black sky sends all light from the sun's direction and exaggerates angular effects. A correction fitted to tier 2/3 would overcorrect real imagery.
+- **Decision:**
+  - no change to the forward model now;
+  - make the synthetic truth realistic first, with OSOAA run with an atmosphere so skylight reaches the water, before fitting any angular correction;
+  - Lee's structure remains the most transferable. Refits (B10) and an angular factor are available once the truth includes skylight.
+- The paper is stored in `raw/papers/`.
+
 ### Physics constraints (planned 2026-10-13)
 
 Each enters the LM fit as a bound or a weighted residual (a soft prior, weight 1/σ), and is switchable. Each is tested alone: Phase A pixels with noise, then tier 3 by depth bin, then tier 4 held-out sites. Any σ is tuned on the training split only.
