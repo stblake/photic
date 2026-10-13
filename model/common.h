@@ -55,6 +55,11 @@
 #define BLACK 10
 #define WHITE 11
 
+// bool is an int (not _Bool): some code stores non-0/1 values in it. C23 makes
+// bool a keyword, so compile with -std=gnu17 or earlier.
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L
+#error "photic must be compiled as C17 or earlier (e.g. -std=gnu17)."
+#endif
 typedef int bool;
 #define true 1
 #define false 0
@@ -301,154 +306,154 @@ float vec_mean2_double(double *vec, int len, double spval);
 bool commensurate_grids(geogrid a, geogrid b);
 
 #if PLOTTING
-int n_fn_evals;
-double Error_path[6000];
-double P_path[6000]; 
-double G_path[6000]; 
-double X_path[6000];
-double B_path[6000];
-double H_path[6000];
-double Delta_path[6000];
+extern int n_fn_evals;
+extern double Error_path[6000];
+extern double P_path[6000]; 
+extern double G_path[6000]; 
+extern double X_path[6000];
+extern double B_path[6000];
+extern double H_path[6000];
+extern double Delta_path[6000];
 #endif
 
 
-// Globals. 
-int n_grids_in_use;
-int n_images_in_use;
-float meminuse; 
+// Globals (defined in common.c). 
+extern int n_grids_in_use;
+extern int n_images_in_use;
+extern float meminuse; 
 
-char command_file[MAX_STRING_LEN];
-bool allocated_grids[MAX_GRIDS];
-bool allocated_images[MAX_IMAGES];
-char grid_names[MAX_GRIDS][MAX_STRING_LEN];
-char image_names[MAX_IMAGES][MAX_STRING_LEN];
-geogrid gridded_data[MAX_GRIDS];
-image image_data[MAX_IMAGES];
-line_segment line_data[MAX_GRIDS];
-char parsed[MAX_ARGS][MAX_ARG_SIZE];
+extern char command_file[MAX_STRING_LEN];
+extern bool allocated_grids[MAX_GRIDS];
+extern bool allocated_images[MAX_IMAGES];
+extern char grid_names[MAX_GRIDS][MAX_STRING_LEN];
+extern char image_names[MAX_IMAGES][MAX_STRING_LEN];
+extern geogrid gridded_data[MAX_GRIDS];
+extern image image_data[MAX_IMAGES];
+extern line_segment line_data[MAX_GRIDS];
+extern char parsed[MAX_ARGS][MAX_ARG_SIZE];
 
 
-scene scene_data[MAX_SCENES];
-bool allocated_scenes[MAX_SCENES];
-char scene_names[MAX_SCENES][MAX_STRING_LEN];
-int n_scenes_in_use;
+extern scene scene_data[MAX_SCENES];
+extern bool allocated_scenes[MAX_SCENES];
+extern char scene_names[MAX_SCENES][MAX_STRING_LEN];
+extern int n_scenes_in_use;
 
-char prev1[MAX_STRING_LEN];
-char prev2[MAX_STRING_LEN];
-char prev3[MAX_STRING_LEN];
-char prev4[MAX_STRING_LEN];
-char prev5[MAX_STRING_LEN];
-char prev6[MAX_STRING_LEN];
-char prev7[MAX_STRING_LEN];
-char prev8[MAX_STRING_LEN];
-char prev9[MAX_STRING_LEN];
+extern char prev1[MAX_STRING_LEN];
+extern char prev2[MAX_STRING_LEN];
+extern char prev3[MAX_STRING_LEN];
+extern char prev4[MAX_STRING_LEN];
+extern char prev5[MAX_STRING_LEN];
+extern char prev6[MAX_STRING_LEN];
+extern char prev7[MAX_STRING_LEN];
+extern char prev8[MAX_STRING_LEN];
+extern char prev9[MAX_STRING_LEN];
 
 // Depth soundings. 
 
-bool read_soundings;
-bool first_model_error_soundings;
-int nsoundings;
-float **soundings;
-float *model_depths, *sounding_depths, *sounding_errors, *sounding_weights, **radiance_at_soundings, 
+extern bool read_soundings;
+extern bool first_model_error_soundings;
+extern int nsoundings;
+extern float **soundings;
+extern float *model_depths, *sounding_depths, *sounding_errors, *sounding_weights, **radiance_at_soundings, 
   *dz_at_soundings, *lsb_at_soundings;
 
 // Bottom spectra. 
 
-float **bottom_spectra;
-int n_bottom_spectra;
+extern float **bottom_spectra;
+extern int n_bottom_spectra;
 
 // Graphics defaults. 
 
-int background, palette;
-float pagesize, textsize, pointsize;
-int line_width;
+extern int background, palette;
+extern float pagesize, textsize, pointsize;
+extern int line_width;
 
 // Satellite metadata. 
 
-float sun_azimuth;
-float sun_elevation;
-float earth_sun_distance;
-float radiance_mult_band[MAX_GRIDS];
-float radiance_add_band[MAX_GRIDS];
-float quantize_cal_min_band[MAX_GRIDS];
-float quantize_cal_max_band[MAX_GRIDS];
-float radiance_minimum_band[MAX_GRIDS];
-float radiance_maximum_band[MAX_GRIDS];
+extern float sun_azimuth;
+extern float sun_elevation;
+extern float earth_sun_distance;
+extern float radiance_mult_band[MAX_GRIDS];
+extern float radiance_add_band[MAX_GRIDS];
+extern float quantize_cal_min_band[MAX_GRIDS];
+extern float quantize_cal_max_band[MAX_GRIDS];
+extern float radiance_minimum_band[MAX_GRIDS];
+extern float radiance_maximum_band[MAX_GRIDS];
 
 // Model defaults.
 
 #define LINEAR 0
 #define LSB_SIGMA 0
 
-float H0;
+extern float H0;
 
-bool relative_error;
+extern bool relative_error;
 
-float (*zdepth)(int, int);
+extern float (*zdepth)(int, int);
 
-char model_name[MAX_STRING_LEN];
+extern char model_name[MAX_STRING_LEN];
 
-bool pan_normalise;
+extern bool pan_normalise;
 
-float extent_eps;
+extern float extent_eps;
 
-float epsilon;
-float log_epsilon; // 1.0 
-float falloff_param; // units km.
-float model_weight_cutoff;
-float map_scale;
+extern float epsilon;
+extern float log_epsilon; // 1.0 
+extern float falloff_param; // units km.
+extern float model_weight_cutoff;
+extern float map_scale;
 
-int nboundary;
+extern int nboundary;
 
-float deep_lon;
-float deep_lat;
-float sand_lon;
-float sand_lat;
+extern float deep_lon;
+extern float deep_lat;
+extern float sand_lon;
+extern float sand_lat;
 
-int n_local_models;
-int depth_radius;
-int n_depth_bins;
-float lsb_spread;
+extern int n_local_models;
+extern int depth_radius;
+extern int n_depth_bins;
+extern float lsb_spread;
 
-float sounding_error;
-float constraint_error;
-float local_constraint_error;
+extern float sounding_error;
+extern float constraint_error;
+extern float local_constraint_error;
 
-float noise_threshold;
-float min_radiance_threshold;
-float max_radiance_threshold;
+extern float noise_threshold;
+extern float min_radiance_threshold;
+extern float max_radiance_threshold;
 
-int bands_indexes[MAX_GRIDS];
-int spectral_indexes[MAX_GRIDS];
-int land_index;
-int shallow_index;
+extern int bands_indexes[MAX_GRIDS];
+extern int spectral_indexes[MAX_GRIDS];
+extern int land_index;
+extern int shallow_index;
 
-int n_model_bands, **model_origins, NAlpha[MAX_GRIDS]; 
-float thetas[MAX_GRIDS], model_wavelengths[MAX_GRIDS], Lsm[MAX_GRIDS], Lsb[MAX_GRIDS], Lsb_sigma[MAX_GRIDS], 
+extern int n_model_bands, **model_origins, NAlpha[MAX_GRIDS]; 
+extern float thetas[MAX_GRIDS], model_wavelengths[MAX_GRIDS], Lsm[MAX_GRIDS], Lsb[MAX_GRIDS], Lsb_sigma[MAX_GRIDS], 
   Alpha[MAX_GRIDS], Alpha_sigma[MAX_GRIDS], Rrs_sigma[MAX_GRIDS], Hj[MAX_GRIDS], Lsm_sigma[MAX_GRIDS], *mparams;
 
-float jerlov_water_type; 
-int n_water_type_estimates;
+extern float jerlov_water_type; 
+extern int n_water_type_estimates;
 
-float K_ratios[MAX_GRIDS][4];
+extern float K_ratios[MAX_GRIDS][4];
 
-float slope_line[LINE_MAX_POINTS];
+extern float slope_line[LINE_MAX_POINTS];
 
-float depthmin;
-float depthmax;
+extern float depthmin;
+extern float depthmax;
 
-float line_xa, line_ya, line_xb, line_yb;
+extern float line_xa, line_ya, line_xb, line_yb;
 
-float bound_error, coeff_size_preference, regression_error;
+extern float bound_error, coeff_size_preference, regression_error;
 
-float weight_soundings, weight_constraints, weight_local_constraints, 
+extern float weight_soundings, weight_constraints, weight_local_constraints, 
   weight_coeff_size_preference, weight_bound_error, weight_regression;
 
-float rms_error;
+extern float rms_error;
 
-int model_optimisation;
+extern int model_optimisation;
 
-int samodel_n_smoothing_radius, samodel_n_spatial, samodel_n_bottoms;
+extern int samodel_n_smoothing_radius, samodel_n_spatial, samodel_n_bottoms;
 
 
 

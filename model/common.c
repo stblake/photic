@@ -113,6 +113,7 @@ float sounding_error = 0.0;
 float constraint_error = 0.0;
 float local_constraint_error = 0.0;
 
+float **bottom_spectra;
 int n_bottom_spectra = 0;
 
 float noise_threshold = 0.025;
@@ -126,7 +127,7 @@ int shallow_index = 0;
 
 int n_model_bands = 0, **model_origins, NAlpha[MAX_GRIDS]; 
 float thetas[MAX_GRIDS], model_wavelengths[MAX_GRIDS], Lsm[MAX_GRIDS], Lsb[MAX_GRIDS], Lsb_sigma[MAX_GRIDS], 
-  Alpha[MAX_GRIDS], Hj[MAX_GRIDS], Lsm_sigma[MAX_GRIDS], *mparams;
+  Alpha[MAX_GRIDS], Alpha_sigma[MAX_GRIDS], Rrs_sigma[MAX_GRIDS], Hj[MAX_GRIDS], Lsm_sigma[MAX_GRIDS], *mparams;
 
 float K_ratios[MAX_GRIDS][4];
 

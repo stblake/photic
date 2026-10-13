@@ -7,7 +7,8 @@
 
 /* Started on 28 Feb 2016. */
 
-#include "filllakes.h"
+#include "common.h"
+#include "io.h"
 #include "filllakesutils.h"
 
 #define MXFILE 512

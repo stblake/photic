@@ -152,6 +152,13 @@
 
 #define BAM_VERSION "1.95"
 
+// Return codes of parse_input().
+
+#define OK 1000
+#define COMMENT 1001
+#define EXIT 1002
+#define STOP 1005
+
 int parse_input(char line[MAX_LINE]);
 void tokenize(char line[MAX_LINE]);
 void run_read_grid();

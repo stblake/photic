@@ -1,0 +1,11 @@
+*.o
+*.d
+photic
+xyz2nc
+asc2nc
+grid2grid
+smooth
+smoothspval
+emptygrid
+srtm
+filllakes
