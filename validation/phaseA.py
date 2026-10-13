@@ -92,7 +92,17 @@ def pixel_setup(water, n, i, j, H, bottom, grids, nspatial):
     phys = [H[a, b] for a, b in cells] + [t3.B_ALBEDO]*nr + q + pgx
     setup = "\n".join(lines) + "\n"
     truth = lab(setup, ["PACK " + vec(phys)])[0]["PACKED"]
-    return setup, np.array(truth), nr, origin
+    return setup, np.array(truth), nr, origin, np.array(phys)
+
+
+def shifted(setup, phys, nr, origin, depths):
+    """Truth vectors with all regional depths shifted so the origin is at each depth."""
+    cmds = []
+    for h in depths:
+        p = phys.copy()
+        p[:nr] = np.maximum(phys[:nr] + (h - phys[origin]), 0.01)
+        cmds.append("PACK " + vec(p))
+    return [np.array(r["PACKED"]) for r in lab(setup, cmds)]
 
 
 
@@ -141,7 +151,8 @@ def depth_of(fit, nr, origin):
 
 def analyse_pixel(args):
     water, n, i, j, H, bottom, grids, nspatial = args
-    setup, truth, nr, origin = pixel_setup(water, n, i, j, H, bottom, grids, nspatial)
+    setup, truth, nr, origin, phys = pixel_setup(water, n, i, j, H, bottom, grids, nspatial)
+    shifts = shifted(setup, phys, nr, origin, PROFILE_H)
     nb = N_BOTTOMS
     iH = slice(0, nr)
     iB = slice(nr, nr*(1 + nb))
@@ -157,16 +168,12 @@ def analyse_pixel(args):
     cmds = ["PHOTIC -1"]                                                     # A0
     cmds += [nm(s["START"], s["STEP"]) for s in starts[:len(H_STARTS)]]     # A0x
     # A1 conditional: shift all regional depths together, everything else true.
-    for h in PROFILE_H:
-        v = truth.copy()
-        v[iH] = np.maximum(truth[iH] + (h - H[i, j]), 0.01)
+    for v in shifts:
         cmds.append("EVAL " + vec(v))
     # A1 profiled: depths fixed at the shifted values; the rest re-fitted from the truth
     # and from photic's start (for that depth).
     prof_idx = []
-    for h in PROFILE_H:
-        v = truth.copy()
-        v[iH] = np.maximum(truth[iH] + (h - H[i, j]), 0.01)
+    for h, v in zip(PROFILE_H, shifts):
         st = truth_step.copy()
         st[iH] = 0.0
         cmds.append(nm(v, st, (1e-6, 100, 20000)))

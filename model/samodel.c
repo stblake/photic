@@ -993,10 +993,12 @@ void samodel(
 					// continue ; // Temporary.
 					md->empirical_depth_present = false;
 					md->start_at_previous = false;
+					md->h_empirical = 0.0; // Unknown: fit all bottom types.
 				}
 			} else {
 			  // continue ; // Temporary. 
 				md->empirical_depth_present = false;
+				md->h_empirical = 0.0; // Unknown: fit all bottom types.
 			}
 
 			// Check LUT. 
@@ -2222,194 +2224,170 @@ void samodel_optimise(model_data *md) {
 
 
 
+// Nelder-Mead over a subset of the parameters, the rest held fixed. The fixed values and the
+// mapping live in file-scope state, so this is not thread-safe (nor is samodel(); see CLAUDE.md).
+
+static model_data *subset_md;
+static double *subset_full;
+static int *subset_index, subset_n;
+
+static double samodel_subset_error(double *x, model_data *md) {
+	int i;
+	for (i = 0; i < subset_n; i++) {
+		subset_full[subset_index[i]] = x[i];
+	}
+	return samodel_error(subset_full, subset_md);
+}
+
+// Minimise from start over the parameters with a non-zero step; the result is written back to
+// start. Returns the error, and the number of evaluations and the fault code through the
+// pointers.
+
+static double samodel_minimise(model_data *md, double *start, double *step, double reqmin,
+	int kcount, int *icount, int *ifault) {
+
+	int i, n = md->n_params, konvge = 100, numres = 0;
+	double error, *x, *xstep, *xmin;
+
+	x = malloc(n*sizeof(double));
+	xstep = malloc(n*sizeof(double));
+	xmin = malloc(n*sizeof(double));
+	subset_index = malloc(n*sizeof(int));
+	subset_full = start;
+	subset_md = md;
+	subset_n = 0;
+
+	for (i = 0; i < n; i++) {
+		if (step[i] != 0.0) {
+			x[subset_n] = start[i];
+			xstep[subset_n] = step[i];
+			subset_index[subset_n++] = i;
+		}
+	}
+
+	*icount = 0;
+	*ifault = 0;
+	nelmin(samodel_subset_error, md, subset_n, x, xmin, &error, reqmin, xstep, konvge, kcount,
+		icount, &numres, ifault);
+
+	for (i = 0; i < subset_n; i++) {
+		start[subset_index[i]] = xmin[i];
+	}
+
+	free(x);
+	free(xstep);
+	free(xmin);
+	free(subset_index);
+
+	return samodel_error(start, md);
+}
+
+// Search for the best parameters for one combination of bottom types.
+//
+// Without an empirical depth, the search is in two stages:
+//   1. Profile: at each depth on a coarse grid, hold every regional depth there and fit the
+//      bottom and water parameters.
+//   2. Refine: from the N_REFINE best depths, fit all parameters.
+// With an empirical depth, only stage 2 is run, from that depth. After a good fit at the
+// previous pixel, the water parameters start from its optimum.
+
+#define N_REFINE 2
+
 void samodel_optimise_one_bottom_combination(model_data *md, double *params) { 
 
-	int i, j, k, n, k_band, k_start, 
-	  n_restarts, offset, best_start, k_hstart, n_hstarts;
-	double s, wd, w, error,
-	  Rrs_error, depth, K_min, bottom_albedo, bottom_blue, 
-	  bottom_green, bottom_red, nobs,
-	  *min, *start, *step, *best, lowest_error, 
-	  *PGXstart, *Hstart;
+	int i, k, k_h, n_h, offset, icount, ifault, total_count, order[N_REFINE];
+	double error, lowest_error, *start, *step, *best, *profile, profile_error[N_REFINE];
+
+	double H_grid[] = {0.5, 1.0, 2.0, 3.5, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0};
+	int n_grid = sizeof(H_grid)/sizeof(H_grid[0]);
+	double H_refine[N_REFINE];
+
+	// Nelder-Mead budgets: termination variance and maximum evaluations.
+
+	double reqmin_profile = 1.0e-4, reqmin_refine = 1.0e-6;
+	int kcount_profile = 2000, kcount_refine = 5000;
 
 #if DEBUG
 	printf("\nENTER samodel_optimise_one_bottom_combination\n");
 #endif
 
-	// Allocate memory for model parameters. 
+	start   = malloc(md->n_params*sizeof(double));
+	step    = malloc(md->n_params*sizeof(double));
+	best    = malloc(md->n_params*sizeof(double));
+	profile = malloc(N_REFINE*md->n_params*sizeof(double));
+	offset  = md->n_regions*(1 + md->n_bottoms);
+	total_count = 0;
 
-	min   = (double*) malloc(md->n_params*sizeof(double));
-	start = (double*) malloc(md->n_params*sizeof(double));
-	step  = (double*) malloc(md->n_params*sizeof(double));
-	best  = (double*) malloc(md->n_params*sizeof(double));
+	// Stage 1: profile over depth (keeps the N_REFINE lowest errors, in order).
 
-	// Simplex algorithm parameters. 
-
-	double reqmin = 1.0e-2; // 1.0e-4 Terminating limit for the variance of function values.
-	int konvge = 100;  // 250 Number of iterations for each convergence check. 
-	int kcount = 5000; // Maximum number of function evaluations. 
-	int icount = 0;   // Total number of function evaluations. 
-	int numres = 0;   // Number of restarts. 
-	int ifault = 0;   // 0 - no errors, 1 - bad inputs, 2 - failed to converge. 
-
-	// Iterate over different starting points. 
-
-	lowest_error = 1.0e4;
-
-	// Jerlov types - OIA, OII, OIII, C1, C3
-#if 0
-	n_restarts = 25;
-
-	double PGXstart_deep[] = {
-						0.184, 0.184, 0.184, 0.184, 0.184, // OIA
-						0.8358, 0.8358, 0.8358, 0.8358, 0.8358, // OII
-						1.5872, 1.5872, 1.5872, 1.5872, 1.5872, // OIII
-						2.0, 2.0, 2.0, 2.0, 2.0, // C1
-						3.31, 3.31, 3.31, 3.31, 3.31}; // C3
-						
-	double PGXstart_intermediate[] = {
-						1.5872, 1.5872, 1.5872, 1.5872, 1.5872, // OIII
-						2.0, 2.0, 2.0, 2.0, 2.0, // C1
-						0.8358, 0.8358, 0.8358, 0.8358, 0.8358, // OII
-						0.184, 0.184, 0.184, 0.184, 0.184, // OIA
-						3.31, 3.31, 3.31, 3.31, 3.31}; // C3
-
-	double PGXstart_shallow[] = {
-						3.31, 3.31, 3.31, 3.31, 3.31, // C3
-						2.0, 2.0, 2.0, 2.0, 2.0, // C1
-						1.5872, 1.5872, 1.5872, 1.5872, 1.5872, // OIII
-						0.8358, 0.8358, 0.8358, 0.8358, 0.8358, // OII
-						0.184, 0.184, 0.184, 0.184, 0.184}; // OIA
-
-	double Bstart[]   = {
-						3.0, 1.5, 1.0, 0.25, 0.0,
-						3.0, 1.5, 1.0, 0.25, 0.0,
-						3.0, 1.5, 1.0, 0.25, 0.0,
-						3.0, 1.5, 1.0, 0.25, 0.0,
-						3.0, 1.5, 1.0, 0.25, 0.0};
-
-	if (md->h_empirical < 5.0) {
-		PGXstart = PGXstart_shallow;
-		n_restarts = 15;
-	} else if (md->h_empirical < 10.0) {
-		PGXstart = PGXstart_intermediate;
-	} else {
-		PGXstart = PGXstart_deep;
+	for (k = 0; k < N_REFINE; k++) {
+		profile_error[k] = 1.0e30;
+		order[k] = k;
 	}
-#else
-
-	n_restarts = 1;
-	// double PGXstart_quick[] = {0.184, 0.8358, 1.5872, 2.0, 3.31}; // C1, OIA, OII, OIII, C3
-	// double Bstart[]   = {1.0, 1.0, 1.0, 1.0, 1.0};
-
-	// n_restarts = 1;
-	// double PGXstart_quick[] = {3.31};
-	// double Bstart[]   = {1.0};	
-
-	// PGXstart = PGXstart_quick;
-#endif
-
-	// Starting points for depth. 
-
-	double Hstart_quick[] = {md->h_empirical};
-#if 1
-	// double Hstart_slow[] = {0.1, 0.5, 1.0, 1.5, 2.0, 
-	//						3.0, 4.0, 5.0,
-	//						6.0, 8.0, 10.0, 
-	//						12.5, 15.0, 17.5, 20.0,
-	//						25.0, 30.0};
-
-	double Hstart_slow[] = {40.0, 30.0, 20.0, 
-							15.0, 
-							10.0, 7.5, 2.5, 1.0};
-#else 
-	double Hstart_slow[] = {35.0};						
-#endif
 
 	if (md->empirical_depth_present) {
-		n_hstarts = 1;
-		Hstart = Hstart_quick;
+		n_h = 1;
+		H_refine[0] = md->h_empirical;
+		samodel_initial(md, md->h_empirical, ALBEDO_START, profile, step);
+		profile_error[0] = 0.0;
 	} else {
-		// n_hstarts = 1;
-		n_hstarts = 8;
-		// n_hstarts = 17;
-		Hstart = Hstart_slow;
-	}
-
-	// Start at previous optima. 
-
-	if (md->start_at_previous) {
-		n_restarts = 1;
-		n_hstarts = 1;
-		if (! md->empirical_depth_present) {
-			Hstart[0] = md->depth_prev;	
-		}
-	}
-
-	for (k_hstart = 0; k_hstart < n_hstarts; k_hstart++) {
-		for (k_start = 0; k_start < n_restarts; k_start++) {
-
-			// Starting point (reset each time, as nelmin modifies start). After a good fit at the
-			// previous pixel, start the water parameters from its optimum.
-
-			samodel_initial(md, Hstart[k_hstart], ALBEDO_START, start, step);
-
+		for (k_h = 0; k_h < n_grid; k_h++) {
+			samodel_initial(md, H_grid[k_h], ALBEDO_START, start, step);
 			if (md->start_at_previous) {
-				offset = md->n_regions*(1 + md->n_bottoms);
 				for (i = 0; i < 3*md->n_scenes; i++) {
 					start[offset + i] = md->prev[i];
 				}
 			}
-
-			// Call Simplex optimisation. 
-
-			error = samodel_error(start, md);
-
-			icount = 0;
-			numres = 0;
-			ifault = 0;
-
-			nelmin(samodel_error, md, md->n_params, start, min, 
-  				&error, reqmin, step, konvge, kcount, 
-  				&icount, &numres, &ifault);
-
-#if 0
-			printf("\nmin = ");
-			for (i = 0; i < md->n_params; i++) {
-				printf("%.6f\t", min[i]);
+			for (i = 0; i < md->n_regions; i++) {
+				step[i] = 0.0;
 			}
-			printf("\n\n");
-#endif
+			error = samodel_minimise(md, start, step, reqmin_profile, kcount_profile, &icount, &ifault);
+			total_count += icount;
 
-			// printf("\nerror = %f\n", error);
+			// Insert into the sorted list of the best depths.
 
-			if (error < lowest_error) {
-				// best_start = k_start; 
-				// printf("\nbest_start = %d", k_start);
-				// printf("\nError        = %5.2f (%%)", md->model_error);
-				// printf("\nError Rrs    = %5.2f (%%)", md->Rrs_error);
-				// printf("\nError H      = %5.2f (%%)", md->depth_error);
-				// printf("\nError B      = %5.2f (%%)", md->bottom_error);
-
-				lowest_error = error;
-				copy_double_vec(min, best, md->n_params);
-
-				md->n_iterations = icount;
-
-				if (ifault == 0) {
-					md->converged = true;
-				} else {
-					md->converged = false;
+			for (k = 0; k < N_REFINE; k++) {
+				if (error < profile_error[k]) {
+					for (i = N_REFINE - 1; i > k; i--) {
+						profile_error[i] = profile_error[i - 1];
+						H_refine[i] = H_refine[i - 1];
+						copy_double_vec(&profile[(i - 1)*md->n_params], &profile[i*md->n_params], md->n_params);
+					}
+					profile_error[k] = error;
+					H_refine[k] = H_grid[k_h];
+					copy_double_vec(start, &profile[k*md->n_params], md->n_params);
+					break ;
 				}
-
-				if (lowest_error < 2.5*((float) md->n_scenes)) { goto we_got_this; }
 			}
+		}
+		n_h = MIN(N_REFINE, n_grid);
+	}
+
+	// Stage 2: refine all parameters from the best depths.
+
+	lowest_error = 1.0e30;
+
+	for (k = 0; k < n_h; k++) {
+		if (profile_error[k] > 1.0e29) continue ;
+		samodel_initial(md, H_refine[k], ALBEDO_START, start, step);
+		copy_double_vec(&profile[k*md->n_params], start, md->n_params);
+		if (md->empirical_depth_present && md->start_at_previous) {
+			for (i = 0; i < 3*md->n_scenes; i++) {
+				start[offset + i] = md->prev[i];
+			}
+		}
+		error = samodel_minimise(md, start, step, reqmin_refine, kcount_refine, &icount, &ifault);
+		total_count += icount;
+		if (error < lowest_error) {
+			lowest_error = error;
+			copy_double_vec(start, best, md->n_params);
+			md->converged = (ifault == 0);
 		}
 	}
 
-	we_got_this:
+	md->n_iterations = total_count;
 
-	// Recompute all model-derived data at optimum. 
+	// Recompute all model-derived data at the optimum. 
 
 	error = samodel_error(best, md);
 
@@ -2419,8 +2397,8 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 
 	free(start);
 	free(step);
-	free(min);
 	free(best);
+	free(profile);
 
 #if DEBUG
 	printf("\nEXIT samodel_optimise_one_bottom_combination\n");
