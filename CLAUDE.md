@@ -7,7 +7,7 @@ Guidance for working on **photic**, a physics-based, semi-analytical, shallow-wa
 - `model/`: all source code (~26k lines of C, flat directory, single `makefile`).
 - `paper/`: LaTeX source and figures for the paper (`paper/makefile` runs pdflatex).
 - `*.jpg` at the root: preview images of published SDB datasets, referenced from `README.md`.
-- There are no tests, no CI, and no example command files or sample data in the repo.
+- There is no CI, and no real imagery or example command files in the repo. `model/tests/` holds a synthetic regression test (`make test`).
 - Commit history is entirely "Add files via upload" (GitHub web uploads), so git history explains nothing; diff between commits to see what changed.
 
 ## Building
@@ -22,7 +22,7 @@ make clean
 
 Build notes:
 
-- **Compilers:** builds warning-free with Apple clang 17. With Homebrew GCC 16 (`make CC=gcc-16`), the only warning is a `-Wstringop-overflow` in `align.c:437`. It is real: `ALIGN` does not reject zero input grids.
+- **Compilers:** builds warning-free with Apple clang 17 and with Homebrew GCC 16 (`make CC=gcc-16`).
 - **Dependencies:**
   - NetCDF flags come from `nc-config` (Homebrew here).
   - PGPLOT is expected under MacPorts `/opt/local`. Override with `make PGPLOT_DIR=...`, e.g. for giza. It links `-lcpgplot -lpgplot -lX11`.
@@ -99,8 +99,15 @@ Main commands (dispatch in `bam.c:run_command`):
 
 ## Verification
 
-There is no test suite. To check a change:
-1. Build with both compilers and no new warnings: `make clean && make all utils`, then `make clean && make CC=gcc-16 all utils`. For a stricter check, use `make WARN="-Wall -Wextra -Wno-unused-parameter"`; the baseline has ~140 unused-variable warnings and some `-Wsometimes-uninitialized`, so don't add to them.
-2. Smoke test: a command file that reads a small `.asc`, runs `PROCESS SMOOTH`, writes and re-reads `.nc`, `PRINT GRIDSTATS`, then `EXIT`. Run it from a scratch directory, because photic writes `history.bam` to the current directory.
-3. For numerical helpers, write a small standalone driver in a scratch directory that links the relevant `.c` files, and run it under `-fsanitize=address,undefined`.
-4. End-to-end runs need user-supplied ACOLITE-corrected imagery and command files, which are not in the repo; ask the user for them.
+To check a change:
+1. **`cd model && make test`** (about 3 s) is the synthetic regression test of the semi-analytical model:
+   - `tests/synth_gen` writes two 16×16 four-band scenes from known depths, using photic's own forward model (`samodel_Rrs`) and tables.
+   - `photic` runs `tests/synth.bam` (`MODEL Lee_Semi_Analytical`).
+   - `tests/synth_check` compares 13 outputs with `tests/baseline/`, with a tolerance of 1e-4 + 1e-3·|value|.
+   - The model is deterministic, and clang and GCC give byte-identical outputs on x86_64.
+   - Any change to the model's numerics will fail this test. If the change is intended, run `make test-baseline` and commit the new baseline with it, explaining why the numbers moved.
+   - Accuracy against the known depths is printed but not checked. The current model does **not** recover them (see REVIEW.md §2b).
+2. Build with both compilers and no warnings: `make clean && make all utils`, then `make clean && make CC=gcc-16 all utils`. For a stricter check, use `make WARN="-Wall -Wextra -Wno-unused-parameter"`; the baseline has ~140 unused-variable warnings and some `-Wsometimes-uninitialized`, so don't add to them.
+3. Smoke test: a command file that reads a small `.asc`, runs `PROCESS SMOOTH`, writes and re-reads `.nc`, `PRINT GRIDSTATS`, then `EXIT`. Run it from a scratch directory, because photic writes `history.bam` to the current directory.
+4. For numerical helpers, write a small standalone driver in a scratch directory that links the relevant `.c` files, and run it under `-fsanitize=address,undefined`.
+5. End-to-end runs need user-supplied ACOLITE-corrected imagery and command files, which are not in the repo; ask the user for them.

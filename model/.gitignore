@@ -9,3 +9,6 @@ smoothspval
 emptygrid
 srtm
 filllakes
+tests/run/
+tests/synth_gen
+tests/synth_check

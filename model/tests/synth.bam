@@ -1,0 +1,13 @@
+// Synthetic regression test for MODEL Lee_Semi_Analytical (see makefile: make test).
+READ GRID s1_b443 s1_b443.asc
+READ GRID s1_b482 s1_b482.asc
+READ GRID s1_b561 s1_b561.asc
+READ GRID s1_b655 s1_b655.asc
+READ GRID s2_b443 s2_b443.asc
+READ GRID s2_b482 s2_b482.asc
+READ GRID s2_b561 s2_b561.asc
+READ GRID s2_b655 s2_b655.asc
+SCENE NAME s1 BANDS s1_b443 s1_b482 s1_b561 s1_b655 WAVELENGTHS 443 482 561 655 THETAVIEW 0 THETASUN 30 HTIDE 0.0
+SCENE NAME s2 BANDS s2_b443 s2_b482 s2_b561 s2_b655 WAVELENGTHS 443 482 561 655 THETAVIEW 0 THETASUN 40 HTIDE 0.4
+MODEL Lee_Semi_Analytical IN s1 s2 OUT H H_sigma H_error albedo sand seagrass coral kmin btype iod
+EXIT

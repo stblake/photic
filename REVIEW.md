@@ -8,7 +8,7 @@
 - Small standalone test drivers for the I/O and numeric helpers, some run under AddressSanitizer.
 - Physics checked against `paper/photic.tex`.
 
-**Status update:** the build items (priority 1–2 and §1) the physics items (priority 3–5) and the data-corruption items (priority 6–8, 11–12) and the memory-safety items (priority 9–10, plus most of §3 critical/high) were fixed after this review; items marked **[fixed]** are resolved, see the git history. The code now builds with Apple clang 17 and GCC 16.
+**Status update:** the build items (priority 1–2 and §1) the physics items (priority 3–5) and the data-corruption items (priority 6–8, 11–12) the memory-safety items (priority 9–10, plus most of §3 critical/high) and the ALIGN items (priority 13; §5 #5–7, #9a) were fixed after this review; items marked **[fixed]** are resolved, see the git history. The code now builds with Apple clang 17 and GCC 16.
 
 **Labels:** severity is critical / high / medium / low. **[verified]** means the finding was reproduced by a test program or by compiling. Items marked *uncertain* depend on intent that the code doesn't record.
 
@@ -32,7 +32,7 @@ Fix these first; each is either a build blocker or silently corrupts scientific 
 | 10 | memory | **[fixed]** Empty names match unused slots in every grid and scene lookup. Missing arguments therefore cause NULL dereferences, use-after-free and double free (e.g. `DELETE` with no argument). |
 | 11 | process | **[fixed]** `PROCESS ADD`: the inverted `!= 0` tests mean the default output is all zeros and `COEFFICIENTS` is ignored (process.c:488-502). [verified] |
 | 12 | process | **[fixed]** `PROCESS UNITE`: `\|\| method_median_no_spval` tests the constant 6 (always true), so nodata is mixed into MEAN/MIN/EXP and the MEDIAN path writes `scene_list[-1]` (process.c:2359, 2379). [verified] |
-| 13 | align | `ALIGN` resamples soundings with replacement by default, which drops ~37% of them; `MAXSOUNDINGS > n` overflows (align.c:252-266). |
+| 13 | align | **[fixed]** `ALIGN` resamples soundings with replacement by default, which drops ~37% of them; `MAXSOUNDINGS > n` overflows (align.c:252-266). |
 | 14 | OpenMP | `samodel()` is one big `omp parallel` block, so setup, the σ pass, `depth *= -1` and the file writes all run on every thread. It is latent only because OpenMP is off. |
 
 ---
@@ -126,6 +126,23 @@ Standalone utilities (they build with `common.c nc.c io.c` plus a helper, and `-
     - an unreachable `k_shallow > n_shallow_pre` check (L808).
 21. Type mixing: `approx_equal` (float) is used on doubles; `vec_mean2_double` returns float; progress timing uses `clock()`.
 22. `samodelgraphics.c` sizes its plots from `n_bands[0]` for every scene, and the x-axis is fixed at 400-700 nm.
+
+## 2b. Findings from the synthetic regression test (`make test`)
+
+These were found after the original review. The test generates noise-free scenes from known depths with photic's own forward model and tables, so the true parameters reproduce the data exactly. Instrumenting `samodel_error` confirmed that the error at the true parameters is 0.
+
+1. **critical — the model does not recover depth from its own noise-free forward model.**
+   - The test uses two scenes, H 1.5–8.25 m, a sand bottom with B 0.6, and turbid IOPs (K_min 0.30/0.35 m⁻¹).
+   - The optimiser converges to local minima with about 15% Rrs misfit, low albedo (B ≈ 0.06) and depths far too deep (bias +50 m, RMSE 52 m).
+   - Simplifying to a single-pixel region (`NSPATIAL 1`) and a single bottom (`NBOTTOMS 1`) does not help.
+   - Likely contributors: Nelder–Mead starting points (8 H starts from 40 m down to 1 m; B started at 4·mean Rrs490); `reqmin`/`konvge`; and no parameter bounds (positivity only via `fabs`).
+   - *To investigate before trusting results in new areas.*
+2. **high — a hard-coded turbid-water prior in `samodel_error` (samodel.c ~L2693-2718).**
+   - For H < 5 m, a K_min below about 0.19–0.28 m⁻¹ adds a penalty of 100·(1/(0.01+K) − 1/(0.01+K₀))².
+   - At K = 0.05 m⁻¹ (clear water) that is about 1.4×10⁴, which dwarfs the Rrs term (in percent). So clear, shallow water is pushed to deep solutions.
+   - This prior is not in the paper. It suits the turbid Pilbara/Gulf sites, but biases clear-water sites.
+3. **high — the solution is very sensitive to the error-term weights.**
+   - Changing `weight_depth` from 15 to 15.5 (+3%) moves the modelled depths by up to 12.6 m and changes P/G/X in almost every pixel.
 
 ---
 
@@ -225,10 +242,11 @@ Standalone utilities (they build with `common.c nc.c io.c` plus a helper, and `-
 2. **[fixed]** `jerlov.c:333`: the water-type fraction is reversed for decreasing ratio tables, which is the normal case for Landsat-8 band pairs. Example: the code gives 0.098 where about 0.90 is expected.
 3. `jerlov.c:28-49`: the table mixes Austin & Petzold (1984) values for types I–C1 with Jerlov (1976) values for C3–C9. It is not monotonic at C1→C3, so a single ratio can match two intervals.
 4. **[fixed]** `secchi.c:165`: `h2` should be `-0.469`. [verified]
-5. `align.c:252-266`: the default resampling with replacement; overflow when MAXSOUNDINGS > n; division by zero when n = 0.
-6. `align.c:396-398`: nodata `z_model` entries are transformed, then missed by the exact-equality nodata check at :627.
-7. `align.c:316-318`: `NEGATESOUNDINGS` flips the sign once per grid, so it is a no-op for an even number of grids.
+5. **[fixed]** `align.c:252-266`: the default resampling with replacement; overflow when MAXSOUNDINGS > n; division by zero when n = 0.
+6. **[fixed]** `align.c:396-398`: nodata `z_model` entries are transformed, then missed by the exact-equality nodata check at :627.
+7. **[fixed]** `align.c:316-318`: `NEGATESOUNDINGS` flips the sign once per grid, so it is a no-op for an even number of grids.
 8. `refine.c:242-244`: specifying only LAND or only SHALLOW makes the whole output nodata. The mask dimensions are not checked.
+9a. **[fixed]** `align.c:177-210` (found while fixing #5): the soundings-file branch reused the argument index `k` as a loop variable, so every option after `SOUNDINGS <file>` (CHARTDATUM, SPVAL, MAXSOUNDINGS, NEGATEGRID, NEGATESOUNDINGS) was silently ignored. These options are now read. `ALIGN` also now rejects an empty input-grid list.
 9. `plot.c:191-258`: `ii` is reused as both coordinate index and window index, so multi-line LOGSCATTER plots read the wrong coordinates.
 
 ### Medium

@@ -3,6 +3,7 @@
 #
 #   make                 builds photic and xyz2nc
 #   make utils           builds the standalone grid utilities
+#   make test            runs the synthetic regression test of the semi-analytical model
 #   make WARN=-Wall      builds with warnings
 #   make PGPLOT_DIR=...  PGPLOT (or giza) installed somewhere other than MacPorts
 #
@@ -20,7 +21,7 @@ PGPLOT_DIR    = /opt/local
 PGPLOT_CFLAGS = -I$(PGPLOT_DIR)/include
 PGPLOT_LIBS   = -L$(PGPLOT_DIR)/lib -lcpgplot -lpgplot -lX11
 
-ALL_CFLAGS = $(CSTD) $(CFLAGS) $(WARN) -MMD -MP $(NETCDF_CFLAGS) $(PGPLOT_CFLAGS)
+ALL_CFLAGS = $(CSTD) $(CFLAGS) $(WARN) -MMD -MP -I. $(NETCDF_CFLAGS) $(PGPLOT_CFLAGS)
 
 CORE   = common.o nc.o io.o
 
@@ -30,7 +31,7 @@ PHOTIC = $(CORE) graphics.o colours.o interp.o filllakesutils.o smoothutils.o \
 
 UTILS  = asc2nc grid2grid smooth smoothspval emptygrid srtm filllakes
 
-.PHONY: all utils clean
+.PHONY: all utils test clean
 
 all: photic xyz2nc
 
@@ -51,10 +52,44 @@ smooth: $(CORE) smoothutils.o smooth.o
 filllakes: $(CORE) filllakesutils.o filllakes.o
 	$(CC) $(CFLAGS) $^ $(NETCDF_LIBS) -lm -o $@
 
+# Synthetic regression test. tests/synth_gen writes band grids from known depths with 
+# photic's own forward model, photic runs MODEL Lee_Semi_Analytical on them, and the 
+# outputs must match tests/baseline/ (make test-baseline regenerates it after an 
+# intentional change). The accuracy against the known depths is reported, not checked. 
+
+TEST_OUTPUTS = modelled_H modelled_error modelled_albedo modelled_min_K modelled_bottom_sand \
+	s1_P s1_G s1_X s2_P s2_G s2_X s1_K_blue s2_K_blue
+
+tests/synth_gen: $(filter-out bam.o, $(PHOTIC)) tests/synth_gen.o
+	$(CC) $(CFLAGS) $^ $(NETCDF_LIBS) $(PGPLOT_LIBS) -lm -o $@
+
+tests/synth_check: $(CORE) tests/synth_check.o
+	$(CC) $(CFLAGS) $^ $(NETCDF_LIBS) -lm -o $@
+
+tests/run: photic tests/synth_gen
+	rm -rf tests/run && mkdir -p tests/run
+	tests/synth_gen tests/run > /dev/null
+	cp tests/synth.bam tests/run/
+	cd tests/run && ../../photic synth.bam < /dev/null > photic.log 2>&1
+
+.PHONY: tests/run test-baseline
+
+test: tests/run tests/synth_check
+	@fail=0; for f in $(TEST_OUTPUTS); do \
+	  tests/synth_check baseline tests/run/$$f.nc tests/baseline/$$f.nc || fail=1; \
+	done; \
+	tests/synth_check truth tests/run/modelled_H.nc tests/run/truth_H.asc; \
+	if [ $$fail = 0 ]; then echo "\nPASS"; else echo "\nFAIL (see tests/run/photic.log)"; exit 1; fi
+
+test-baseline: tests/run
+	mkdir -p tests/baseline
+	for f in $(TEST_OUTPUTS); do cp tests/run/$$f.nc tests/baseline/; done
+
 %.o: %.c
 	$(CC) $(ALL_CFLAGS) -c $< -o $@
 
 clean:
-	rm -f *.o *.d photic xyz2nc $(UTILS)
+	rm -f *.o *.d tests/*.o tests/*.d photic xyz2nc $(UTILS) tests/synth_gen tests/synth_check
+	rm -rf tests/run
 
--include $(wildcard *.d)
+-include $(wildcard *.d tests/*.d)
