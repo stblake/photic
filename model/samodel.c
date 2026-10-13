@@ -97,6 +97,7 @@
 #define LUT 1
 #define RESTART 0
 #define DELTA 0
+#define K_PRIOR 0 // Penalise low K in shallow water and very high K (off: it excludes the truth, EXPERIMENTS.md A-2).
 
 #if DELTA
 #error "DELTA is not supported by the bounded parameterisation"
@@ -2656,6 +2657,9 @@ double samodel_error(double *params, model_data *md) {
 
 	md->bottom_error = error_bottom;
 
+	K_error = 0.0;
+
+#if K_PRIOR
 	// Move away from noisey K in shallow water. That is, very low K and shallow H. 
 
 	double min_mean_coastal_K = 0.275;
@@ -2695,6 +2699,9 @@ double samodel_error(double *params, model_data *md) {
 	}
 
 	md->K_error = K_error;	
+#endif
+
+	md->K_error = K_error;
 
 	// Compute the weighted model error. 
 
