@@ -93,6 +93,7 @@ def reference_depth(site, min_count=3, max_std=0.5):
 
 
 PHOTIC_BANDS = [443.0, 492.0, 560.0, 665.0]  # nominal S2 B1-B4 centres
+RED_EDGE_BANDS = PHOTIC_BANDS + [704.0]       # plus B5 (EXPERIMENTS.md B7)
 N_WATER = 1.34
 
 
@@ -144,8 +145,9 @@ def write_asc(path, grid, lon, lat, cell, nodata=-9999.0):
             f.write(" ".join("%.7g" % v for v in g[i]) + "\n")
 
 
-def prepare_sites():
-    """photic inputs and reference grids for every site from all ACOLITE scenes."""
+def prepare_sites(wavelengths=PHOTIC_BANDS, sites_name="sites"):
+    """photic inputs and reference grids for every site from all ACOLITE scenes, written to
+    derived/tier4/<sites_name>/ (tier4_score.py reads $PHOTIC_TIER4_SITES, default "sites")."""
     from scipy.spatial import cKDTree
     levels, msl = gauge()
     scenes = []
@@ -164,7 +166,7 @@ def prepare_sites():
                                               for s in scenes], sites={})
     for site in SITES:
         lon, lat, cell = site_grid(site)
-        out = os.path.join(DATA, "derived", "tier4", "sites", site)
+        out = os.path.join(DATA, "derived", "tier4", sites_name, site)
         os.makedirs(out, exist_ok=True)
         LON, LAT = np.meshgrid(lon, lat)
         # Resample every scene; photic needs every scene valid at a pixel, so drop scenes
@@ -174,7 +176,7 @@ def prepare_sites():
             dist, idx = s["tree"].query(np.column_stack([LON.ravel(), LAT.ravel()]))
             far = (dist > 1.5*0.0002).reshape(LON.shape)
             bands = {}
-            for wl in PHOTIC_BANDS:
+            for wl in wavelengths:
                 src = min(s["rrs"], key=lambda w: abs(w - wl))
                 band = s["rrs"][src][idx].reshape(LON.shape)
                 band[far] = np.nan
@@ -189,7 +191,7 @@ def prepare_sites():
         lines, scene_lines = [], []
         for k, (s, bands) in enumerate(kept):
             names = []
-            for wl in PHOTIC_BANDS:
+            for wl in wavelengths:
                 name = "s%d_b%d" % (k + 1, wl)
                 write_asc(os.path.join(out, name + ".asc"), bands[wl], lon, lat, cell)
                 lines.append("READ GRID %s %s.asc" % (name, name))
@@ -197,7 +199,7 @@ def prepare_sites():
             tw = np.degrees(np.arcsin(np.sin(np.radians(s["sza"]))/N_WATER))
             tv = np.degrees(np.arcsin(np.sin(np.radians(s["vza"]))/N_WATER))
             scene_lines.append("SCENE NAME s%d BANDS %s WAVELENGTHS %s THETAVIEW %.4f THETASUN %.4f HTIDE %.3f" % (
-                k + 1, " ".join(names), " ".join("%d" % w for w in PHOTIC_BANDS), tv, tw, s["tide"]))
+                k + 1, " ".join(names), " ".join("%d" % w for w in wavelengths), tv, tw, s["tide"]))
         model = "MODEL Lee_Semi_Analytical IN %s OUT H H_sigma H_error albedo sand seagrass coral kmin btype iod" % (
             " ".join("s%d" % (k + 1) for k in range(len(kept))))
         open(os.path.join(out, "run.bam"), "w").write("\n".join(lines + scene_lines + [model, "EXIT"]) + "\n")
@@ -208,7 +210,7 @@ def prepare_sites():
                                    coverage=[round(c, 3) for _, _, c in resampled])
         print("%-14s %dx%d, %d of %d scenes, %d reference cells" % (site, len(lon), len(lat), len(kept), len(scenes),
                                                              meta["sites"][site]["reference_cells"]))
-    json.dump(meta, open(os.path.join(DATA, "derived", "tier4", "sites", "meta.json"), "w"), indent=1)
+    json.dump(meta, open(os.path.join(DATA, "derived", "tier4", sites_name, "meta.json"), "w"), indent=1)
 
 
 if __name__ == "__main__":
@@ -216,5 +218,7 @@ if __name__ == "__main__":
         acolite_all()
     elif sys.argv[1:] == ["sites"]:
         prepare_sites()
+    elif sys.argv[1:] == ["sites5"]:
+        prepare_sites(RED_EDGE_BANDS, "sites5")
     else:
-        raise SystemExit("usage: tier4_prepare.py acolite|sites")
+        raise SystemExit("usage: tier4_prepare.py acolite|sites|sites5")
