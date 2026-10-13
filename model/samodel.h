@@ -22,6 +22,8 @@ void samodel_optimise(model_data *md);
 
 int samodel_n_params(model_data *md);
 
+double samodel_depth(double *params, int k_region);
+
 void samodel_unpack_region(double *params, model_data *md, int k_region, double *H, double *albedo, double q[]);
 
 void samodel_unpack_scene(double *params, model_data *md, int k_scene, double *P, double *G, double *X);

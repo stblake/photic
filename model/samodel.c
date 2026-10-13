@@ -112,6 +112,11 @@
 #define X_MIN 0.0001
 #define X_MAX 0.5
 
+// Bounds of depth (m), log-uniform so the search keeps its resolution in shallow water.
+
+#define H_MIN 0.05
+#define H_MAX 60.0
+
 // Starting bottom albedo.
 
 #define ALBEDO_START 0.3
@@ -1788,12 +1793,18 @@ min/mean/max min(K) = %.4f %.4f %.4f\n",
 //
 //   [H (n_regions) | albedo (n_regions) | mixing (n_regions*(n_bottoms - 1)) | P, G, X per scene]
 //
-// H = |h|; albedo = logistic(z) in (0, 1); the bottom-type fractions q are a softmax of
+// H is log-uniform in [H_MIN, H_MAX] through a logistic; albedo = logistic(z) in (0, 1); the bottom-type fractions q are a softmax of
 // (0, z_1, .., z_{n_bottoms-1}); P, G and X are log-uniform between their bounds through
 // a logistic.
 
 int samodel_n_params(model_data *md) {
 	return md->n_regions*(1 + md->n_bottoms) + 3*md->n_scenes;
+}
+
+static double to_bounded(double z, double lo, double hi);
+
+double samodel_depth(double *params, int k_region) {
+	return to_bounded(params[k_region], H_MIN, H_MAX);
 }
 
 static double logistic(double z) {
@@ -1821,7 +1832,7 @@ void samodel_unpack_region(double *params, model_data *md, int k_region, double 
 	int k, n_regions = md->n_regions, n_bottoms = md->n_bottoms;
 	double z, z_max, sum;
 
-	*H = fabs(params[k_region]);
+	*H = samodel_depth(params, k_region);
 	*albedo = logistic(params[n_regions + k_region]);
 
 	z_max = 0.0;
@@ -1860,7 +1871,7 @@ void samodel_pack(model_data *md, double *H, double *albedo, double *q, double *
 	double q0;
 
 	for (k_region = 0; k_region < n_regions; k_region++) {
-		params[k_region] = H[k_region];
+		params[k_region] = from_bounded(H[k_region], H_MIN, H_MAX);
 		params[n_regions + k_region] = logit(albedo[k_region]);
 		q0 = MAX(q[k_region*n_bottoms], 1.0e-9);
 		for (k = 1; k < n_bottoms; k++) {
@@ -1922,7 +1933,7 @@ void samodel_initial(model_data *md, double h, double albedo, double *start, dou
 	free(q);
 
 	for (k_region = 0; k_region < n_regions; k_region++) {
-		step[k_region] = 1.25*h;
+		step[k_region] = 0.5;
 		step[n_regions + k_region] = 1.0;
 		for (k = 1; k < n_bottoms; k++) {
 			step[2*n_regions + k_region*(n_bottoms - 1) + k - 1] = 1.0;
@@ -2122,7 +2133,7 @@ void samodel_optimise(model_data *md) {
 	origin_weight = sqrt((double) md->n_regions);
 
 	for (i = 0; i < md->n_regions; i++) {
-		H = fabs(best[i]);
+		H = samodel_depth(best, i);
 #if 0
 		if (H > extinction_depth) {  
 			H = extinction_depth;
@@ -2137,7 +2148,7 @@ void samodel_optimise(model_data *md) {
 
 	md->depth /= origin_weight + ((double) md->n_regions) - 1.0;
 #else
-	md->depth = fabs(best[md->origin]);
+	md->depth = samodel_depth(best, md->origin);
 #endif
 
 	// Store percentages of each bottom type. 
@@ -2567,7 +2578,7 @@ double samodel_error(double *params, model_data *md) {
 	n_outliers = 0.0;
 
 	for (k_region = 0; k_region < md->n_regions; k_region++) {
-		depth_mean += fabs(params[k_region]);
+		depth_mean += samodel_depth(params, k_region);
 	}
 	depth_mean /= (double) md->n_regions;
 
@@ -2582,8 +2593,9 @@ double samodel_error(double *params, model_data *md) {
 	}
 
 	for (k_region = 0; k_region < md->n_regions; k_region++) {
-		if (fabs(params[k_region]) < (1.0 - depth_threshold)*depth_mean || fabs(params[k_region]) > (1.0 + depth_threshold)*depth_mean) {
-			error_depth += pow(fabs(params[k_region]) - depth_mean, 2.0);
+		H_region = samodel_depth(params, k_region);
+		if (H_region < (1.0 - depth_threshold)*depth_mean || H_region > (1.0 + depth_threshold)*depth_mean) {
+			error_depth += pow(H_region - depth_mean, 2.0);
 			n_outliers += 1.0;
 		}
 	}
@@ -2648,7 +2660,7 @@ double samodel_error(double *params, model_data *md) {
 
 	double min_mean_coastal_K = 0.275;
 	double min_min_coastal_K = 0.185;
-	H = fabs(params[md->origin]);
+	H = samodel_depth(params, md->origin);
 	K_error = 0.0;
 
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {

@@ -261,6 +261,9 @@ int main(void) {
       printf("NM error %.10g icount %d numres %d ifault %d\nparams", error, icount, numres, ifault);
       for (i = 0; i < n_params; i++) printf(" %.10g", lab_full[i]);
       printf("\n");
+      printf("depths");
+      for (i = 0; i < n_regions; i++) printf(" %.10g", samodel_depth(lab_full, i));
+      printf("\n");
       print_errors(md);
 
     } else if (strcmp(word, "START") == 0) {

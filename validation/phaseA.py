@@ -29,7 +29,7 @@ import tier3_scenes as t3
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.environ.get("PHOTIC_VALIDATION_DATA", os.path.expanduser("~/photic_dev/validation_data"))
-LAB = os.path.join(HERE, "drivers", "invert_lab")
+LAB = os.environ.get("PHOTIC_INVERT_LAB", os.path.join(HERE, "drivers", "invert_lab"))
 DRIVER = os.path.join(HERE, "drivers", "forward_dump")
 N_BOTTOMS = 3  # photic's default NBOTTOMS: sand, seagrass, coral (t2.BOTTOMS indexes)
 H_STARTS = [40.0, 30.0, 20.0, 15.0, 10.0, 7.5, 2.5, 1.0]  # samodel_optimise_one_bottom_combination
@@ -107,7 +107,7 @@ def lab(setup, commands):
         if w[0] == "DONE":
             out.append(cur)
             cur = {}
-        elif w[0] in ("START", "STEP", "PACKED", "params", "PGX", "bottom_percent"):
+        elif w[0] in ("START", "STEP", "PACKED", "params", "depths", "PGX", "bottom_percent"):
             cur[w[0]] = [float(v) for v in w[1:]]
         elif w[0] == "Rrs_modelled":
             cur.setdefault("Rrs_modelled", []).append([float(v) for v in w[3:]])
@@ -130,9 +130,10 @@ def nm(start, step, budget=NM_PHOTIC):
     return "NM %g %d %d %s %s" % (budget[0], budget[1], budget[2], vec(start), vec(step))
 
 
-def depth_of(params, nr, origin):
-    """photic's reported depth: origin weighted sqrt(n_regions) in the regional mean."""
-    H = np.abs(np.asarray(params[:nr]))
+def depth_of(fit, nr, origin):
+    """photic's reported depth from an NM result: origin weighted sqrt(n_regions) in the
+    regional mean of the depths the driver unpacked."""
+    H = np.asarray(fit["depths"])
     w = np.ones(nr)
     w[origin] = np.sqrt(nr)
     return float(np.sum(w*H)/np.sum(w))
@@ -193,12 +194,12 @@ def analyse_pixel(args):
     res["A0"] = dict(depth=a0["depth"], albedo=a0["albedo"], K_min=a0["K_min"], error=a0["model_error"],
                      Rrs_error=a0["Rrs_error"], K_error=a0["K_error"])
     fits = r[k:k + len(H_STARTS)]; k += len(H_STARTS)
-    res["A0x_starts"] = [dict(h_start=h, error=f["error"], depth=depth_of(f["params"], nr, origin))
+    res["A0x_starts"] = [dict(h_start=h, error=f["error"], depth=depth_of(f, nr, origin))
                          for h, f in zip(H_STARTS, fits)]
     best = min(fits, key=lambda f: f["error"])
-    res["A0x"] = dict(depth=depth_of(best["params"], nr, origin), error=best["error"])
+    res["A0x"] = dict(depth=depth_of(best, nr, origin), error=best["error"])
     first_ok = next((f for f in fits if f["error"] < 2.5*n), None)
-    res["A0_early_exit_depth"] = depth_of(first_ok["params"], nr, origin) if first_ok else None
+    res["A0_early_exit_depth"] = depth_of(first_ok, nr, origin) if first_ok else None
     res["A1_conditional"] = [dict(h=h, error=r[k + m]["model_error"], Rrs_error=r[k + m]["Rrs_error"],
                                   K_error=r[k + m]["K_error"], depth_error=r[k + m]["depth_error"])
                              for m, h in enumerate(PROFILE_H)]
@@ -212,11 +213,11 @@ def analyse_pixel(args):
                          depth_error=f["depth_error"], bottom_error=f["bottom_error"]))
     res["A1_profiled"] = prof
     a2 = r[k]; k += 1
-    res["A2"] = dict(depth=depth_of(a2["params"], nr, origin), error=a2["error"],
-                     moved=float(np.max(np.abs(np.abs(a2["params"][:nr]) - truth[iH]))))
+    res["A2"] = dict(depth=depth_of(a2, nr, origin), error=a2["error"],
+                     moved=float(np.max(np.abs(np.asarray(a2["depths"]) - np.array([H[c] for c in window(i, j, nspatial)[0]])))))
     for name in ("water_fixed", "bottom_fixed", "depth_fixed"):
         f = r[k]; k += 1
-        res["A3_" + name] = dict(depth=depth_of(f["params"], nr, origin), error=f["error"],
+        res["A3_" + name] = dict(depth=depth_of(f, nr, origin), error=f["error"],
                                  Rrs_error=f["Rrs_error"], K_error=f["K_error"])
     return res
 
@@ -256,6 +257,7 @@ def main():
     ap.add_argument("--rows", default="0,3,6,9,12,15,18,21,24,27,31")
     ap.add_argument("--cols", default="8,20,28")
     ap.add_argument("--jobs", type=int, default=12)
+    ap.add_argument("--tag", default="", help="appended to the output name, e.g. the branch")
     a = ap.parse_args()
     H, bottom, grids = scene_grids(a.water, a.scenes, a.osoaa, a.noise)
     pix = [(a.water, a.scenes, i, j, H, bottom, grids, a.nspatial)
@@ -264,6 +266,8 @@ def main():
         rows = list(pool.map(analyse_pixel, pix))
     summary, flat = summarise(rows)
     name = "%s_n%d_%s_noise%g_ns%d" % (a.water, a.scenes, "osoaa" if a.osoaa else "control", a.noise, a.nspatial)
+    if a.tag:
+        name += "_" + a.tag
     out = os.path.join(DATA, "runs", "phaseA")
     os.makedirs(out, exist_ok=True)
     json.dump(dict(summary=summary, pixels=rows), open(os.path.join(out, name + ".json"), "w"), indent=1)
