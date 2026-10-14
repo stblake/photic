@@ -27,6 +27,25 @@ SCENES = [
     "S2B_MSIL1C_20240620T024319_N0510_R003_T49KHR_20240620T054509.SAFE",
 ]
 
+# Ten more cloud-free scenes (2026-10-14) to test which conditions spoil a scene: they span
+# sun elevation (glint) and the rate of change of the tide at the Exmouth gauge over the hour
+# around the overpass (tidal currents), as well as the tide. Chosen at random within each
+# group (seed 7) from derived/tier4/candidates.json, one per year where possible. Tier 4's
+# default sites use the first six only; the sites16 set uses all.
+
+EXTRA_SCENES = [
+    "S2B_MSIL1C_20220412T024319_N0400_R003_T49KHR_20220412T055324.SAFE",  # low glint, slack; sun el. 51, tide +0.12 m, -3 cm/h
+    "S2A_MSIL1C_20210906T023251_N0500_R103_T49KHR_20230112T232004.SAFE",  # low glint, slack; sun el. 51, tide +0.84 m, +2 cm/h
+    "S2A_MSIL1C_20190503T024331_N0207_R003_T49KHR_20190503T054637.SAFE",  # low glint, slack; sun el. 46, tide +0.80 m, -5 cm/h
+    "S2A_MSIL1C_20190523T024331_N0207_R003_T49KHR_20190523T064343.SAFE",  # low glint, fast tide; sun el. 41, tide +0.33 m, +40 cm/h
+    "S2A_MSIL1C_20210402T024321_N0300_R003_T49KHR_20210402T051142.SAFE",  # low glint, fast tide; sun el. 53, tide +0.40 m, +51 cm/h
+    "S2B_MSIL1C_20220519T023249_N0400_R103_T49KHR_20220519T055351.SAFE",  # low glint, fast tide; sun el. 41, tide +0.87 m, +40 cm/h
+    "S2B_MSIL1C_20211031T023249_N0500_R103_T49KHR_20230105T051602.SAFE",  # high sun, slack; sun el. 67, tide -0.16 m, -5 cm/h
+    "S2A_MSIL1C_20221004T024331_N0400_R003_T49KHR_20221004T055416.SAFE",  # high sun, slack; sun el. 62, tide -0.50 m, +2 cm/h
+    "S2A_MSIL1C_20230112T024321_N0509_R003_T49KHR_20230112T054603.SAFE",  # high sun, fast tide; sun el. 65, tide -0.47 m, +36 cm/h
+    "S2A_MSIL1C_20191116T023251_N0500_R103_T49KHR_20230526T101946.SAFE",  # high sun, fast tide; sun el. 68, tide -0.35 m, +47 cm/h
+]
+
 
 def list_objects(prefix):
     items, token = [], None
@@ -53,7 +72,7 @@ def wanted(name):
 
 def fetch(dest_root):
     os.makedirs(dest_root, exist_ok=True)
-    for safe in SCENES:
+    for safe in SCENES + EXTRA_SCENES:
         items = [i for i in list_objects(TILE_PREFIX + safe + "/") if wanted(i["name"])]
         if not items:
             raise SystemExit("no objects for %s in gs://%s/%s" % (safe, BUCKET, TILE_PREFIX))

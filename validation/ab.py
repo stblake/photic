@@ -11,6 +11,11 @@ without editing the code:
     ab.py b7-physics .:-DSEED_MODE=2
     ab.py HEAD HEAD@truth            an oracle start: the search refined from the true depth
     ab.py HEAD@prior .@prior         a rough depth prior (truth +-20%) as DEPTHS
+    ab.py HEAD HEAD%sites5           tier 4 from another site set (here with 705 nm)
+    ab.py HEAD HEAD#-s4              tier 4 without scene s4 (or "#s1,s3", or overpass dates
+                                     "#20190428,20210914"); --sites sites16 for all 16 scenes
+
+A variant is ref[:flags][%sites][#scenes][@start].
 
 Each variant is built once (cached by commit, or by the working tree's contents, and flags)
 under $PHOTIC_VALIDATION_DATA/ab/build/. Its photic must support MODEL ... POINTS.
@@ -80,10 +85,35 @@ def model_sources():
     return sorted(f for f in files if f and os.path.isfile(os.path.join(REPO, f)))
 
 
+def parse_variant(spec):
+    """ref[:flags][%sites][#scenes][@start] -> (build spec, sites set or None, scenes or None,
+    start or None)."""
+    start = None
+    if spec.endswith(("@truth", "@prior")):
+        spec, _, start = spec.rpartition("@")
+    spec, _, scenes = spec.partition("#")
+    spec, _, sites = spec.partition("%")
+    return spec, sites or None, scenes or None, start
+
+
+def scene_names(case, scenes):
+    """The tier 4 scenes (s1, s2, ...) a "#" selection keeps: a comma-separated list of scene
+    names or overpass dates (YYYYMMDD); a leading "-" keeps all but those."""
+    meta = json.load(open(case["meta"]))
+    dates = [d[:10].replace("-", "") for d in meta["sites"][case["site"]]["scenes"]]
+    names = ["s%d" % (k + 1) for k in range(len(dates))]
+    drop = scenes.startswith("-")
+    tokens = scenes.lstrip("-").split(",")
+    hit = [n for n, d in zip(names, dates) if n in tokens or d in tokens]
+    unknown = [t for t in tokens if t not in names and t not in dates]
+    if unknown:
+        raise SystemExit("%s: no scene %s (scenes: %s)" % (case["name"], ", ".join(unknown),
+                                                          ", ".join("%s=%s" % nd for nd in zip(names, dates))))
+    return [n for n in names if n not in hit] if drop else hit
+
+
 def build(spec):
-    """Build a variant; returns (label, photic path). A trailing "@truth" (an oracle start) does
-    not change the build."""
-    spec = spec.removesuffix("@truth").removesuffix("@prior")
+    """Build a variant (its build spec, without # or @); returns (label, photic path)."""
     ref, _, flags = spec.partition(":")
     if ref == ".":
         h = hashlib.sha256()
@@ -146,11 +176,12 @@ def tier3_cases(waters):
     return cases
 
 
-def tier4_cases(sites):
+def tier4_cases(sites, sites_set="sites"):
     cases = []
     for site in sites:
-        src = os.path.join(DATA, "derived", "tier4", os.environ.get("PHOTIC_TIER4_SITES", "sites"), site)
-        d = os.path.join(AB, "cases", "t4_" + site)
+        src = os.path.join(DATA, "derived", "tier4", sites_set, site)
+        name = "t4_" + site if sites_set == "sites" else "t4_%s_%s" % (sites_set, site)
+        d = os.path.join(AB, "cases", name)
         if not os.path.exists(os.path.join(d, "truth.npy")):
             os.makedirs(d, exist_ok=True)
             for f in glob.glob(os.path.join(src, "*.asc")) + [os.path.join(src, "run.bam")]:
@@ -158,7 +189,8 @@ def tier4_cases(sites):
                 if not os.path.exists(dst):
                     os.symlink(f, dst)
             np.save(os.path.join(d, "truth.npy"), np.load(os.path.join(src, "reference.npz"))["depth"])
-        cases.append(dict(name="t4_" + site, tier=4, dir=d))
+        cases.append(dict(name=name, tier=4, dir=d, site=site,
+                          meta=os.path.join(DATA, "derived", "tier4", sites_set, "meta.json")))
     return cases
 
 
@@ -193,7 +225,7 @@ def asc_header(case_dir):
         return [next(f) for _ in range(6)]
 
 
-def run_case(photic, case, pts, rundir, fresh=False, start=None):
+def run_case(photic, case, pts, rundir, fresh=False, start=None, scenes=None):
     done = os.path.join(rundir, "done.json")
     if not fresh and os.path.exists(done):
         # The same build, sample and case were run already (rundir encodes all three).
@@ -224,6 +256,10 @@ def run_case(photic, case, pts, rundir, fresh=False, start=None):
             for i in range(H.shape[0] - 1, -1, -1):
                 f.write(" ".join("%.3f" % (-v) if np.isfinite(v) else "-9999" for v in P[i]) + "\n")
     for line in open(os.path.join(case["dir"], "run.bam")).read().split("\n"):
+        if line.startswith("MODEL Lee_Semi_Analytical") and scenes and case["tier"] == 4:
+            keep = scene_names(case, scenes)
+            head, rest = line.split(" IN ", 1)
+            line = head + " IN " + " ".join(keep) + " OUT " + rest.split(" OUT ", 1)[1]
         if line.startswith("MODEL Lee_Semi_Analytical"):
             lines += ["READ GRID ab_points points.asc"]
             if start:
@@ -370,26 +406,41 @@ def main():
     ap.add_argument("--split", choices=sorted(SPLITS), default="test")
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--fresh", action="store_true", help="re-run cases already run for a build")
+    ap.add_argument("--sites", default="sites", help="tier 4 site set under derived/tier4 (default sites; "
+                    "sites16 has all 16 scenes)")
     ap.add_argument("--min-effect", type=float, default=0.02,
                     help="smallest change that counts: in net score (points per point) and in RMSE (as a "
                          "fraction of A's) (default 0.02)")
     args = ap.parse_args()
 
-    (key_a, photic_a), (key_b, photic_b) = build(args.A), build(args.B)
-    # An oracle start runs the same build from the true depth; its runs are kept apart.
-    start_of = lambda spec: spec.rpartition("@")[2] if spec.endswith(("@truth", "@prior")) else None
-    key_a += "@" + start_of(args.A) if start_of(args.A) else ""
-    key_b += "@" + start_of(args.B) if start_of(args.B) else ""
+    variants = {}
+    for spec in (args.A, args.B):
+        bspec, sites_set, scenes, start = parse_variant(spec)
+        key, photic = build(bspec)
+        # Site sets, scene selections and starts run the same build; their runs are kept apart.
+        key += ("%" + sites_set if sites_set else "") + ("#" + scenes.replace(",", "+") if scenes else "") + \
+            ("@" + start if start else "")
+        variants[spec] = (key, photic, scenes, start, sites_set)
+    key_a, photic_a = variants[args.A][:2]
+    key_b, photic_b = variants[args.B][:2]
+    opts = {v[0]: v[2:] for v in variants.values()}
     split = SPLITS[args.split]
-    cases = tier3_cases(split["water"]) + tier4_cases(split["sites"])
+    cases = tier3_cases(split["water"]) + tier4_cases(split["sites"], args.sites)
+    # A variant's own tier 4 site set (%sites): the same sites and survey, other inputs.
+    alt = {}
+    for key, (_, _, sites_set) in opts.items():
+        if sites_set:
+            for c in tier4_cases(split["sites"], sites_set):
+                alt[(key, c["site"])] = c
+    case_for = lambda key, c: alt.get((key, c.get("site")), c) if c["tier"] == 4 else c
     points = sample(cases, args.n, args.seed)
-    tag = "%s_n%d_s%d" % (args.split, args.n, args.seed)
+    tag = "%s_n%d_s%d" % (args.split, args.n, args.seed) + ("" if args.sites == "sites" else "_" + args.sites)
 
     jobs = [(v, photic, c) for v, photic in ((key_a, photic_a), (key_b, photic_b)) for c in cases]
     with ThreadPoolExecutor(args.jobs) as ex:
-        outs = list(ex.map(lambda job: run_case(job[1], job[2], points[job[2]["name"]],
+        outs = list(ex.map(lambda job: run_case(job[1], case_for(job[0], job[2]), points[job[2]["name"]],
                                                 os.path.join(AB, "runs", job[0], tag, job[2]["name"]),
-                                                args.fresh, start_of(job[0])), jobs))
+                                                args.fresh, opts[job[0]][1], opts[job[0]][0]), jobs))
     runs = {(v, c["name"]): o for (v, _, c), o in zip(jobs, outs)}
 
     rng = np.random.default_rng(0)

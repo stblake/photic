@@ -150,7 +150,14 @@ float rms_error;
 
 int model_optimisation = SIMULATED_ANNEALING;
 
-int samodel_n_smoothing_radius = 1, samodel_n_spatial = 2, samodel_n_bottoms = 3;
+// Defaults of SET NSMOOTHING, NSPATIAL and NBOTTOMS (overridable at compile time for tests).
+#ifndef SAMODEL_N_BOTTOMS
+#define SAMODEL_N_BOTTOMS 3
+#endif
+#ifndef SAMODEL_N_SPATIAL
+#define SAMODEL_N_SPATIAL 2
+#endif
+int samodel_n_smoothing_radius = 1, samodel_n_spatial = SAMODEL_N_SPATIAL, samodel_n_bottoms = SAMODEL_N_BOTTOMS;
 
 bool commensurate_grids(geogrid a, geogrid b) {
 
