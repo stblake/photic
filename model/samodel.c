@@ -186,6 +186,19 @@
 #define CONT_SIGMA_H 0.05
 #endif
 
+// Depth prior as a residual (EXPERIMENTS.md B17), with sigma_prior = PRIOR_SIGMA_0 +
+// PRIOR_SIGMA_REL H_prior (m).
+
+#ifndef PRIOR_RESIDUAL
+#define PRIOR_RESIDUAL 0
+#endif
+#ifndef PRIOR_SIGMA_0
+#define PRIOR_SIGMA_0 0.5
+#endif
+#ifndef PRIOR_SIGMA_REL
+#define PRIOR_SIGMA_REL 0.2
+#endif
+
 // Water tied between scenes (EXPERIMENTS.md B12): prior residuals (ln W_s - mean ln W)/TIE_SIGMA
 // for W = P, G, X, in the same chi units as the Rrs residuals. With the water tied, the scenes'
 // different light paths (sun angle, tide) constrain depth independently of the bottom albedo.
@@ -2365,9 +2378,41 @@ static void region_residuals(double *params, model_data *md, int k_region, doubl
 // The number of residuals: the Rrs of every region, then the prior rows (continuity,
 // coherence, ties between scenes, glint offsets).
 
+// Depth prior (EXPERIMENTS.md B17): one residual (H - H_prior)/sigma_prior on the pixel's
+// depth (the weighted mean of its regions, depth_weights), in chi units, where an empirical
+// depth is given; sigma_prior = PRIOR_SIGMA_0 + PRIOR_SIGMA_REL H_prior. The prior then counts
+// where the spectra say little, instead of being only a starting point.
+
+static void depth_weights(model_data *md, double *w);
+
+static int prior_count(model_data *md) {
+	return (PRIOR_RESIDUAL && md->empirical_depth_present) ? 1 : 0;
+}
+
+static void prior_residuals(double *params, model_data *md, double unit, double *r) {
+	int k_region;
+	double w[MAX_SCENES*MAX_SCENES], H = 0.0;
+	if (! prior_count(md)) return;
+	depth_weights(md, w);
+	for (k_region = 0; k_region < md->n_regions; k_region++) H += w[k_region]*samodel_depth(params, k_region);
+	r[0] = unit*(H - md->h_empirical)/(PRIOR_SIGMA_0 + PRIOR_SIGMA_REL*md->h_empirical);
+}
+
+// The prior rows that depend on the region parameters (depth and bottom), which follow the
+// regions' Rrs residuals; the tie and glint rows after them depend only on the water.
+
+static int region_prior_count(model_data *md) {
+	return continuity_count(md) + coherence_count(md) + prior_count(md);
+}
+
+static void region_prior_residuals(double *params, model_data *md, double unit, double *r) {
+	continuity_residuals(params, md, unit, r);
+	coherence_residuals(params, md, unit, &r[continuity_count(md)]);
+	prior_residuals(params, md, unit, &r[continuity_count(md) + coherence_count(md)]);
+}
+
 static int samodel_n_residuals(model_data *md) {
-	return md->n_regions*residuals_per_region(md) + continuity_count(md) + coherence_count(md) +
-		tie_count(md) + glint_count(md);
+	return md->n_regions*residuals_per_region(md) + region_prior_count(md) + tie_count(md) + glint_count(md);
 }
 
 int samodel_residuals(double *params, model_data *md, double *r) {
@@ -2378,10 +2423,9 @@ int samodel_residuals(double *params, model_data *md, double *r) {
 	for (k_region = 0; k_region < md->n_regions; k_region++) {
 		region_residuals(params, md, k_region, scale, &r[k_region*n_region]);
 	}
-	continuity_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region]);
-	coherence_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region + continuity_count(md)]);
-	tie_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region + continuity_count(md) + coherence_count(md)]);
-	glint_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region + continuity_count(md) + coherence_count(md) + tie_count(md)]);
+	region_prior_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region]);
+	tie_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region + region_prior_count(md)]);
+	glint_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region + region_prior_count(md) + tie_count(md)]);
 
 	return samodel_n_residuals(md);
 }
@@ -2435,7 +2479,7 @@ static int lm_jacobian(model_data *md, double *x, double *r, int *index, int n_f
 	double *J, double *x_new, double *r_new) {
 
 	int i, j, k, k_region, n_region = residuals_per_region(md), offset = samodel_water_offset(md),
-		m = samodel_n_residuals(md), n_prior = continuity_count(md) + coherence_count(md);
+		m = samodel_n_residuals(md), n_prior = region_prior_count(md);
 	double h, scale = residual_scale(md), unit = chi_unit(md);
 
 	copy_double_vec(x, x_new, samodel_n_params(md));
@@ -2452,10 +2496,9 @@ static int lm_jacobian(model_data *md, double *x, double *r, int *index, int n_f
 				J[k*n_free + j] = (r_new[k] - r[k])/h;
 			}
 			if (n_prior > 0) {
-				// The prior rows on the region parameters (continuity, coherence); tie and glint
-				// rows depend only on the water parameters.
-				continuity_residuals(x_new, md, unit, &r_new[md->n_regions*n_region]);
-				coherence_residuals(x_new, md, unit, &r_new[md->n_regions*n_region + continuity_count(md)]);
+				// The prior rows on the region parameters (continuity, coherence, depth prior);
+				// tie and glint rows depend only on the water parameters.
+				region_prior_residuals(x_new, md, unit, &r_new[md->n_regions*n_region]);
 				for (k = md->n_regions*n_region; k < md->n_regions*n_region + n_prior; k++) {
 					J[k*n_free + j] = (r_new[k] - r[k])/h;
 				}

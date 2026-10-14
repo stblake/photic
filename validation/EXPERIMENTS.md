@@ -774,6 +774,31 @@ Scores over all points: a *hit* is a depth within tolerance, a *miss* a depth ou
 
 **The gap.** On the same cells the published photic product, made with a sounding-calibrated empirical depth prior, has 42–68% of depths within tolerance and RMSE 1–3.7 m; this model has 0–10%. On these scenes depth information must come from a prior.
 
+### Phase D: empirical prior from the training sites (2026-10-14, `tier4_prior.py`, B17)
+
+**The prior.** Stumpf's log ratio of the per-pixel median Rrs over scenes, H = 56.4 ln(1000 R492)/ln(1000 R560) − 50.1, was fitted on Marina and the gulf entrance only (depths < 15 m).
+- It beat a four-band log-linear model by leave-one-site-out RMSE: 1.65 m against 1.81 m.
+- Within tolerance: 66% at Marina and 76% at the gulf entrance (in sample).
+- **It transfers poorly:** at Bundegi 17% (RMSE 2.75 m) and at Tantabiddi 10% (RMSE 2.99 m, bias +2.4 m), where the water and seabed differ (Ningaloo side). `ab.py X@emp` passes it as DEPTHS. Tier 3 has no soundings, so it uses the ±20% prior.
+
+**B17, the prior as a residual** (`PRIOR_RESIDUAL`, σ = `PRIOR_SIGMA_0` + `PRIOR_SIGMA_REL` H_prior, on the pixel's depth). Against the prior used only as a start (`X@emp`):
+
+| | Training split, tier 4 | Held out, tier 4 | Held out, tier 3 |
+|---|---|---|---|
+| B19 only | net −11 points; hits 8 → 7%, misses 11 → 21% | net −10 points | RMSE 9.1 → 2.5 m |
+| B19 + B17 (σ 0.5 m + 20%) | net −27; hits 8 → 11%, misses 11 → 40% | net −25; hits 11 → 21%, misses 14 → 49%, coverage 25 → 69% | RMSE 8.9 → 0.7 m, net +9 |
+| B19 + B17 (σ 0.5 m + 40%) | net −19 | net −22 | net +11 |
+
+- **On tier 3 the prior residual is a large gain:** RMSE −90% held out, and it beats the prior alone on the training split by 3–7 points.
+- **On tier 4 the spectra pull a good prior away.** On the training sites the prior alone has 35% hits, and photic with it only 7–13%.
+  - About 200 Rrs residuals, treated as independent with 3% model error, outweigh even a tight prior and favour the wrong shallow solution.
+  - The forward model's error on these turbid scenes is systematic, not independent between residuals.
+- On the held-out sites photic with the prior beats the weak prior alone (20% hits, 66% misses) by 18–33 points, mostly by withholding depths.
+- **Decision:** `PRIOR_RESIDUAL` and `PRIOR_PROFILE` stay off (tier 4 regresses against the prior used as a start).
+- **Next, if pursued:**
+  - de-weight the spectra for correlated model error (an effective number of independent residuals) so that a prior can count;
+  - a prior that transfers between sites.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

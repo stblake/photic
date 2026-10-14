@@ -11,6 +11,8 @@ without editing the code:
     ab.py b7-physics .:-DSEED_MODE=2
     ab.py HEAD HEAD@truth            an oracle start: the search refined from the true depth
     ab.py HEAD@prior .@prior         a rough depth prior (truth +-20%) as DEPTHS
+    ab.py HEAD@emp .:-DPRIOR_PROFILE=1@emp   tier 4's empirical prior (tier4_prior.py, fitted on
+                                     the training sites' soundings) as DEPTHS
     ab.py HEAD HEAD%sites5           tier 4 from another site set (here with 705 nm)
     ab.py HEAD HEAD#-s4              tier 4 without scene s4 (or "#s1,s3", or overpass dates
                                      "#20190428,20210914"); --sites sites16 for all 16 scenes
@@ -89,7 +91,7 @@ def parse_variant(spec):
     """ref[:flags][%sites][#scenes][@start] -> (build spec, sites set or None, scenes or None,
     start or None)."""
     start = None
-    if spec.endswith(("@truth", "@prior")):
+    if spec.endswith(("@truth", "@prior", "@emp")):
         spec, _, start = spec.rpartition("@")
     spec, _, scenes = spec.partition("#")
     spec, _, sites = spec.partition("%")
@@ -226,6 +228,20 @@ def asc_header(case_dir):
         return [next(f) for _ in range(6)]
 
 
+def prior_depth(case, H, start):
+    """The depth passed as DEPTHS (positive down): the truth ("truth"); the truth +-20%
+    ("prior", as tier 3's prior scenarios); or the empirical prior fitted on the training sites'
+    soundings ("emp", tier4_prior.py; tier 3 has no soundings and uses the +-20% prior)."""
+    if start == "truth":
+        return H
+    if start == "emp" and case["tier"] == 4:
+        path = os.path.join(os.path.dirname(case["meta"]), case["site"], "prior.npy")
+        if not os.path.exists(path):
+            raise SystemExit("no %s: run tier4_prior.py %s" % (path, os.path.basename(os.path.dirname(case["meta"]))))
+        return np.load(path)
+    return H*(1.0 + np.random.default_rng(12345).normal(0.0, 0.2, H.shape))
+
+
 def run_case(photic, case, pts, rundir, fresh=False, start=None, scenes=None):
     done = os.path.join(rundir, "done.json")
     if not fresh and os.path.exists(done):
@@ -251,7 +267,7 @@ def run_case(photic, case, pts, rundir, fresh=False, start=None, scenes=None):
         # The true depth ("truth", an oracle) or a rough estimate of it ("prior": +-20%, as in
         # tier 3's prior scenarios) as the empirical depth, negative down. Cells without a truth
         # keep the normal search.
-        P = H if start == "truth" else H*(1.0 + np.random.default_rng(12345).normal(0.0, 0.2, H.shape))
+        P = prior_depth(case, H, start)
         with open(os.path.join(rundir, "truth_start.asc"), "w") as f:
             f.writelines(asc_header(case["dir"])[:5] + ["NODATA_value -9999\n"])
             for i in range(H.shape[0] - 1, -1, -1):
@@ -290,6 +306,8 @@ def run_case(photic, case, pts, rundir, fresh=False, start=None, scenes=None):
             E = np.full(H.shape, np.nan)
     ii, jj = np.array(pts).T
     out = dict(truth=H[ii, jj], depth=Hm[ii, jj], sigma=S[ii, jj], misfit=E[ii, jj], seconds=seconds)
+    if start:
+        out["prior"] = prior_depth(case, H, start)[ii, jj]
     json.dump({k: v.tolist() if isinstance(v, np.ndarray) else v for k, v in out.items()}, open(done, "w"))
     return out
 
@@ -343,6 +361,19 @@ def paired(truth, a, b, sa, sb, rng, fa=None, fb=None, n_boot=2000):
     return out
 
 
+def prior_score(truth, prior, depth):
+    """The prior on its own, over all points (a prior always gives a depth where it exists),
+    and the variant's net gain over it: photic adds skill only if it beats its prior."""
+    tol = 0.5 + 0.1*truth
+    vp = np.isfinite(prior) & (prior > 0)
+    vd = np.isfinite(depth) & (depth > 0)
+    net = lambda v, x: np.where(v, np.where(np.abs(np.where(v, x, 0.0) - truth) <= tol, 1.0, -1.0), 0.0)
+    e = (prior - truth)[vp]
+    return dict(hits=float(np.mean(net(vp, prior) > 0)), misses=float(np.mean(net(vp, prior) < 0)),
+                rmse=float(np.sqrt(np.mean(e**2))) if e.size else float("nan"),
+                d_net=float(np.mean(net(vd, depth) - net(vp, prior))))
+
+
 def verdict(s, min_effect):
     """On net (hits - misses over all points, so coverage counts) and on RMSE where both give a
     depth. Each is better or worse only if its 95% interval excludes 0 and the change is
@@ -389,6 +420,12 @@ def report(res):
     for name in ("tier 3", "tier 4", "all"):
         if name in res["groups"]:
             out.append("%-7s %s" % (name + ":", verdict(res["groups"][name], res["min_effect"])))
+    for name in ("tier 3", "tier 4", "all"):
+        for key in ("A", "B"):
+            p = res["groups"].get(name, {}).get("prior_" + key)
+            if p:
+                out.append("%-7s prior alone (%s): hits %.0f%%, misses %.0f%%, RMSE %.2f; %s minus prior: net %+.1f pts" % (
+                    name + ":", key, 100*p["hits"], 100*p["misses"], p["rmse"], key, 100*p["d_net"]))
     for name in ("tier 3", "tier 4", "all"):
         s = res["groups"].get(name, {})
         if "misfit_A" in s:
@@ -455,6 +492,9 @@ def main():
         groups[g] = paired(cat(key_a, "truth"), cat(key_a, "depth"), cat(key_b, "depth"),
                            cat(key_a, "sigma"), cat(key_b, "sigma"), rng,
                            cat(key_a, "misfit"), cat(key_b, "misfit"))
+        for v, label in ((key_a, "A"), (key_b, "B")):
+            if all("prior" in runs[(v, nm)] for nm in names):
+                groups[g]["prior_" + label] = prior_score(cat(key_a, "truth"), cat(v, "prior"), cat(v, "depth"))
     res = dict(A=args.A, B=args.B, key_A=key_a, key_B=key_b, split=args.split, seed=args.seed,
                min_effect=args.min_effect,
                n_points=sum(len(p) for p in points.values()),
