@@ -774,6 +774,25 @@ Scores over all points: a *hit* is a depth within tolerance, a *miss* a depth ou
 
 **The gap.** On the same cells the published photic product, made with a sounding-calibrated empirical depth prior, has 42–68% of depths within tolerance and RMSE 1–3.7 m; this model has 0–10%. On these scenes depth information must come from a prior.
 
+### The 16-scene set (2026-10-14, `sites16`, leave one scene out)
+
+Twelve of the 16 scenes are usable (the four high-sun scenes are masked by ACOLITE). Each scene was dropped in turn from `sites16` (`ab.py HEAD%sites16 HEAD%sites16#-<date>`), tier 4 net points (dropping is better if positive):
+
+| Scene | Training | Held out | | Scene | Training | Held out |
+|---|---|---|---|---|---|---|
+| 2019-04-28 | −4.0 | +2.7 | | 2021-09-06 | −6.7 | **+4.7** |
+| 2019-05-03 | 0.0 | −2.0 | | 2021-09-14 | **−8.7** | −2.0 (RMSE +9%) |
+| 2019-05-23 | **−6.0** | +0.7 | | 2022-04-12 | +3.3 | −4.0 |
+| 2019-06-12 | +0.7 (RMSE −12%) | −3.3 | | 2022-05-19 | −2.7 | +0.7 |
+| 2021-04-02 | −0.7 | +2.0 | | 2022-07-08 | −2.0 | 0.0 |
+| 2021-07-23 | +2.0 (RMSE −27%) | +0.7 | | 2024-06-20 | −2.0 | −2.0 |
+
+- **No scene's effect holds across the splits:** the effects are a few points and change sign between sites.
+- 2024-06-20, harmful within the original six (+9 when dropped), is neutral among the 16.
+- **Subsets chosen on the training sites do not transfer:** dropping the three scenes the training sites flag gives net 0.0 on the held-out sites.
+- With 705 nm, 16 scenes give RMSE −8% (training) and −3% (held out, unclear).
+- **Decision:** on these scenes the number and choice of scenes is not what limits tier 4. The six-scene set stays the default, being half the run time for the same skill.
+
 ### Phase D: empirical prior from the training sites (2026-10-14, `tier4_prior.py`, B17)
 
 **The prior.** Stumpf's log ratio of the per-pixel median Rrs over scenes, H = 56.4 ln(1000 R492)/ln(1000 R560) − 50.1, was fitted on Marina and the gulf entrance only (depths < 15 m).
