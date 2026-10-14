@@ -74,6 +74,8 @@ def run_tier(tier, quick, photic=None, cid=None, only=None):
 
 def cmd_run(args):
     build_drivers()
+    import tier3_scenes
+    tier3_scenes.MODEL = args.model
     cid = args.cid or commit_id()
     for tier in args.tier:
         print("running tier %d for %s ..." % (tier, cid), flush=True)
@@ -84,7 +86,7 @@ def cmd_run(args):
             old = json.load(open(path))
             old.setdefault("scenarios", {}).update(result.get("scenarios", {}))
             result = old
-        result["_meta"] = dict(commit=cid, quick=args.quick, photic=args.photic, only=args.only,
+        result["_meta"] = dict(commit=cid, quick=args.quick, photic=args.photic, only=args.only, model=args.model,
                                date=datetime.datetime.now().isoformat(timespec="seconds"))
         with open(path, "w") as f:
             json.dump(result, f, indent=1, sort_keys=True)
@@ -157,6 +159,8 @@ def main():
     r.add_argument("--only", help="run only the tier 3 scenarios whose names contain this, and merge")
     r.add_argument("--photic", help="photic binary to score (default ../model/photic)")
     r.add_argument("--cid", help="name for the results (default: the commit)")
+    r.add_argument("--model", default="Lee_Semi_Analytical",
+                   help="the MODEL photic runs in tiers 3 and 4 (Lee_Semi_Analytical or Lee_Profile)")
     sc = sub.add_parser("score")
     sc.add_argument("--cid", help="results to score (default: the commit)")
     c = sub.add_parser("compare")

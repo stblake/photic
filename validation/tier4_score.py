@@ -62,8 +62,11 @@ def run(photic, data, workroot, only=None):
         rundir = os.path.join(workroot, site)
         shutil.rmtree(rundir, ignore_errors=True)
         os.makedirs(rundir)
-        for f in glob.glob(os.path.join(site_dir, "*.asc")) + [os.path.join(site_dir, "run.bam")]:
+        for f in glob.glob(os.path.join(site_dir, "*.asc")):
             os.symlink(f, os.path.join(rundir, os.path.basename(f)))
+        bam = open(os.path.join(site_dir, "run.bam")).read()
+        open(os.path.join(rundir, "run.bam"), "w").write(
+            bam.replace("MODEL Lee_Semi_Analytical", "MODEL " + tier3_scenes.MODEL))
         t0 = time.time()
         with open(os.path.join(rundir, "photic.log"), "w") as log:
             subprocess.run([photic, "run.bam"], cwd=rundir, stdin=subprocess.DEVNULL, stdout=log,

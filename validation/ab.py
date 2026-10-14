@@ -16,8 +16,10 @@ without editing the code:
     ab.py HEAD HEAD%sites5           tier 4 from another site set (here with 705 nm)
     ab.py HEAD HEAD#-s4              tier 4 without scene s4 (or "#s1,s3", or overpass dates
                                      "#20190428,20210914"); --sites sites16 for all 16 scenes
+    ab.py HEAD .~Lee_Profile         another model: MODEL Lee_Profile (the profile model) in place
+                                     of Lee_Semi_Analytical, with the same inputs
 
-A variant is ref[:flags][%sites][#scenes][@start].
+A variant is ref[:flags][%sites][#scenes][@start][~model].
 
 Each variant is built once (cached by commit, or by the working tree's contents, and flags)
 under $PHOTIC_VALIDATION_DATA/ab/build/. Its photic must support MODEL ... POINTS.
@@ -88,14 +90,15 @@ def model_sources():
 
 
 def parse_variant(spec):
-    """ref[:flags][%sites][#scenes][@start] -> (build spec, sites set or None, scenes or None,
-    start or None)."""
+    """ref[:flags][%sites][#scenes][@start][~model] -> (build spec, sites set or None, scenes or
+    None, start or None, model or None)."""
+    spec, _, model = spec.partition("~")
     start = None
     if spec.endswith(("@truth", "@prior", "@emp")):
         spec, _, start = spec.rpartition("@")
     spec, _, scenes = spec.partition("#")
     spec, _, sites = spec.partition("%")
-    return spec, sites or None, scenes or None, start
+    return spec, sites or None, scenes or None, start, model or None
 
 
 def scene_names(case, scenes):
@@ -242,7 +245,7 @@ def prior_depth(case, H, start):
     return H*(1.0 + np.random.default_rng(12345).normal(0.0, 0.2, H.shape))
 
 
-def run_case(photic, case, pts, rundir, fresh=False, start=None, scenes=None):
+def run_case(photic, case, pts, rundir, fresh=False, start=None, scenes=None, model=None):
     done = os.path.join(rundir, "done.json")
     if not fresh and os.path.exists(done):
         # The same build, sample and case were run already (rundir encodes all three).
@@ -278,6 +281,8 @@ def run_case(photic, case, pts, rundir, fresh=False, start=None, scenes=None):
             head, rest = line.split(" IN ", 1)
             line = head + " IN " + " ".join(keep) + " OUT " + rest.split(" OUT ", 1)[1]
         if line.startswith("MODEL Lee_Semi_Analytical"):
+            if model:
+                line = line.replace("MODEL Lee_Semi_Analytical", "MODEL " + model, 1)
             lines += ["READ GRID ab_points points.asc"]
             if start:
                 lines += ["READ GRID ab_truth truth_start.asc"]
@@ -453,12 +458,12 @@ def main():
 
     variants = {}
     for spec in (args.A, args.B):
-        bspec, sites_set, scenes, start = parse_variant(spec)
+        bspec, sites_set, scenes, start, model = parse_variant(spec)
         key, photic = build(bspec)
-        # Site sets, scene selections and starts run the same build; their runs are kept apart.
+        # Site sets, scene selections, starts and models run the same build; their runs are kept apart.
         key += ("%" + sites_set if sites_set else "") + ("#" + scenes.replace(",", "+") if scenes else "") + \
-            ("@" + start if start else "")
-        variants[spec] = (key, photic, scenes, start, sites_set)
+            ("@" + start if start else "") + ("~" + model if model else "")
+        variants[spec] = (key, photic, scenes, start, sites_set, model)
     key_a, photic_a = variants[args.A][:2]
     key_b, photic_b = variants[args.B][:2]
     opts = {v[0]: v[2:] for v in variants.values()}
@@ -466,7 +471,7 @@ def main():
     cases = tier3_cases(split["water"]) + tier4_cases(split["sites"], args.sites)
     # A variant's own tier 4 site set (%sites): the same sites and survey, other inputs.
     alt = {}
-    for key, (_, _, sites_set) in opts.items():
+    for key, (_, _, sites_set, _) in opts.items():
         if sites_set:
             for c in tier4_cases(split["sites"], sites_set):
                 alt[(key, c["site"])] = c
@@ -478,7 +483,7 @@ def main():
     with ThreadPoolExecutor(args.jobs) as ex:
         outs = list(ex.map(lambda job: run_case(job[1], case_for(job[0], job[2]), points[job[2]["name"]],
                                                 os.path.join(AB, "runs", job[0], tag, job[2]["name"]),
-                                                args.fresh, opts[job[0]][1], opts[job[0]][0]), jobs))
+                                                args.fresh, opts[job[0]][1], opts[job[0]][0], opts[job[0]][3]), jobs))
     runs = {(v, c["name"]): o for (v, _, c), o in zip(jobs, outs)}
 
     rng = np.random.default_rng(0)
