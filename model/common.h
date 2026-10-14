@@ -179,6 +179,7 @@ struct model_data_struct {
 	double h0;            // Physics-based first estimate of depth (samodel_h0), -1 if none.
 	bool optically_deep;  // The bottom was not detected (EXPERIMENTS.md C2).
 	double deep_chi2;     // Fit improvement of the bottom over an optically deep model.
+	double ident_chi2;    // Misfit gap to the best clearly different depth (EXPERIMENTS.md B20).
 	double depth_prev;
 	double depth_sigma;
 	double Rrs_error;

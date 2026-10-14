@@ -21,6 +21,8 @@ import sys
 
 import numpy as np
 
+import tier4_fetch_s2
+
 DATA = os.environ.get("PHOTIC_VALIDATION_DATA", os.path.expanduser("~/photic_dev/validation_data"))
 
 SITES = {  # west, east, south, north, cell size (deg; 0.0002 ~ 21 m)
@@ -145,13 +147,16 @@ def write_asc(path, grid, lon, lat, cell, nodata=-9999.0):
             f.write(" ".join("%.7g" % v for v in g[i]) + "\n")
 
 
-def prepare_sites(wavelengths=PHOTIC_BANDS, sites_name="sites"):
-    """photic inputs and reference grids for every site from all ACOLITE scenes, written to
-    derived/tier4/<sites_name>/ (tier4_score.py reads $PHOTIC_TIER4_SITES, default "sites")."""
+def prepare_sites(wavelengths=PHOTIC_BANDS, sites_name="sites", scenes_only=None):
+    """photic inputs and reference grids for every site from the ACOLITE scenes (those named in
+    scenes_only, or all), written to derived/tier4/<sites_name>/ (tier4_score.py reads
+    $PHOTIC_TIER4_SITES, default "sites")."""
     from scipy.spatial import cKDTree
     levels, msl = gauge()
     scenes = []
     for l2w in sorted(glob.glob(os.path.join(DATA, "derived", "tier4", "acolite", "*", "*L2W.nc"))):
+        if scenes_only is not None and os.path.basename(os.path.dirname(l2w)) + ".SAFE" not in scenes_only:
+            continue
         g, lon, lat, rrs = read_l2w(l2w)
         ok = np.isfinite(lon) & np.isfinite(lat)
         tree = cKDTree(np.column_stack([lon[ok], lat[ok]]))
@@ -217,8 +222,13 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["acolite"]:
         acolite_all()
     elif sys.argv[1:] == ["sites"]:
-        prepare_sites()
+        prepare_sites(scenes_only=tier4_fetch_s2.SCENES)
     elif sys.argv[1:] == ["sites5"]:
-        prepare_sites(RED_EDGE_BANDS, "sites5")
+        prepare_sites(RED_EDGE_BANDS, "sites5", scenes_only=tier4_fetch_s2.SCENES)
+    elif sys.argv[1:] == ["sites16"]:
+        prepare_sites(sites_name="sites16")
+    elif sys.argv[1:] == ["sites16_5"]:
+        prepare_sites(RED_EDGE_BANDS, "sites16_5")
     else:
-        raise SystemExit("usage: tier4_prepare.py acolite|sites|sites5")
+        raise SystemExit("usage: tier4_prepare.py acolite|sites|sites5|sites16|sites16_5\n"
+                         "  sites, sites5: the six original scenes; sites16, sites16_5: all scenes")

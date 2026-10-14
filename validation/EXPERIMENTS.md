@@ -746,6 +746,34 @@ Scores over all points: a *hit* is a depth within tolerance, a *miss* a depth ou
   - tier 4 Bundegi and Tantabiddi: coverage +15% but net −7 points (interval [−15, 0]); the extra depths at Bundegi are mostly wrong.
 - **Decision:** off by default (no regressions allowed); revisit once the tier 4 red excess is handled.
 
+### Tier 4 diagnosis, scenes and B20 (2026-10-14, `ab.py`)
+
+**What the model does on tier 4.** At Marina, depths of 1–10 m come out at 0.8–2.3 m with a near-black bottom (albedo 0.03–0.05).
+- Scenes 2021-09-14 and 2024-06-20 hold P or X on their bounds.
+- With the true depth as the start (and B19), the Rrs misfit is no lower than at the wrong shallow depth (5.2 vs 5.1%): **the misfit is nearly flat in depth**, so neither the search nor the start can recover depth.
+
+**Other levers, A/B, tier 4:**
+
+| Change | Training split | Held out |
+|---|---|---|
+| 705 nm as a fifth band (`%sites5`) | RMSE −11%, net unclear | RMSE −19%, coverage +9%, net unclear |
+| `WATER_TIE` (σ 0.25–1) | no change (tier 3 net +8 to +10 at σ ≥ 0.5) | – |
+| Sediment-only bottom (`SAMODEL_N_BOTTOMS=1`) | RMSE +166% (tier 3 net +17) | – |
+| Window 3 / 1 (`SAMODEL_N_SPATIAL`) | no gain, 7× slower / net −24 | – |
+
+**Scene quality** (`tier4_scene_quality.py`, ten more scenes, `sites16`):
+- Over water deeper than 10 m, red is 1.4–5 × 10⁻³ and NIR 5–15 × 10⁻⁴ while SWIR is about 0: turbid water, not glint.
+- Scenes with high sun (above 60°) are almost entirely masked by ACOLITE (Rrs at 1600 nm above 0.0215, i.e. glint), so the sun-elevation rule stands.
+- Dropping 2024-06-20 from the six helps (net +9 points); dropping any other scene is neutral or worse.
+- **More scenes do not help:** all usable scenes against the six gives training RMSE +14% and held-out RMSE −11% (unclear), at twice the run time.
+- **Simple selection rules do not help:** clearest six against most turbid six, and slack six against fast-tide six, are neutral on the training sites and slightly worse on the held-out sites (net −9 to −10 points).
+
+**B20, identifiability test (`IDENTIFY`, off).** No depth where the profile shows a clearly different depth within `IDENT_CHI2` of the lowest misfit.
+- It removes hits almost as fast as misses.
+- At `IDENT_CHI2` 64, tier 4 net is +9 points (misses 21 → 10%, hits 9 → 6%), but tier 3 loses 21% of coverage for no net gain.
+
+**The gap.** On the same cells the published photic product, made with a sounding-calibrated empirical depth prior, has 42–68% of depths within tolerance and RMSE 1–3.7 m; this model has 0–10%. On these scenes depth information must come from a prior.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

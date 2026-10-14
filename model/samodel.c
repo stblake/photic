@@ -3180,6 +3180,16 @@ double samodel_h0(model_data *md, int k_region) {
 #define PRIOR_PROFILE 0
 #endif
 
+// Identifiability test (EXPERIMENTS.md B20): no depth where the profile shows a clearly
+// different depth fitting within IDENT_CHI2 (chi units) of the best.
+
+#ifndef IDENTIFY
+#define IDENTIFY 0
+#endif
+#ifndef IDENT_CHI2
+#define IDENT_CHI2 4.0
+#endif
+
 // Levenberg-Marquardt limits: the profile only ranks depths, so it stops earlier.
 
 #define LM_PROFILE_ITERATIONS 30
@@ -3190,7 +3200,7 @@ double samodel_h0(model_data *md, int k_region) {
 void samodel_optimise_one_bottom_combination(model_data *md, double *params) { 
 
 	int i, k, k_h, n_h, offset, n_eval, total_count;
-	double error, lowest_error, *start, *is_free, *best, *profile, profile_error[N_REFINE];
+	double error, lowest_error, *start, *is_free, *best, *profile, profile_error[N_REFINE], grid_error[16];
 
 	double H_grid[16] = {0.5, 1.0, 2.0, 3.5, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0};
 	int n_grid = 10;
@@ -3260,6 +3270,7 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 			}
 			error = samodel_lm(md, start, is_free, LM_PROFILE_ITERATIONS, LM_PROFILE_FTOL, &n_eval);
 			total_count += n_eval;
+			grid_error[k_h] = error;
 
 			// Insert into the sorted list of the best depths.
 
@@ -3341,6 +3352,24 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 		md->optically_deep = md->deep_chi2 < DEEP_PENALTY*md->n_regions*(1 + md->n_bottoms)*log((double) n_resid);
 	}
 #endif
+
+	// Identifiability test: is a clearly different depth almost as good? From the profile (every
+	// depth fitted the same way), the misfit of the best depth outside the tolerance of the
+	// solution's depth is compared with the profile's lowest misfit, in chi units (as the
+	// optically deep test): Delta chi2 = (E_alt^2 - E_min^2)/u^2. Below IDENT_CHI2 the depth is
+	// not identified, and the pixel gets no depth (EXPERIMENTS.md B20).
+
+	if (IDENTIFY && ! md->empirical_depth_present && ! md->optically_deep) {
+		double w[MAX_SCENES*MAX_SCENES], H_best = 0.0, E_min = 1.0e30, E_alt = 1.0e30, unit = chi_unit(md);
+		depth_weights(md, w);
+		for (i = 0; i < md->n_regions; i++) H_best += w[i]*samodel_depth(best, i);
+		for (k_h = 0; k_h < n_grid; k_h++) {
+			E_min = MIN(E_min, grid_error[k_h]);
+			if (fabs(H_grid[k_h] - H_best) > 0.5 + 0.1*H_best) E_alt = MIN(E_alt, grid_error[k_h]);
+		}
+		md->ident_chi2 = (E_alt*E_alt - E_min*E_min)/(unit*unit);
+		if (md->ident_chi2 < IDENT_CHI2) md->optically_deep = true;
+	}
 
 	md->n_iterations = total_count;
 	md->converged = true;

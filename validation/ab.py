@@ -105,7 +105,8 @@ def scene_names(case, scenes):
     drop = scenes.startswith("-")
     tokens = scenes.lstrip("-").split(",")
     hit = [n for n, d in zip(names, dates) if n in tokens or d in tokens]
-    unknown = [t for t in tokens if t not in names and t not in dates]
+    # A date the site does not have (its coverage was too low) is skipped; anything else is an error.
+    unknown = [t for t in tokens if t not in names and t not in dates and not (t.isdigit() and len(t) == 8)]
     if unknown:
         raise SystemExit("%s: no scene %s (scenes: %s)" % (case["name"], ", ".join(unknown),
                                                           ", ".join("%s=%s" % nd for nd in zip(names, dates))))
