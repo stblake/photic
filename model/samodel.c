@@ -244,7 +244,9 @@ static const double bright_hi[8] = {0.75, 0.15, 0.25, 1.0, 1.0, 1.0, 1.0, 1.0};
 #ifndef GLINT_SIGMA
 #define GLINT_SIGMA 5.0e-4
 #endif
+#ifndef GLINT_MAX
 #define GLINT_MAX 3.0e-3
+#endif
 
 // Water parameters per scene: ln P, ln G, ln X, then Y (Y_MODEL 3), then the glint offset.
 
@@ -3169,6 +3171,15 @@ double samodel_h0(model_data *md, int k_region) {
 
 #define N_REFINE 2
 
+// With an empirical depth, fit the water and bottom at that depth (held) before refining all
+// parameters (1), or refine all from photic's default start (0, as before). Off for now: it
+// cuts tier 3's RMSE with a depth prior by ~70%, but on tier 4's held-out sites it gives more
+// depths, mostly wrong (EXPERIMENTS.md B19).
+
+#ifndef PRIOR_PROFILE
+#define PRIOR_PROFILE 0
+#endif
+
 // Levenberg-Marquardt limits: the profile only ranks depths, so it stops earlier.
 
 #define LM_PROFILE_ITERATIONS 30
@@ -3226,6 +3237,16 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 			}
 		}
 		profile_error[0] = 0.0;
+		if (PRIOR_PROFILE) {
+			// Fit the water and bottom with the depth held at the prior, as the profile does,
+			// before every parameter is freed: from photic's default water and bottom, a free
+			// depth is dragged away from even the true depth (EXPERIMENTS.md B19).
+			for (i = 0; i < md->n_regions; i++) {
+				is_free[i] = 0.0;
+			}
+			profile_error[0] = samodel_lm(md, profile, is_free, LM_PROFILE_ITERATIONS, LM_PROFILE_FTOL, &n_eval);
+			total_count += n_eval;
+		}
 	} else {
 		for (k_h = 0; k_h < n_grid; k_h++) {
 			samodel_initial(md, H_grid[k_h], ALBEDO_START, start, is_free);

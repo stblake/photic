@@ -714,6 +714,38 @@ H_sigma is now per pixel: σ_d² = u² wᵀ[(JᵀJ)⁻¹]_HH w. Here w are the p
   - With one scene, σ often reaches the 60 m cap, correctly marking depth as unidentified.
 - **Tier 4** (`ab.py`): 0–4% of |e| ≤ σ. The errors are mostly the depth–albedo bias, which a linearised σ with independent residuals cannot see. Calibrating σ (for example, a correlated model-error term) is a follow-up.
 
+### Merge of candidate 2 and the tier 4 failure (2026-10-14, `ab.py`, training split)
+
+Scores over all points: a *hit* is a depth within tolerance, a *miss* a depth outside it; no depth counts as neither.
+
+- **Before the merge**, tier 4 depths saturate at 1–2 m whatever the truth: at Marina, 7 m comes out 1.9 m and 11 m comes out 2.1 m. Tier 4 had 7% hits and 46% misses.
+- **After the merge** (glint offset, Y2, bottom bounds), tier 4 net is +26 points. That is almost all fewer misses (46 → 21%); hits only rise from 7 to 9%.
+- **Ablations on the merged model**, A/B:
+  - the glint offset carries the gain (off: tier 4 −25 points);
+  - Y2 against Y0: no clear difference, and Y0 is twice as fast;
+  - the bottom bounds cost tier 3's default scenes by construction (seagrass and coral at albedo 0.6), and are neutral on tier 4.
+- **The likely cause on tier 4 is a scene-dependent red excess.** Rrs(665) is still 1.4–3.2 × 10⁻³ at 10–15 m, where no bottom signal survives. The glint prior (σ 5 × 10⁻⁴, cap 3 × 10⁻³, now overridable as `GLINT_MAX`) penalises an offset that large, so the excess reads as a bright shallow bottom.
+
+### B19: starting values and the depth prior (2026-10-14, `PRIOR_PROFILE`, off)
+
+**Do better starting values help?** Test: an oracle start, `ab.py X X@truth`, which passes the true depth as DEPTHS.
+
+- **Without B19 the oracle is worse:** tier 3 RMSE goes 2.8 → 10.7 m, and the Rrs misfit 3.0 → 5.2%.
+  - With an empirical depth, photic skipped the profile and freed every parameter from the default water and bottom.
+  - LM then drags the depth away from the truth.
+  - This is also the cause of the DEPTHS-prior regression after B6 (2.9 → 9.4 m).
+- **B19 fits the water and bottom at the prior depth (held) before freeing everything.** Training split:
+  - oracle start: tier 3 RMSE 11.6 → 3.4 m, coverage +15%;
+  - ±20% prior: tier 3 net +21 points, RMSE −67%.
+- **Even a perfect depth start (with B19) does not beat the blind profile search:** net +5 points, with an interval spanning 0.
+  - The blind search reaches a lower Rrs misfit than the oracle start at about half the points.
+  - So the misfit's minimum is usually not at the true depth: accuracy is limited by the error function and the data, not by the depth start.
+  - Starts for the water and bottom matter only when depth is freed with them, which B19 fixes.
+- **Held-out split (±20% prior):**
+  - tier 3 turbid: RMSE −73%;
+  - tier 4 Bundegi and Tantabiddi: coverage +15% but net −7 points (interval [−15, 0]); the extra depths at Bundegi are mostly wrong.
+- **Decision:** off by default (no regressions allowed); revisit once the tier 4 red excess is handled.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

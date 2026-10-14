@@ -9,6 +9,8 @@ without editing the code:
     ab.py HEAD .                     the working tree against the last commit
     ab.py . .:-DLUT=0                the lookup-table shortcut off
     ab.py b7-physics .:-DSEED_MODE=2
+    ab.py HEAD HEAD@truth            an oracle start: the search refined from the true depth
+    ab.py HEAD@prior .@prior         a rough depth prior (truth +-20%) as DEPTHS
 
 Each variant is built once (cached by commit, or by the working tree's contents, and flags)
 under $PHOTIC_VALIDATION_DATA/ab/build/. Its photic must support MODEL ... POINTS.
@@ -40,6 +42,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -62,6 +65,7 @@ SPLITS = {
 T3_SCENARIOS = [(2, 5e-4, False), (4, 5e-4, False), (2, 5e-4, True)]
 DEPTH_BINS = [(0, 2), (2, 5), (5, 10), (10, 20), (20, 30)]
 NOISE_CM = 0.01  # a win needs |e_B| < |e_A| - 1 cm
+NC_LOCK = threading.Lock()  # the netCDF4 library is not thread-safe
 
 
 def sh(cmd, **kw):
@@ -77,7 +81,9 @@ def model_sources():
 
 
 def build(spec):
-    """Build a variant; returns (label, photic path)."""
+    """Build a variant; returns (label, photic path). A trailing "@truth" (an oracle start) does
+    not change the build."""
+    spec = spec.removesuffix("@truth").removesuffix("@prior")
     ref, _, flags = spec.partition(":")
     if ref == ".":
         h = hashlib.sha256()
@@ -187,7 +193,14 @@ def asc_header(case_dir):
         return [next(f) for _ in range(6)]
 
 
-def run_case(photic, case, pts, rundir):
+def run_case(photic, case, pts, rundir, fresh=False, start=None):
+    done = os.path.join(rundir, "done.json")
+    if not fresh and os.path.exists(done):
+        # The same build, sample and case were run already (rundir encodes all three).
+        out = {k: np.array(v, dtype=float) if isinstance(v, list) else v for k, v in json.load(open(done)).items()}
+        if "misfit" not in out:  # runs cached before the misfit was recorded
+            out["misfit"] = np.full(len(pts), np.nan)
+        return out
     shutil.rmtree(rundir, ignore_errors=True)
     os.makedirs(rundir)
     for f in glob.glob(os.path.join(case["dir"], "*.asc")):
@@ -201,9 +214,22 @@ def run_case(photic, case, pts, rundir):
         for i in range(H.shape[0] - 1, -1, -1):  # north row first; photic's row 0 is south
             f.write(" ".join("%g" % v for v in mask[i]) + "\n")
     lines = []
+    if start:
+        # The true depth ("truth", an oracle) or a rough estimate of it ("prior": +-20%, as in
+        # tier 3's prior scenarios) as the empirical depth, negative down. Cells without a truth
+        # keep the normal search.
+        P = H if start == "truth" else H*(1.0 + np.random.default_rng(12345).normal(0.0, 0.2, H.shape))
+        with open(os.path.join(rundir, "truth_start.asc"), "w") as f:
+            f.writelines(asc_header(case["dir"])[:5] + ["NODATA_value -9999\n"])
+            for i in range(H.shape[0] - 1, -1, -1):
+                f.write(" ".join("%.3f" % (-v) if np.isfinite(v) else "-9999" for v in P[i]) + "\n")
     for line in open(os.path.join(case["dir"], "run.bam")).read().split("\n"):
         if line.startswith("MODEL Lee_Semi_Analytical"):
-            lines += ["READ GRID ab_points points.asc", line + " POINTS ab_points"]
+            lines += ["READ GRID ab_points points.asc"]
+            if start:
+                lines += ["READ GRID ab_truth truth_start.asc"]
+                line = line.replace(" DEPTHS prior", "") + " DEPTHS ab_truth"
+            lines += [line + " POINTS ab_points"]
         elif line.strip():
             lines.append(line)
     open(os.path.join(rundir, "run.bam"), "w").write("\n".join(lines) + "\n")
@@ -212,26 +238,43 @@ def run_case(photic, case, pts, rundir):
         subprocess.run([photic, "run.bam"], cwd=rundir, stdin=subprocess.DEVNULL, stdout=log,
                        stderr=subprocess.STDOUT, check=False)
     seconds = time.time() - t0
-    try:
-        Hm = -t3.read_nc(os.path.join(rundir, "modelled_H.nc"))
-    except (OSError, IndexError):
-        raise SystemExit("photic failed: see %s" % os.path.join(rundir, "photic.log"))
-    try:
-        S = t3.read_nc(os.path.join(rundir, "modelled_H_sigma.nc"))
-    except (OSError, IndexError):
-        S = np.full(H.shape, np.nan)
+    with NC_LOCK:
+        try:
+            Hm = -t3.read_nc(os.path.join(rundir, "modelled_H.nc"))
+        except (OSError, IndexError, RuntimeError):
+            raise SystemExit("photic failed: see %s" % os.path.join(rundir, "photic.log"))
+        try:
+            S = t3.read_nc(os.path.join(rundir, "modelled_H_sigma.nc"))
+        except (OSError, IndexError, RuntimeError):
+            S = np.full(H.shape, np.nan)
+        try:
+            E = t3.read_nc(os.path.join(rundir, "modelled_error.nc"))
+        except (OSError, IndexError, RuntimeError):
+            E = np.full(H.shape, np.nan)
     ii, jj = np.array(pts).T
-    return dict(truth=H[ii, jj], depth=Hm[ii, jj], sigma=S[ii, jj], seconds=seconds)
+    out = dict(truth=H[ii, jj], depth=Hm[ii, jj], sigma=S[ii, jj], misfit=E[ii, jj], seconds=seconds)
+    json.dump({k: v.tolist() if isinstance(v, np.ndarray) else v for k, v in out.items()}, open(done, "w"))
+    return out
 
 
 # Scoring.
 
-def paired(truth, a, b, sa, sb, rng, n_boot=2000):
+def paired(truth, a, b, sa, sb, rng, fa=None, fb=None, n_boot=2000):
     va = np.isfinite(a) & (a > 0)
     vb = np.isfinite(b) & (b > 0)
     both = va & vb
     out = dict(n=int(truth.size), coverage_A=float(va.mean()), coverage_B=float(vb.mean()),
                n_both=int(both.sum()))
+    # Over all points: a hit is a depth within tolerance, a miss a depth outside it, and no
+    # depth is neither; net = hits - misses per point (+1, -1 or 0), so abstaining is neutral.
+    tol_all = 0.5 + 0.1*truth
+    net = lambda v, x: np.where(v, np.where(np.abs(np.where(v, x, 0.0) - truth) <= tol_all, 1.0, -1.0), 0.0)
+    na, nb = net(va, a), net(vb, b)
+    idx = rng.integers(0, truth.size, (n_boot, truth.size))
+    dn = (nb[idx] - na[idx]).mean(axis=1)
+    out.update(hits_A=float(np.mean(na > 0)), hits_B=float(np.mean(nb > 0)),
+               misses_A=float(np.mean(na < 0)), misses_B=float(np.mean(nb < 0)),
+               d_net=float(np.mean(nb - na)), d_net_ci=[float(np.percentile(dn, 2.5)), float(np.percentile(dn, 97.5))])
     if both.sum() < 2:
         return out
     t, ea, eb = truth[both], a[both] - truth[both], b[both] - truth[both]
@@ -246,6 +289,12 @@ def paired(truth, a, b, sa, sb, rng, n_boot=2000):
                within_tol_A=float(np.mean(np.abs(ea) <= tol)), within_tol_B=float(np.mean(np.abs(eb) <= tol)),
                wins_B=float(np.mean(np.abs(eb) < np.abs(ea) - NOISE_CM)),
                wins_A=float(np.mean(np.abs(ea) < np.abs(eb) - NOISE_CM)))
+    if fa is not None and np.isfinite(fa[both]).all() and np.isfinite(fb[both]).all():
+        # The Rrs misfit (%) each variant reached: with the same model, a lower misfit at a
+        # worse depth means the misfit's minimum is not at the truth.
+        out.update(misfit_A=float(np.median(fa[both])), misfit_B=float(np.median(fb[both])),
+                   misfit_lower_B=float(np.mean(fb[both] < fa[both] - 1.0e-3)),
+                   misfit_lower_A=float(np.mean(fa[both] < fb[both] - 1.0e-3)))
     for key, s, e in (("A", sa[both], ea), ("B", sb[both], eb)):
         if np.isfinite(s).all() and (s > 0).any():
             out["sigma_cover_" + key] = float(np.mean(np.abs(e) <= s))
@@ -258,39 +307,41 @@ def paired(truth, a, b, sa, sb, rng, n_boot=2000):
 
 
 def verdict(s, min_effect):
-    """B better or worse only if the 95% interval of dRMSE excludes 0 and |dRMSE| is at least
-    min_effect of A's RMSE (with 300 points, sub-centimetre changes can be 'significant')."""
-    if "d_rmse_ci" not in s:
-        return "too few points"
-    lo, hi = s["d_rmse_ci"]
+    """On net (hits - misses over all points, so coverage counts) and on RMSE where both give a
+    depth. Each is better or worse only if its 95% interval excludes 0 and the change is
+    material: net by at least min_effect (points per point), RMSE by min_effect of A's."""
+    def one(d, ci, scale, sign):
+        lo, hi = ci
+        material = abs(d) >= min_effect*scale
+        if (hi < 0 or lo > 0) and material:
+            return "better" if sign*d > 0 else "worse"
+        return "same" if (hi < 0 or lo > 0) else "unclear"
+    v = "net %s (%+.1f pts)" % (one(s["d_net"], s["d_net_ci"], 1.0, 1), 100*s["d_net"])
+    if "d_rmse_ci" in s:
+        v += ", RMSE %s (%+.0f%%)" % (one(s["d_rmse"], s["d_rmse_ci"], s["rmse_A"], -1), 100*s["d_rmse"]/s["rmse_A"])
     dc = s["coverage_B"] - s["coverage_A"]
-    material = abs(s["d_rmse"]) >= min_effect*s["rmse_A"]
-    if hi < 0 and material:
-        v = "B better"
-    elif lo > 0 and material:
-        v = "B worse"
-    elif hi < 0 or lo > 0:
-        v = "no material difference (dRMSE %+.1f%%)" % (100*s["d_rmse"]/s["rmse_A"])
-    else:
-        v = "no clear difference"
     return v + ("" if abs(dc) < 0.02 else ", coverage %+.0f%%" % (100*dc))
 
 
 def report(res):
     out = ["A/B %s  vs  %s  (split %s, %d points, seed %d)" % (
         res["A"], res["B"], res["split"], res["n_points"], res["seed"]), ""]
-    head = "%-34s %4s %9s %9s %13s %22s %9s %9s %11s" % (
-        "", "n", "cover A/B", "RMSE A", "RMSE B", "dRMSE [95% CI]", "tol A/B", "wins B/A", "sigma A/B")
+    head = "%-34s %4s %9s %9s %9s %22s %15s %22s %9s %9s" % (
+        "", "n", "cover A/B", "hits A/B", "miss A/B", "d net [95% CI] (pts)", "RMSE A -> B", "dRMSE [95% CI]",
+        "wins B/A", "sigma A/B")
     out.append(head)
     pct = lambda x: "%.0f" % (100*x) if x is not None else "-"
     for name, s in res["groups"].items():
-        if "d_rmse_ci" not in s:
-            out.append("%-34s %4d %4s/%-4s  (too few points)" % (name, s["n"], pct(s["coverage_A"]), pct(s["coverage_B"])))
-            continue
-        out.append("%-34s %4d %4s/%-4s %9.2f %13.2f %+7.2f [%+.2f, %+.2f] %4s/%-4s %4s/%-4s %5s/%-5s" % (
-            name, s["n"], pct(s["coverage_A"]), pct(s["coverage_B"]), s["rmse_A"], s["rmse_B"], s["d_rmse"],
-            s["d_rmse_ci"][0], s["d_rmse_ci"][1], pct(s["within_tol_A"]), pct(s["within_tol_B"]),
-            pct(s["wins_B"]), pct(s["wins_A"]), pct(s.get("sigma_cover_A")), pct(s.get("sigma_cover_B"))))
+        row = "%-34s %4d %4s/%-4s %4s/%-4s %4s/%-4s %+6.1f [%+5.1f, %+5.1f]  " % (
+            name, s["n"], pct(s["coverage_A"]), pct(s["coverage_B"]), pct(s["hits_A"]), pct(s["hits_B"]),
+            pct(s["misses_A"]), pct(s["misses_B"]), 100*s["d_net"], 100*s["d_net_ci"][0], 100*s["d_net_ci"][1])
+        if "d_rmse_ci" in s:
+            row += "%6.2f -> %-6.2f %+6.2f [%+.2f, %+.2f] %4s/%-4s %4s/%-4s" % (
+                s["rmse_A"], s["rmse_B"], s["d_rmse"], s["d_rmse_ci"][0], s["d_rmse_ci"][1],
+                pct(s["wins_B"]), pct(s["wins_A"]), pct(s.get("sigma_cover_A")), pct(s.get("sigma_cover_B")))
+        else:
+            row += "(too few points with a depth from both)"
+        out.append(row)
     out.append("")
     for name in ("tier 3", "tier 4"):
         s = res["groups"].get(name, {})
@@ -301,6 +352,11 @@ def report(res):
     for name in ("tier 3", "tier 4", "all"):
         if name in res["groups"]:
             out.append("%-7s %s" % (name + ":", verdict(res["groups"][name], res["min_effect"])))
+    for name in ("tier 3", "tier 4", "all"):
+        s = res["groups"].get(name, {})
+        if "misfit_A" in s:
+            out.append("%-7s Rrs misfit median A %.2f%%, B %.2f%%; lower in B at %.0f%%, in A at %.0f%% of points" % (
+                name + ":", s["misfit_A"], s["misfit_B"], 100*s["misfit_lower_B"], 100*s["misfit_lower_A"]))
     out.append("run time: A %.0f s, B %.0f s" % (res["seconds_A"], res["seconds_B"]))
     return "\n".join(out)
 
@@ -313,11 +369,17 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--split", choices=sorted(SPLITS), default="test")
     ap.add_argument("--jobs", type=int, default=8)
+    ap.add_argument("--fresh", action="store_true", help="re-run cases already run for a build")
     ap.add_argument("--min-effect", type=float, default=0.02,
-                    help="smallest change in RMSE, as a fraction of A's, that counts (default 0.02)")
+                    help="smallest change that counts: in net score (points per point) and in RMSE (as a "
+                         "fraction of A's) (default 0.02)")
     args = ap.parse_args()
 
     (key_a, photic_a), (key_b, photic_b) = build(args.A), build(args.B)
+    # An oracle start runs the same build from the true depth; its runs are kept apart.
+    start_of = lambda spec: spec.rpartition("@")[2] if spec.endswith(("@truth", "@prior")) else None
+    key_a += "@" + start_of(args.A) if start_of(args.A) else ""
+    key_b += "@" + start_of(args.B) if start_of(args.B) else ""
     split = SPLITS[args.split]
     cases = tier3_cases(split["water"]) + tier4_cases(split["sites"])
     points = sample(cases, args.n, args.seed)
@@ -326,7 +388,8 @@ def main():
     jobs = [(v, photic, c) for v, photic in ((key_a, photic_a), (key_b, photic_b)) for c in cases]
     with ThreadPoolExecutor(args.jobs) as ex:
         outs = list(ex.map(lambda job: run_case(job[1], job[2], points[job[2]["name"]],
-                                                os.path.join(AB, "runs", job[0], tag, job[2]["name"])), jobs))
+                                                os.path.join(AB, "runs", job[0], tag, job[2]["name"]),
+                                                args.fresh, start_of(job[0])), jobs))
     runs = {(v, c["name"]): o for (v, _, c), o in zip(jobs, outs)}
 
     rng = np.random.default_rng(0)
@@ -338,7 +401,8 @@ def main():
     for g, names in sel.items():
         cat = lambda v, k: np.concatenate([runs[(v, nm)][k] for nm in names])
         groups[g] = paired(cat(key_a, "truth"), cat(key_a, "depth"), cat(key_b, "depth"),
-                           cat(key_a, "sigma"), cat(key_b, "sigma"), rng)
+                           cat(key_a, "sigma"), cat(key_b, "sigma"), rng,
+                           cat(key_a, "misfit"), cat(key_b, "misfit"))
     res = dict(A=args.A, B=args.B, key_A=key_a, key_B=key_b, split=args.split, seed=args.seed,
                min_effect=args.min_effect,
                n_points=sum(len(p) for p in points.values()),
