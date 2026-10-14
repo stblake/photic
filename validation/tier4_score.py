@@ -74,7 +74,8 @@ def run(photic, data, workroot, only=None):
             bam = rinf.add_rsigma(bam, rinf.image_rinf_for_dir(site_dir, bam, rinf.image_rsigma))
         import spectra_inputs
         open(os.path.join(rundir, "run.bam"), "w").write(
-            spectra_inputs.with_spectra(bam, os.path.join(os.path.dirname(site_dir), "meta.json"), site))
+            spectra_inputs.with_spectra(bam.replace("MODEL Lee_Semi_Analytical", "MODEL " + tier3_scenes.MODEL),
+                                        os.path.join(os.path.dirname(site_dir), "meta.json"), site))
         cases[site] = (site_dir, rundir)
 
     def execute(rundir):

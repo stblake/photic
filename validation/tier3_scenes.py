@@ -99,6 +99,8 @@ FULL = dict(water=["clear", "moderate", "turbid"], n_scenes=[1, 2, 4], noise=[0.
 # Scenes with realistic bottoms (medians of in situ classes at 560 nm, Heron Reef and Moreton
 # Bay; EXPERIMENTS.md B8): the default scenes give every bottom albedo 0.6, which is
 # realistic for sand but 6-10 times too bright for seagrass and coral.
+# The model photic runs (bench.py run --model): Lee_Semi_Analytical, or Lee_Profile.
+MODEL = "Lee_Semi_Analytical"
 REALISTIC_ALBEDO = {"sand": 0.5, "seagrass": 0.07, "coral": 0.10}
 REALISTIC = dict(n_scenes=[2, 4], noise=[0.0, 5e-4])
 QUICK = dict(water=["moderate"], n_scenes=[2], noise=[5e-4], prior=[False])
@@ -296,8 +298,8 @@ def write_inputs(rundir, water, n, H, bottom, tables, luts, noise, prior, contro
         rsigma = (" RSIGMA " + " ".join(["%g" % noise]*len(BANDS))) if noise > 0 else ""
         scenes.append("SCENE NAME s%d BANDS %s WAVELENGTHS %s THETAVIEW 0 THETASUN %.4f HTIDE %.3f%s" % (
             k + 1, " ".join(names), " ".join("%d" % l for l in BANDS), theta_w(theta_air), tide, rsigma))
-    model = "MODEL Lee_Semi_Analytical IN %s OUT H H_sigma H_error albedo sand seagrass coral kmin btype iod" % (
-        " ".join("s%d" % (k + 1) for k in range(n)))
+    model = "MODEL %s IN %s OUT H H_sigma H_error albedo sand seagrass coral kmin btype iod" % (
+        MODEL, " ".join("s%d" % (k + 1) for k in range(n)))
     if prior:
         # A rough empirical depth estimate (+-20%), negative down as photic expects.
         est = -H*(1.0 + rng.normal(0.0, 0.2, H.shape))

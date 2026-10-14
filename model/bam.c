@@ -186,7 +186,7 @@ void run_model_stumpf2003();
 void run_model_spline();
 void run_model_mueller();
 void run_model_mueller_secchi();
-void run_model_lee_semi_analytical();
+void run_model_lee_semi_analytical(bool profile);
 void run_model_morel();
 void run_model_lee_kd();
 void run_model_lee_zsd();
@@ -3010,7 +3010,9 @@ void run_model() {
   } else if (strcmp(parsed[1], "Lee_Secchi_LS8") == 0) {
     run_model_lee_zsd();
   } else if (strcmp(parsed[1], "Lee_Semi_Analytical") == 0) {
-    run_model_lee_semi_analytical();
+    run_model_lee_semi_analytical(false);
+  } else if (strcmp(parsed[1], "Lee_Profile") == 0) {
+    run_model_lee_semi_analytical(true);
   } else {
     printf("\nERROR: unknown model name '%s'.\n", parsed[1]);
     return ;    
@@ -3027,8 +3029,11 @@ void run_model() {
 //
 //  POINTS limits the model to the cells where that grid is non-zero (and not nodata), for
 //  quick evaluations on a sample of points (validation/ab.py). Other cells get no depth.
+//
+//  MODEL Lee_Profile takes the same arguments and runs the profile model (profile.c) instead;
+//  it uses no DEPTHS.
 
-void run_model_lee_semi_analytical() {
+void run_model_lee_semi_analytical(bool profile) {
 
   int k, n, m, nrows, ncols, nscenes, nbands, ps_in[MAX_GRIDS], ps_bathy, ps_model_error, ps_empirical_depths,
     ps_bottom_albedo, ps_bottom_sand, ps_bottom_seagrass, ps_bottom_coral, ps_kd_min, ps_bottom_type, 
@@ -3146,7 +3151,7 @@ DEPTHS /depth estimates/ POINTS /cells to model/ BOTTOMONLY \n");
         return ; 
     }
   } else {
-    printf("\n\nWARNING!! Empirical depths not present!! This greatly effects the model optimisation!!\n\n");
+    if (! profile) printf("\n\nWARNING!! Empirical depths not present!! This greatly effects the model optimisation!!\n\n");
     empirical_depth_present = false;
     ps_empirical_depths = 0;
   }
@@ -3307,6 +3312,13 @@ DEPTHS /depth estimates/ POINTS /cells to model/ BOTTOMONLY \n");
 
 
 // Call the SA model. 
+
+  if (profile) {
+    profile_model(scene_data, gridded_data, ps_in, nscenes, points_present, gridded_data[ps_points],
+      bathy, bathy_sigma, model_error, bottom_albedo, bottom_sand, bottom_seagrass, bottom_coral, kd_min,
+      bottom_type, index_optical_depth);
+    return ;
+  }
 
   samodel(scene_data, gridded_data, ps_in, nscenes, // inputs
     empirical_depth_present, gridded_data[ps_empirical_depths],

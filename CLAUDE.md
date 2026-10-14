@@ -52,6 +52,7 @@ Main commands (dispatch in `bam.c:run_command`):
 | `PROCESS <op> IN ... OUT ...` | process.c | Grid ops: INTERPOLATE, SMOOTH, SHALLOW, PANSHARPEN, NOISE, DEGLINT, UNITE (mosaic), CLOUD, MASK, LAND, OVERLAY, POLYGONS, ERROR, RELATIVEERROR, MNDWI, FILL, ADD, MEDIAN |
 | `SCENE NAME s BANDS ... WAVELENGTHS ... THETAVIEW v THETASUN w [HTIDE h] ...` | bam.c | Define a multi-band scene for the SA model |
 | `MODEL Lee_Semi_Analytical IN <scenes> OUT <10 grids> [DEPTHS g]` | bam.c → samodel.c | **The core physics-based model** |
+| `MODEL Lee_Profile IN <scenes> OUT <10 grids> [POINTS g]` | bam.c → profile.c | Profile model for multispectral imagery: water from the image's deep pixels, exact depth profile (validation/EXPERIMENTS.md, Phase F) |
 | `MODEL lyzenga_log_linear\|polcyn_log_ratio ...` | bam.c | Older empirical models fitted to soundings (simulated annealing) |
 | `MODEL Lee_Kd_LS8\|Lee_Secchi_LS8\|Kd_490_Mueller\|Chl_Morel ...` | bam.c, secchi.c | Band-ratio water-quality products |
 | `COMPUTE AREA\|LSM\|LSB\|BOTTOM\|K\|PERCENTILE` | bam.c, jerlov.c | Deep-water signal, attenuation (Jerlov), areas, etc. |
@@ -106,7 +107,7 @@ Main commands (dispatch in `bam.c:run_command`):
 - **Tier 3:** inversion of synthetic scenes built from OSOAA.
 - **Tier 4:** Sentinel-2 over Exmouth Gulf, scored against WA DoT soundings.
 
-For quick iteration, `validation/ab.py A B` (git refs, or `.` for the working tree, each optionally `:<CFLAGS>` such as `.:-DLUT=0`) runs a paired A/B test on ~300 depth-stratified out-of-sample points in about a minute. It uses `MODEL Lee_Semi_Analytical ... POINTS <grid>`, which models only a grid's non-zero cells. It is a screen; the benchmark below is still the acceptance test.
+For quick iteration, `validation/ab.py A B` (git refs, or `.` for the working tree, each optionally `:<CFLAGS>` such as `.:-DLUT=0`, and `~Lee_Profile` for the profile model) runs a paired A/B test on ~300 depth-stratified out-of-sample points in about a minute. It uses `MODEL Lee_Semi_Analytical ... POINTS <grid>`, which models only a grid's non-zero cells. It is a screen; the benchmark below is still the acceptance test.
 
 Data and tools live outside the repo in `~/photic_dev/validation_data` (override with `$PHOTIC_VALIDATION_DATA`), with a venv at `.venv`. Run `bench.py run --tier N`, then `bench.py score`, then `bench.py compare baseline <commit>`. The acceptance rule is in the README: depth metrics in tiers 3 and 4 must improve with no regressions, and baselines are updated deliberately in the same commit. `validation/makefile` includes `model/makefile.inc`, which holds the shared compiler settings and object lists.
 

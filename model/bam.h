@@ -12,6 +12,7 @@
 #include "jerlov.h"
 #include "secchi.h"
 #include "samodel.h"
+#include "profile.h"
 #include "process.h"
 #include "align.h"
 #include "refine.h"

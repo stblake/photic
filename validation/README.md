@@ -26,6 +26,8 @@ The benchmark names photic's spectral data in every command file it writes (`spe
 
 Scorecards record the setting.
 
+`bench.py run --model Lee_Profile --cid <name>` runs tiers 3 and 4 with the profile model (`MODEL Lee_Profile`, EXPERIMENTS.md Phase F) instead of `Lee_Semi_Analytical`.
+
 `make` builds `drivers/forward_dump` against `../model`. Results for each commit go to `$PHOTIC_VALIDATION_DATA/runs/<commit>/` (default `~/photic_dev/validation_data`); only scorecards are kept in git.
 
 ## Quick A/B tests (`ab.py`)
@@ -36,6 +38,7 @@ To iterate on the model, compare two variants on a few hundred out-of-sample poi
 $PY ab.py HEAD .                  # the working tree against the last commit
 $PY ab.py . .:-DLUT=0             # a compile-time switch, without editing the code
 $PY ab.py . .:-DY_MODEL=2 --split train --seed 2
+$PY ab.py HEAD .~Lee_Profile      # the profile model (MODEL Lee_Profile) against photic's SA model
 ```
 
 - **Variants:** a git ref or `.` (the working tree), optionally followed by `:` and extra compiler flags. Each build is cached under `ab/build/`, and its photic must support `MODEL ... POINTS`.
@@ -54,7 +57,7 @@ This is a screen, not the acceptance test below. Use it to choose what to benchm
 
 ## Diagnosing the inversion
 
-`EXPERIMENTS.md` is the experiment plan and log for making the model work without a depth prior. `phaseA.py` runs photic's own error function and optimiser on single tier 3 pixels through `drivers/invert_lab`, against the known truth.
+`EXPERIMENTS.md` is the experiment plan and log for making the model work without a depth prior. `profile_model.py` is the Python prototype of the profile model (Phase F), run on `ab.py`'s points against a photic variant. `paper_profile.py` runs the profile-model paper's experiments (ablation, scene subsets) and writes its figures (`paper/msab_figures/`). `phaseA.py` runs photic's own error function and optimiser on single tier 3 pixels through `drivers/invert_lab`, against the known truth.
 
 ## Data and tools (all under `$PHOTIC_VALIDATION_DATA`, not in git)
 

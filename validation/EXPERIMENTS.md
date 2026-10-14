@@ -55,6 +55,52 @@ Run tier 3 (control, then OSOAA) with one change at a time, then the promising o
 
 Invert the confident pixels, calibrate a band-ratio depth model on them, and use that as the prior for the rest. Tier 3's prior scenarios measure the potential gain.
 
+## Phase F: a profile model for multispectral imagery (planned 2026-10-14)
+
+**Why a new model.** HOPE was built for hyperspectral data. With four or five bands, each scene adds three free water parameters (P, G, X) for four or five data. The fit then trades water, bottom brightness and depth against each other, and absorbs the forward model's own error into depth.
+- On tier 4 the misfit is nearly flat in depth (B19, tier 4 diagnosis), so no start or optimiser can recover depth.
+- The pieces that worked each removed freedom:
+  - water from a deep-water reference (decoupling step 2);
+  - the class-aware H0, a depth scan with the bottom brightness solved linearly (`samodel_h0`);
+  - the bottom bounded by class (B8);
+  - the optically deep test (C2).
+- The pieces that failed let the water bend to the shallow pixels: tile water (decoupling step 3) and the tie between scenes (B12).
+
+**The model.** Still Lee's physics, but with the water observed rather than fitted, and a global search over the one non-linear unknown.
+1. **Water per scene, from the image.**
+   - The deep-water reflectance rrs∞_s(λ) is the median spectrum of the scene's optically deep pixels.
+   - These are found without soundings: at 665 nm (and 705 nm) every bottom, even seagrass at albedo 0.03 (ρ/π ≈ 0.01), is far brighter than deep water (rrs∞ ≈ 0.001–0.003). So the pixels with the lowest red (and NIR) reflectance are the deepest.
+   - κ_s(λ) and u_s(λ) come from rrs∞_s by QAA (as `samodel_h0`).
+   - The deep pixels' spread gives each band's noise σ_n,λ, the missing noise estimate for tier 4.
+2. **Per pixel, all scenes at once.** With Z_s = H + h_s (tide), M^C_s and M^B_s Lee's path factors (sec θ_w + D_C,B sec θ_v):
+
+   rrs_sλ = rrs∞_sλ [1 − exp(−κ_sλ M^C_s Z_s)] + exp(−κ_sλ M^B_s Z_s) b ρ_c(λ)/π
+
+   - The bottom is one class c (sand, seagrass or coral, photic's shapes) with brightness b bounded to the class range (B8), and is shared by all scenes.
+   - b enters linearly, so for each depth on a grid (0.1–30 m) and each class it is solved exactly by bounded least squares. The profile χ²(H) is then exact, and its global minimum is found by construction. Here χ² is the sum of the squared residuals divided by σ² = σ_n² + (ε rrs)².
+   - The model has one free non-linear parameter (H) and two linear ones per pixel, against 4–5 S data, with no spatial window.
+3. **Report a depth only when the data support one.**
+   - **Resolvable:** the shallowest optically deep alternative (H = 30 m) must score worse by Δχ² > T_deep.
+   - **Unambiguous:** no depth further than the tolerance from the best one may score within T_amb of it.
+   - σ_H is the half-width of the profile at Δχ² = 1, scaled by the reduced χ².
+   - T_deep, T_amb and ε are tuned on the training split only.
+4. **Extensions, one at a time, each A/B tested:**
+   - (a) 705 nm as a fifth band;
+   - (b) a per-scene glint offset, which is linear and so is also solved exactly;
+   - (c) the water varying across the site: rrs∞ from the deep pixels within a moving window;
+   - (d) a per-scene turbidity factor on the deep-water backscatter, for shallows that are more turbid than the deep reference;
+   - (e) robust per-scene weights for scenes that disagree at a pixel;
+   - (f) a two-class bottom mixture.
+
+**Tests and gates.**
+- **F0, prototype in Python** (`profile_model.py`, on `ab.py`'s points, compared with photic HEAD on the same points with `ab.py`'s paired scoring):
+  - F0a uses an oracle deep-water reference, from the truth (tier 3) or from the sounded cells deeper than the optically deep depth (tier 4). This tests identifiability, not the method.
+  - F0b uses the sounding-free reference above.
+  - **Gate G1:** on the training split, F0b's net score (hits − misses over all points) beats photic's with the 95% interval above 0. If F0a fails too, the data and forward model cannot support depth on these scenes, and the conclusion is a resolvability mask plus a prior.
+- **F1, extensions** (a)–(f) and the tuning of ε, T_deep and T_amb, on the training split.
+- **Gate G2:** the tuned model on the test split, run once, beats photic in net score with no material RMSE regression in either tier.
+- **F2, port to C** as `MODEL Lee_Profile` (same inputs and outputs as `Lee_Semi_Analytical`, reusing its tables and the `POINTS` mode), only after G2. Check the C port against the prototype on the same points, then run the full benchmark under the README's acceptance rule.
+
 ## Log
 
 | ID | Date | Hypothesis | Prediction | Result | Decision |
@@ -1069,6 +1115,246 @@ The benchmark names its data explicitly (`spectra_inputs.py`), so these results 
 - **Seven measured types, single:** coverage roughly halves (Tantabiddi 48 → 24%), because the optically deep test counts every type's degrees of freedom, so hits fall. RMSE is lower where depths are given. More types is not a route to more hits.
 - **Bottom: mixtures stay.** Given the tier 3 `_insitu` result, photic keeps fitting a mixture of bottom types (`ALL_BOTTOMS 1`, the default), not one type at a time. `ALL_BOTTOMS 0` stays as an option.
 - **Decision:** no default changes. All of it ships as data and options. Note for the RT forward model spec (`BATHY_PDE_APPROACH.tex`): band averaging must come with a forward model that is itself exact, or its gains are offset elsewhere.
+
+### Phase F: the profile model (2026-10-14, `profile_model.py`, `MODEL Lee_Profile`)
+
+The plan is in Phase F above. A/B results are against photic HEAD (d9d14d6) on `ab.py`'s points: net is hits − misses over all points, and RMSE is on the points both give a depth.
+
+**F0a, identifiability (oracle deep-water reference), training split.**
+- Tier 4: net +18.7 points [+8.0, +30.7], hits 9 → 21%, RMSE 2.88 → 1.29 m.
+- Tier 3: net −3 points (unclear), RMSE −43%.
+- **Depth is identifiable on the Exmouth scenes once the deep-water reflectance is right.** The flat misfit of the tier 4 diagnosis came from letting the water bend, not from the data.
+
+**F0b, references without soundings.**
+- **Lowest raw red (first try):** tier 3 net −65 points. In clear water red (≈ 2 × 10⁻⁴) is below the noise (5 × 10⁻⁴), so the lowest red picked noise extremes, many of them shallow.
+  - On tier 4, the lowest-red pixels matched the sounded deep water in blue and green.
+  - But red came out about 40% low (noise selection), and in some scenes the darkest red was a clearer water mass over 5 m (Marina s1 and s2, Tantabiddi s1).
+- **Fixes:**
+  - rank by red smoothed over 7 × 7 cells;
+  - keep the lowest 20% by red, then the lowest 15% of those by green (where the water is clear enough for the bottom to show beyond the red's reach);
+  - take the reference from the deep pixels within 1.5 km of each cell.
+
+**F1, tuning on the training split (seed 1).** Tier 4 / tier 3; photic HEAD has hits 9 / 23% and misses 21 / 15%:
+
+| Setting | Net (pts) | Hits | Misses | RMSE change |
+|---|---|---|---|---|
+| whole-site water, ε 0.03, T_deep 9 | −11.3 / +8.7 | 17 / 46% | 41 / 29% | −37 / −52% |
+| 1.5 km water, ε 0.03, T_deep 9 | −1.3 / +8.7 | 19 / 46% | 33 / 29% | −45 / −52% |
+| … T_deep 25 | +11.3 / +9.3 | 15 / 44% | 17 / 27% | −41 / −52% |
+| … T_deep 64 | +18.7 / +6.7 | 9 / 39% | 3 / 24% | −80 / −54% (tier 4 coverage 11%) |
+| … T_deep 25, glint offset | +16.7 / +4.7 | 19 / 41% | 15 / 28% | −40 / −47% |
+| … T_deep 25, 705 nm | +6.0 / +9.3 | 12 / 44% | 19 / 27% | −49 / −52% |
+| … T_deep 25, ε 0.02 / 0.05 | +11.3 / +6.7, +13.3 / +8.7 | 14–16 / 43% | 15 / 26–28% | −40 / −52% |
+| … T_deep 25, ε 0.05, T_amb 1 | +17.3 / +15.3 | 16 / 35% | 11 / 11% | −61 / −52% |
+| … T_deep 25, ε 0.05, T_amb 2 | +16.0 / +14.7 | 12 / 29% | 9 / 7% | −61 / −61% |
+| … T_deep 25, ε 0.03, T_amb 4 | +18.0 / +14.0 | 7 / 23% | 1 / 1% | −93 / −82% |
+| **… T_deep 25, ε 0.05, T_amb 1, glint offset** | **+19.3 / +14.0** | **18 / 32%** | **11 / 10%** | **−39 / −52%** |
+| … T_deep 25, ε 0.05, T_amb 2, glint offset | +20.7 / +15.3 | 13 / 29% | 5 / 5% | −61 / −61% |
+
+- **The local water (1.5 km) and the optically deep threshold matter most.**
+- **The ambiguity test removes most wrong depths;** at T_amb 4 it also removes most right ones.
+- **The glint offset adds tier 4 hits.**
+- **705 nm, which helped photic, does not help this model,** so it stays at four bands.
+- **The chosen setting (bold) keeps the most tier 4 hits with misses halved.** It was confirmed on seed 2:
+  - tier 4 net +20.0 [+10.0, +30.0], hits 9 → 20%, misses 19 → 10%, RMSE −40%;
+  - tier 3 net +8.7 (unclear), hits 28 → 32%, RMSE −66%.
+
+**Gate G2, held-out split, run once with the frozen settings:**
+- **Overall: net +8.7 points [+1.0, +16.7], better.** RMSE −20% (unclear), at the same coverage.
+- **Tier 4:** net +9.3 (unclear), hits 10 → 17%, misses 21 → 19%, RMSE 2.76 → 2.19 m.
+  - Bundegi improves clearly (+14.7 [+2.7, +28.0]).
+  - Tantabiddi, on the Ningaloo side, is unchanged within the noise (+4.0).
+- **Tier 3 turbid:** net +8.0 (unclear), misses 11 → 5%.
+- No material regression in either tier, so G2 passes as written, on the overall score.
+
+**F2, C port** (`model/profile.c`, `MODEL Lee_Profile`, same arguments and outputs as `Lee_Semi_Analytical`; settings `PROFILE_*`, overridable with -D):
+- **Matches the prototype exactly** on all 300 training points (`-DPROFILE_TILE=1`, one reference per cell).
+- The default, one local reference per 8 × 8-cell tile, changes one point in 300.
+- Runs the 300 points in 4 s against photic's 90 s, and a whole tier 4 site in 3–14 s.
+- Clean under AddressSanitizer and UBSan, and warning-free with clang and gcc 16 (`-Wall -Wextra`).
+- `Lee_Semi_Analytical` is unchanged: `make test`'s outputs are byte-identical to HEAD's.
+- `ab.py` takes `~Lee_Profile` as a variant suffix, and `bench.py run --model Lee_Profile` runs tiers 3 and 4 with it.
+
+**Full benchmark** (`runs/profile-wt`).
+- The reference is candidate 2's full run (a54973d), the same SA model HEAD runs by default. HEAD's own runs (`head-d9d14d6` tier 3, `head-d9d14d6-t4` tier 4) give identical scores.
+- *Hits* are depths within tolerance over all reference cells (coverage × within-tolerance share).
+
+| Tier 4 site | Hits SA → profile | Within tol. on covered cells | Coverage | RMSE | Run time |
+|---|---|---|---|---|---|
+| Bundegi (held out) | 9 → **22%** | 42 → **72%** | 22 → 30% | 2.39 → **1.68** | 2972 → 7 s |
+| Tantabiddi (held out) | 23 → **54%** | 48 → **69%** | 49 → 79% | 2.51 → **2.17** | 5505 → 6 s |
+| Marina (training) | 6 → **21%** | 16 → **60%** | 37 → 35% | **2.41** → 3.01 | 5919 → 14 s |
+| Gulf entrance (training) | 1 → 1% | 31 → 41% | 2 → 4% | 4.26 → 3.85 | 1461 → 3 s |
+
+- **Tier 4 improves at every site, with no soundings and no prior, at about 500× the speed.**
+  - **Correction (2026-10-14, paper):** an earlier version said the share within tolerance on the covered cells was at or above the published, sounding-calibrated product. That compares different cells. Over all reference cells the published product has far more hits: Bundegi 35 against 22%, Marina 61 against 21%, gulf entrance 50 against 1.5%. At 0–5 m the two are comparable (Bundegi 34 against 30%, Marina 43 against 33%).
+  - The gulf entrance is 14–24 m of turbid water and is correctly reported as optically deep.
+  - Marina's RMSE rises because of a few deep cells placed too shallow (bias −1.8 m).
+- **Tier 3 is mixed.**
+  - Where the profile model gives a depth it is usually much more accurate. Turbid water has RMSE 0.35–0.75 m against 1.3–3.5 m, with 77–100% within tolerance.
+  - It abstains more, so hits over all cells fall on average: clear 38 → 30%, moderate 20 → 15%, turbid 12 → 11%. The losses are mainly in the noise-free clear and moderate scenarios (e.g. clear, 1 scene: coverage 81 → 20%).
+  - The thresholds were tuned with 5% model error for real imagery, which is conservative for synthetic scenes without noise.
+  - With noise and realistic bottoms it gains: clear, 2 and 4 scenes, hits 24 → 47% and 24 → 54%.
+  - `Lee_Profile` ignores DEPTHS, so the prior scenarios score as the ones without a prior. There the SA model, pulled away from its prior, is far worse (RMSE 7–17 m).
+- **Decision:**
+  - `Lee_Profile` is added as a separate model, not as the default. Under the README's rule it cannot replace `Lee_Semi_Analytical` while tier 3's clear and moderate hits regress.
+  - It is the better model on real imagery (tier 4) and in turbid water.
+- **Next:**
+  - scale the optically deep and ambiguity thresholds by the scene noise, not a fixed ε, to recover tier 3 coverage in clear water;
+  - a DEPTHS prior as one more term in the profile, ((H − H_prior)/σ)²;
+  - the untested extensions: (d) a per-scene turbidity factor, (e) robust scene weights, (f) a two-class bottom.
+  - Any re-tuning needs a fresh held-out sample, because the test split's seed 1 has now been used.
+
+**Paper experiments** (`paper_profile.py`, `paper/MULTISPECTRAL_SEMI_ANALYTICAL_BATHY.tex`; HEAD's own tier 4 run, `head-d9d14d6-t4`, is identical to a54973d's):
+- **Depth ceiling on real scenes.** The profile model's tier 4 hits are almost all at 0–5 m.
+  - At 5–10 m, hits are 0–4%; beyond 10 m, 0%. Under 5% of its depths exceed 5 m.
+  - Bias is −3.0 to −4.2 m at 5–10 m and −6.5 to −8.4 m at 10–20 m.
+  - At Tantabiddi, cells sounded at 3–5, 5–8 and 8–12 m all have profile minima at 3.9–4.2 m. Scaling κ by 0.7 or 0.5 moves them deeper together without separating them, and leaves χ²min unchanged.
+  - It is not the local reference: the site-wide deep pixels sit at 15–26 m (Marina 9.8 m, the survey's deep edge), and the scene-wide variant has the same ceiling.
+  - Tier 3 clear water with realistic bottoms recovers 10–20 m (89% within tolerance), so the ceiling comes from the real scenes and the model's assumptions about them (water over the shallows, QAA's κ shape, bottoms darkening with depth), not from the method itself.
+- **Ablation on all cells** (tier 4 hits Bundegi / Tantabiddi / Marina / gulf entrance; tier 3 mean hits clear / moderate / turbid, no-prior scenarios):
+
+  | Variant | Tier 4 | Tier 3 |
+  |---|---|---|
+  | as tuned | 21.6 / 54.3 / 20.9 / 1.5 | 31.4 / 15.9 / 10.1 |
+  | no offset | 19.3 / 56.2 / 20.0 / 1.7 | 38.2 / 20.9 / 7.9 |
+  | scene-wide water | 20.2 / 56.3 / 23.0 / 1.2 | same |
+  | no ambiguity test | 22.1 / 55.0 / 22.9 / 1.6 | 43.8 / 19.9 / 11.6 |
+  | T_deep 9 | 24.9 / 57.8 / 23.8 / 1.5 | 32.1 / 16.3 / 11.3 |
+  | T_deep 64 | 12.0 / 20.8 / 4.5 / 1.2 | 29.5 / 14.7 / 6.7 |
+  | ε 0.03 | 20.2 / 53.1 / 21.1 / 1.4 | 30.4 / 15.9 / 11.0 |
+  | no smoothing | 21.0 / 54.6 / 19.6 / 1.1 | 24.2 / 15.8 / 11.2 |
+  | red-only selection | 20.8 / 45.9 / 18.5 / 1.6 | 23.3 / 15.5 / 9.1 |
+
+  - Only T_deep matters much.
+  - The 1.5 km window and the offset, favoured by the 300-point screen, do not hold up on all cells; the offset helps at Bundegi only.
+- **Scenes:** every subset of each site's scenes was run. Mean hits rise with the number of scenes (Tantabiddi 26 → 54%), but subsets vary widely (Marina's best three-scene subset gives 36% against 21% with all six).
+- **σ calibration:** share of covered cells within ±σ_H is 46 / 35 / 18 / 14% for the profile model and 4 / 11 / 0 / 8% for the SA model (nominal 68%).
+
+### The depth ceiling is the attenuation (2026-10-14, after Morel & Favoretto 2017, 4SM)
+
+4SM (Sensors 17, 1682) never uses absolute deep-water reflectance for attenuation. It models only the bottom contrast ln(L − L_sw), takes K_i/K_j from the slope of the brightest pixels' envelope (the BPL), sets the absolute K from Jerlov's family, and takes the maximum bottom brightness from the image. Three checks on the profile model (prototype, site-wide reference, scratch scripts):
+- **At the true depth the bottom is pinned at its bound.** At Tantabiddi cells deeper than 5 m, the fit at the sounded depth wants sand brighter than 0.75, so b is clipped and Δχ² is 8–35. The model predicts too little bottom signal at depth.
+- **QAA's attenuation is 3–6× too strong.** At Tantabiddi, the envelope (90th percentile) of ln(r − r∞) against tide-corrected sounded depth gives two-way K of 0.07–0.16 m⁻¹ at 443–560 nm. QAA's κ·M_B is 0.41–0.66 m⁻¹.
+  - Likely cause: the deep references have rrs∞(665) ≈ 3–7 × 10⁻³, about ten times plausible for Ningaloo's clear water (an atmospheric-correction offset). QAA turns this into b_bp and so into κ at every band.
+  - Blue/green K ratio: soundings 0.66–0.88, image BPL (sounding-free) 0.68–0.79, QAA 0.80–1.05. The BPL is closer.
+  - Marina and Bundegi envelopes are noisier (mixed bottoms); their red slopes (≪ a_w) show the envelope is not pure bottom signal there.
+- **Attenuation from the soundings (blue, green; red from QAA) breaks the ceiling at Tantabiddi.** 25 cells per bin; best-fit depth median / hits:
+
+  | | 1–3 m | 3–5 m | 5–8 m | 8–12 m | 12–20 m |
+  |---|---|---|---|---|---|
+  | QAA κ | 2.4 / 18 | 3.9 / 22 | 4.1 / 0 | 4.2 / 0 | 5.2 / 0 |
+  | oracle κ | 1.9 / 19 | 3.4 / 10 | 6.4 / 7 | 7.2 / 4 | 14.8 / 4 |
+
+  - Depth now orders correctly; 3–5 m gets worse because the oracle κ is a crude envelope over mixed bottoms.
+- **Next:** attenuation calibrated from the image's bottom contrast, not from absolute rrs∞. That means BPL ratios plus an absolute scale, from tides between scenes or a site-level profile over a κ scale shared by many pixels. Also a bottom brightness bound taken from the image (4SM's L_sM).
+
+### Image-calibrated attenuation (2026-10-14, `PROFILE_KAPPA`, `profile_model.py --kappa`)
+
+Per scene, the brightest pixels line of the site-wide bottom contrast (95th-percentile envelope of ln c_443 and ln c_492 against ln c_560, c = rrs − rrs∞) gives K_443/K_560 and K_492/K_560. Then either:
+- **mode 1, offset:** find the flat offset δ of rrs∞ for which QAA reproduces the ratios, and run QAA on rrs∞ − δ;
+- **mode 2, Jerlov (4SM):** take Jerlov's Kd for the type, interpolated continuously, that matches the ratios.
+
+Both fall back to QAA if a ratio is missing or outside (0.05, 3). The C port (`calibrate`, `bpl_ratio` in profile.c) matches the prototype on all 300 training points in both modes; the default (mode 0) and `Lee_Semi_Analytical` are unchanged (`make test` outputs byte-identical to HEAD).
+
+**Screen** (training split, seed 1, net against HEAD): tier 4 QAA +19.3, offset +20.0, Jerlov +25.3; tier 3 +14.0, +14.0, +10.7.
+
+**Full benchmark, tier 4 hits (%), all / 0–5 m / 5–10 m / over 10 m, and RMSE (m):**
+
+| Site | QAA (as tuned) | Offset | Jerlov |
+|---|---|---|---|
+| Marina (training) | 20.9 / 33.0 / 1.4 / 0.0, 3.01 | 18.3 / 29.0 / 0.7 / 0.1, 1.25 | **27.5 / 24.7 / 25.1 / 43.4, 1.14** |
+| Gulf entrance (training) | 1.5 / 33 / 0 / 0, 3.85 | 2.1 / 38 / 14 / 0, 2.62 | 1.9 / 21 / 23 / 0.3, 1.67 |
+| Bundegi | 21.6 / 29.9 / 0.0 / 0.0, 1.68 | **28.5 / 38.6 / 6.1 / 0.0**, 2.07 | 17.1 / 22.8 / 7.1 / 0.0, 1.46 |
+| Tantabiddi | 54.3 / 70.7 / 4.5 / 0.0, 2.17 | 55.8 / 73.0 / 2.9 / 0.0, 1.48 | 55.4 / 72.0 / 5.0 / 0.5, 1.51 |
+
+- **The ceiling breaks at Marina with Jerlov.** Cells sounded over 10 m go from 0 to 43% hits, and 5–10 m from 1 to 25%; RMSE falls from 3.01 to 1.14 m. The gulf entrance gains at 5–10 m in both modes.
+- **It does not transfer cleanly.**
+  - Jerlov loses 4.5 points at Bundegi (0–5 m hits 30 → 23%).
+  - At Tantabiddi neither mode recovers 5–10 m (≤ 5%), although sounding-derived κ did (Tantabiddi Jerlov two-way K ≈ 0.16–0.27 against 0.07–0.17 from the soundings).
+  - The offset mode helps Bundegi (+6.9) but loses 2.6 at Marina.
+  - RMSE falls at every site in both modes.
+- **Tier 3:** offset is identical to QAA (δ = 0: the synthetic scenes have no offset). Jerlov is neutral in hits but raises clear-water RMSE from 1.67 to 2.93 m: photic's synthetic water is not Jerlov water.
+- **Decision:** `PROFILE_KAPPA` stays 0 (off). Each mode wins at some sites and loses at others, so neither meets the no-regression rule. The training sites favour Jerlov, but that choice does not hold at Bundegi.
+- **What it shows:** the attenuation estimate is now the main lever on depth beyond 5 m. A per-scene site-wide calibration is too coarse: Bundegi and Marina mix gulf and clearer water, and Tantabiddi's Jerlov K is still about twice the sounding fit.
+- **Next:**
+  - a local calibration (the brightest pixels line per window, with a fallback);
+  - a continuous absolute scale that is not tied to Jerlov's oceanic family (e.g. the offset mode's QAA shape with the Jerlov scale);
+  - a bottom brightness bound from the image (4SM's L_sM), since deep sand at Tantabiddi still needs b above 0.75.
+
+### Local calibration and the offset-aware model (2026-10-14, `PROFILE_KAPPA_LOCAL`, `PROFILE_OFFSET_MODEL`)
+
+- **Local calibration** (`PROFILE_KAPPA_LOCAL 1`, `--kappa-local`): the brightest pixels line in each tile's 1.5 km window, falling back to the site-wide calibration.
+- **Offset-aware model** (`PROFILE_OFFSET_MODEL 1`, `--offset-model`): the calibration's offset δ (now computed in both modes) stays outside the attenuated term, rrs = δ + (rrs∞ − δ)(1 − e^(−κM_C Z)) + bottom.
+  - Motivation: at Bundegi, Jerlov's weaker κ made 2–5 m cells *too shallow* more often (8 → 20%), which an attenuated offset would explain.
+- **Checks:** the C port matches the prototype on all 300 training points for each new combination. The calibration now lives in the reference, not the scene; the site-wide modes are unchanged (300/300).
+
+**Full benchmark, tier 4 hits (%), all / 0–5 / 5–10 / over 10 m:**
+
+| Variant | Bundegi | Tantabiddi | Marina | Gulf entrance |
+|---|---|---|---|---|
+| QAA | 21.6 / 29.9 / 0.0 / 0.0 | 54.3 / 70.7 / 4.5 / 0.0 | 20.9 / 33.0 / 1.4 / 0.0 | 1.5 / 33 / 0 / 0 |
+| offset | 28.5 / 38.6 / 6.1 / 0.0 | 55.8 / 73.0 / 2.9 / 0.0 | 18.3 / 29.0 / 0.7 / 0.1 | 2.1 / 38 / 14 / 0 |
+| offset, local | 28.1 / 38.0 / 7.5 / 0.0 | 54.4 / 70.9 / 3.5 / 0.7 | 18.5 / 29.3 / 0.8 / 0.0 | 1.8 / 34 / 7 / 0.1 |
+| offset, offset-aware | 28.6 / 38.9 / 5.2 / 0.0 | 56.4 / 73.8 / 2.8 / 0.0 | 17.8 / 28.4 / 0.3 / 0.2 | 1.9 / 37 / 10 / 0 |
+| Jerlov | 17.1 / 22.8 / 7.1 / 0.0 | 55.4 / 72.0 / 5.0 / 0.5 | 27.5 / 24.7 / 25.1 / 43.4 | 1.9 / 21 / 23 / 0.3 |
+| Jerlov, local | 17.5 / 23.1 / 8.5 / 0.0 | 57.9 / 74.7 / 5.7 / 4.0 | 26.9 / 24.2 / 22.8 / 45.6 | 1.9 / 21 / 25 / 0.3 |
+| Jerlov, offset-aware | 19.3 / 25.7 / 8.5 / 0.0 | 55.2 / 71.5 / 6.3 / 1.1 | 25.3 / 25.7 / 20.0 / 32.0 | 2.1 / 25 / 25 / 0.3 |
+
+Tier 3 is unchanged by either switch (the synthetic scenes give δ = 0 and their 32 × 32 cells fit in one window).
+
+- **Neither switch moves a site by more than about 2.5 points.**
+  - Water mixing within a site (local) and the attenuated offset (offset-aware) are not what limit Bundegi or Tantabiddi.
+  - Jerlov still loses at Bundegi, and nothing recovers Tantabiddi's 5–10 m (≤ 6%).
+  - At Tantabiddi, κ from the soundings did recover 5–10 m (about half of Jerlov's), so the absolute κ scale remains the open question there. The per-pixel misfit does not constrain it (κ × 0.5 leaves χ²min unchanged).
+- **Decision:** both switches stay off. Local calibration costs 5–10× run time (up to 133 s per site) for no gain.
+- **Remaining levers:**
+  - the bottom brightness bound (deep sand at Tantabiddi needs b above 0.75);
+  - an absolute κ scale from something other than the per-pixel misfit (tides pooled over many pixels, or field data).
+
+### Brightness cap from the image and a tide-based attenuation scale (2026-10-14, `PROFILE_BRIGHT`)
+
+**Brightness cap** (`PROFILE_BRIGHT`, `profile_model.py --bright`), after 4SM's brightest bottom at null depth.
+- Near the surface the bottom term is bρ/π, so b ≈ π(rrs_560 − rrs∞_560)/ρ_sand(560).
+- In every scene the brightest bottoms (99.5th percentile) have b = 0.08–0.29, and sounded cells under 1 m have b ≈ 0.1–0.2. The class ranges (sand 0.15–0.75) are wider and brighter than the imagery.
+- Cap = 1.2 × the largest scene's 99.5th percentile (0.13–0.35 by site). Mode 1 clips each class; mode 2 scales all ranges by cap/0.75.
+- The C port matches the prototype (300/300).
+- **Full benchmark, tier 4 hits (%) Bundegi / Tantabiddi / Marina / gulf entrance:**
+
+  | Variant | Hits |
+  |---|---|
+  | QAA | 21.6 / 54.3 / 20.9 / 1.5 |
+  | QAA, clip | 13.2 / 50.5 / 17.2 / 1.2 |
+  | QAA, scale | 12.2 / 49.1 / 17.2 / 1.0 |
+  | Jerlov | 17.1 / 55.4 / 27.5 / 1.9 |
+  | Jerlov, clip | 16.3 / 55.3 / 27.8 / 1.9 |
+  | Jerlov, scale | 14.3 / 58.4 / 14.7 / 1.1 |
+
+  - Tier 3 turbid hits rise with clip (10.1 → 12.6, RMSE 0.65 → 0.40), but clear-water RMSE rises (1.67 → 2.04).
+- **Negative:** a lower cap removes the deeper solutions. It stays off.
+
+**Tide-based attenuation scale** (scratch diagnostics, Jerlov κ, site-wide).
+- **Pooled misfit.** Scaling κ by f at every scene and summing χ²min over 400 bright cells per site (no soundings used):
+  - the sum falls monotonically with f (lowest at f ≈ 0.4 at Tantabiddi, ≤ 0.3 at Marina);
+  - the depths are right at f ≈ 1.0 (Tantabiddi, 94% hits) and f ≈ 0.7 (Marina, 75%).
+  - The misfit is biased towards weak attenuation and cannot set the scale.
+  - These bright cells are mostly shallow (median 2.5 m), where Jerlov's scale is already right at Tantabiddi, yet its 5–10 m cells needed about half of it. The attenuation the model needs varies with depth, which no single scale can supply.
+- **Direct tide regression.** The median Δln(bottom contrast) over the same bright cells, regressed on the tide difference between scene pairs (no gain term), gives two-way K:
+  - Tantabiddi: 0.22 / 0.16 / 0.16 m⁻¹ at 443 / 492 / 560 nm (Jerlov 0.21 / 0.18 / 0.25; soundings 0.07–0.17), but with a scatter of 0.2 in ln between pairs, about ±50%;
+  - Marina: scatter 0.55–0.86;
+  - Bundegi: negative K (−0.28 to −0.51).
+  - Radiometric and water differences between scenes years apart swamp the ±0.7 m tide signal.
+- **Negative:** neither gives a usable absolute scale on these scenes.
+
+**Where this leaves the profile model.**
+- Of the image-based calibrations, only Jerlov's attenuation helps, and only at Marina: it breaks the 5 m ceiling there (over 10 m: 0 → 43% hits). It loses at Bundegi.
+- None of the following fixes the depth ceiling at Bundegi or Tantabiddi:
+  - local calibration;
+  - the offset-aware model;
+  - brightness caps;
+  - tide scaling.
+- The depth dependence of the needed attenuation points to the forward model's assumptions over the shallows (A3 uniform water, A6 bottom, A1 structure), not to a calibration constant.
+- Every switch stays off.
 
 ### Phase B order (from Phase A)
 
