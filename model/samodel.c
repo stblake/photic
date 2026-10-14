@@ -199,6 +199,13 @@
 #define PRIOR_SIGMA_REL 0.2
 #endif
 
+// The Rrs residuals' errors are largely systematic (correlated), so they carry the information
+// of far fewer than their number; PRIOR_WEIGHT ~ sqrt(n/n_eff) scales the prior to match.
+
+#ifndef PRIOR_WEIGHT
+#define PRIOR_WEIGHT 1.0
+#endif
+
 // Water tied between scenes (EXPERIMENTS.md B12): prior residuals (ln W_s - mean ln W)/TIE_SIGMA
 // for W = P, G, X, in the same chi units as the Rrs residuals. With the water tied, the scenes'
 // different light paths (sun angle, tide) constrain depth independently of the bottom albedo.
@@ -2395,7 +2402,7 @@ static void prior_residuals(double *params, model_data *md, double unit, double 
 	if (! prior_count(md)) return;
 	depth_weights(md, w);
 	for (k_region = 0; k_region < md->n_regions; k_region++) H += w[k_region]*samodel_depth(params, k_region);
-	r[0] = unit*(H - md->h_empirical)/(PRIOR_SIGMA_0 + PRIOR_SIGMA_REL*md->h_empirical);
+	r[0] = PRIOR_WEIGHT*unit*(H - md->h_empirical)/(PRIOR_SIGMA_0 + PRIOR_SIGMA_REL*md->h_empirical);
 }
 
 // The prior rows that depend on the region parameters (depth and bottom), which follow the

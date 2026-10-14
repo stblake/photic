@@ -794,6 +794,10 @@ Scores over all points: a *hit* is a depth within tolerance, a *miss* a depth ou
   - About 200 Rrs residuals, treated as independent with 3% model error, outweigh even a tight prior and favour the wrong shallow solution.
   - The forward model's error on these turbid scenes is systematic, not independent between residuals.
 - On the held-out sites photic with the prior beats the weak prior alone (20% hits, 66% misses) by 18–33 points, mostly by withholding depths.
+- **Weighting the prior for correlated model error** (`PRIOR_WEIGHT` ≈ √(n/n_eff)):
+  - at weight 10, photic with the prior beats the prior alone on the training split, tier 4 by +5 points and tier 3 by +3;
+  - on the held-out sites it matches the prior (+3), at 80% coverage and 19% hits.
+  - The result is then limited by the prior, which does not transfer to the Ningaloo side.
 - **Decision:** `PRIOR_RESIDUAL` and `PRIOR_PROFILE` stay off (tier 4 regresses against the prior used as a start).
 - **Next, if pursued:**
   - de-weight the spectra for correlated model error (an effective number of independent residuals) so that a prior can count;
