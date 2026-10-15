@@ -951,7 +951,8 @@ The consistency condition (one H for every band ratio) inside the optimisation i
   - synthetic regression test: RMSE 0.18 → 0.11 m, max 1.10 → 0.49 m;
   - screen against the same RINF without the rows: train +7.0 points, ΔRMSE −0.43 m (significant); test −3.3 points, +0.18 m (unclear);
   - weight 0.5 or RATIO_SIGMA_LN 0.1: neither consistent on both splits;
-  - full tier 3 (mean hits / median RMSE), RINF image → + rows: clear 45.7 / 1.83 → 47.2 / 2.20, moderate 24.9 / 2.97 → 26.0 / 2.11, turbid 12.7 / 1.26 → 12.7 / 1.60. Mixed, within the noise floor below. Tier 4 is still running.
+  - full tier 3 (mean hits / median RMSE), RINF image → + rows: clear 45.7 / 1.83 → 47.2 / 2.20, moderate 24.9 / 2.97 → 26.0 / 2.11, turbid 12.7 / 1.26 → 12.7 / 1.60. Mixed, within the noise floor below.
+  - full tier 4 (hits / RMSE; RINF image alone gives HEAD's numbers there): Tantabiddi 23.2 / 2.51 → 35.6 / 2.46 m (0–5 m 29.0 → 45.7%, coverage 48.9 → 62.5%), gulf entrance 0.6 / 4.26 → 0.6 / 3.91 m, Marina 5.9 / 2.41 → 5.5 / 2.50 m, Bundegi 9.2 / 2.39 → 7.0 / 2.41 m (within tolerance of covered 41.8 → 23.3%, bias −0.48 → −1.14 m). Tantabiddi's gain is far beyond the noise floor, and so is Bundegi's loss: **fails the acceptance rule; stays off.** The rows help at Tantabiddi (clear water, large contrasts) and pull Bundegi shallower (bias = modelled − sounding).
 - **Profile model (`PROFILE_RATIO`, branch `profile-ratio`)**: the water is fixed (QAA), so the rows tie only H and the bottom. Full benchmark against `paper-default`: Marina 20.9 → 24.7 hits, RMSE 3.01 → 2.75 m; Tantabiddi 54.3 → 47.8; RMSE worse at Bundegi (1.68 → 2.07) and the gulf entrance (3.85 → 4.30); tier 3 clear 31.4 → 29.9, turbid 10.1 → 11.9. **Fails the acceptance rule.** With κ fixed, the rows push depths along the forward model's ratio error (the red/green slope 30–45% too steep, above).
 
 ### Speed (2026-10-15)
