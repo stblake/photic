@@ -173,6 +173,7 @@ struct model_data_struct {
 	double ***rrs_modelled;
 	double ***rrs_bottom;
 	double ***rrs_dp;
+	double *iop_cache;    // Water optics per scene and band for the last P, G, X (samodel_Rrs), or NULL.
 	double **K;
 	double ***rho;
 	double depth;

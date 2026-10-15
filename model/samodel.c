@@ -100,7 +100,17 @@
 #ifndef RESTART
 #define RESTART 0
 #endif
+#ifndef CARRY_OVER
+#define CARRY_OVER 1 // Start the water at the previous pixel's when depth and K_min are close (0: always fresh).
+#endif
 #define DELTA 0
+#define IOP_CACHE 8 // Values per scene and band in md->iop_cache (samodel_Rrs).
+#ifndef SCHUR_SOLVE
+#define SCHUR_SOLVE 1 // The LM steps by the Schur complement onto the water block (schur_solve); 0: sparse Cholesky.
+#endif
+#ifndef ANALYTIC_JACOBIAN
+#define ANALYTIC_JACOBIAN 1 // Region parameters' Jacobian columns in closed form (lm_jacobian); 0: forward differences.
+#endif
 #ifndef K_PRIOR
 #define K_PRIOR 0 // Penalise low K in shallow water and very high K (off: it excludes the truth, EXPERIMENTS.md A-2).
 #endif
@@ -206,6 +216,28 @@
 #define PRIOR_WEIGHT 1.0
 #endif
 
+// Log band-ratio consistency (EXPERIMENTS.md, "Ratio consistency in the fit"): for every pair
+// of bands i < j of a scene, a residual on the log ratio of the bottom contrasts
+// D_b = Rrs_b - Rrs_deep,b, with Rrs_deep the fitted water's (RATIO_CONSISTENCY 1) or the
+// scene's measured deep-water Rrs, SCENE RINF, where given (2; else the fitted water's). With
+// the fitted water's, the measured contrasts move with the fit, and a water that puts the
+// pixel's Rrs at its deep Rrs zeroes every ratio row.
+//   [ln(D_i/D_j) modelled - ln(D_i/D_j) measured]/sigma_ln,
+// in chi units, sigma_ln^2 = (s_i/D_i)^2 + (s_j/D_j)^2 with s_b the band's noise and model
+// error. Every ratio is then matched by the one depth H and the one water (K_i - K_j) within
+// the fit, so the ratios tie H and the attenuations together. Contrasts are kept positive and
+// smooth as 0.5 (D + sqrt(D^2 + 4 s^2)), so weak contrasts carry little weight.
+
+#ifndef RATIO_CONSISTENCY
+#define RATIO_CONSISTENCY 0
+#endif
+#ifndef RATIO_WEIGHT
+#define RATIO_WEIGHT 1.0
+#endif
+#ifndef RATIO_SIGMA_LN
+#define RATIO_SIGMA_LN 0.0 // The forward model's error in a log ratio, added to sigma_ln in quadrature.
+#endif
+
 // Water tied between scenes (EXPERIMENTS.md B12): prior residuals (ln W_s - mean ln W)/TIE_SIGMA
 // for W = P, G, X, in the same chi units as the Rrs residuals. With the water tied, the scenes'
 // different light paths (sun angle, tide) constrain depth independently of the bottom albedo.
@@ -253,6 +285,7 @@ static const double bright_hi[8] = {0.75, 0.15, 0.25, 1.0, 1.0, 1.0, 1.0, 1.0};
 #define Y_MODEL 2
 #endif
 #define Y_MIN 0.0
+#define Y_START 1.0
 #define Y_MAX 2.5
 
 // Residual glint as a per-scene, spectrally flat Rrs offset (EXPERIMENTS.md B15), within
@@ -643,6 +676,8 @@ void samodel(
 	md->rrs_modelled    = rrs_modelled;
 	md->rrs_bottom      = rrs_bottom;
 	md->rrs_dp          = rrs_dp;
+	md->iop_cache       = malloc(IOP_CACHE*nscenes*max_n_bands*sizeof(double));
+	for (i = 0; i < nscenes*max_n_bands; i++) md->iop_cache[IOP_CACHE*i] = NAN;
 	md->rho             = rho;
 	md->rrs_noise       = rrs_noise;
 	md->wavelengths     = wavelengths;
@@ -1195,9 +1230,9 @@ void samodel(
 
 			// Check LUT. 
 
+			best_lut_spectral_match = 1.0e4; // No match (also with LUT 0, where it is otherwise unset).
+			continuity_threshold = 0.1; // 10% relative difference (LUT matches and carry-over).
 #if LUT
-			continuity_threshold = 0.1; // 10% relative difference. 
-			best_lut_spectral_match = 1.0e4;
 			lut_model_error = 1.0e4;
 			lut_position = 0;
 
@@ -1319,7 +1354,7 @@ void samodel(
 
 			// Decide whether to restart model initialisation parameters. 
 
-			if (fabs(md->depth - md->depth_prev)/(epsilon + md->depth_prev) < continuity_threshold && 
+			if (CARRY_OVER && fabs(md->depth - md->depth_prev)/(epsilon + md->depth_prev) < continuity_threshold && 
 				fabs(md->K_min - md->K_min_prev)/(epsilon + md->K_min_prev) < continuity_threshold) {
 				md->start_at_previous = true;
 			} else {
@@ -1966,6 +2001,8 @@ min/mean/max min(K) = %.4f %.4f %.4f\n",
 	free_double_array_3d(rrs_bottom,   max_n_regions, nscenes);
 	free_double_array_3d(rho,          max_n_regions, nscenes);
 	free_double_array_3d(rrs_dp,       max_n_regions, nscenes);
+	free(md->iop_cache);
+	md->iop_cache = NULL;
 
 	free_double_array_2d(wavelengths,      nscenes);
 	free_double_array_2d(raw_wavelengths,  nscenes);
@@ -2217,7 +2254,10 @@ void samodel_initial(model_data *md, double h, double albedo, double *start, dou
 
 static int residuals_per_region(model_data *md) {
 	int k_scene, n = 0;
-	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) n += md->n_bands[k_scene];
+	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+		n += md->n_bands[k_scene];
+		if (RATIO_CONSISTENCY) n += md->n_bands[k_scene]*(md->n_bands[k_scene] - 1)/2;
+	}
 	return n;
 }
 
@@ -2362,23 +2402,91 @@ static void continuity_residuals(double *params, model_data *md, double unit, do
 #endif
 }
 
-// The residuals of one region, written to r (residuals_per_region values).
+// The residuals of one region, written to r (residuals_per_region values): its Rrs, then its
+// log ratio rows (RATIO_CONSISTENCY) in chi units (unit).
 
-static void region_residuals(double *params, model_data *md, int k_region, double scale, double *r) {
+#if RATIO_CONSISTENCY
+static double positive_contrast(double D, double s) {
+	return 0.5*(D + sqrt(D*D + 4.0*s*s));
+}
+#endif
 
-	int k_scene, k_band, k_bottom, n = 0;
-	double P, G, X, H, albedo, B[MAX_BOTTOMS], q[MAX_BOTTOMS];
+// The rows of scene k_scene in the residuals of region k_region (r: the region's block): its Rrs
+// rows and its ratio rows. A scene's rows depend only on its own water, so a water parameter's
+// Jacobian column needs only its scene's rows (lm_jacobian).
 
+static void region_scene_residuals(double *params, model_data *md, int k_region, int k_scene, double scale,
+	double unit, double *r) {
+
+	int k, k_band, n = 0;
+	double P, G, X, H, B[MAX_BOTTOMS], q[MAX_BOTTOMS];
+
+	for (k = 0; k < k_scene; k++) n += md->n_bands[k];
 	H = samodel_depth(params, k_region);
-	albedo = samodel_unpack_bottom(params, md, k_region, B, q);
-	(void) albedo; (void) k_bottom;
+	(void) samodel_unpack_bottom(params, md, k_region, B, q);
+	samodel_unpack_scene(params, md, k_scene, &P, &G, &X);
+	for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
+		samodel_Rrs(P, G, X, B, q, H, GLINT_OFFSET ? md->D[k_scene] : 0.0, md, k_scene, k_band, k_region);
+		r[n++] = scale*(md->Rrs_modelled[k_region][k_scene][k_band] - md->Rrs_measured[k_region][k_scene][k_band]);
+	}
 
-	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
-		samodel_unpack_scene(params, md, k_scene, &P, &G, &X);
-		for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
-			samodel_Rrs(P, G, X, B, q, H, GLINT_OFFSET ? md->D[k_scene] : 0.0, md, k_scene, k_band, k_region);
-			r[n++] = scale*(md->Rrs_modelled[k_region][k_scene][k_band] - md->Rrs_measured[k_region][k_scene][k_band]);
+#if RATIO_CONSISTENCY
+	{
+		int i, j, nb = md->n_bands[k_scene];
+		double ln_m[MAX_GRIDS], ln_o[MAX_GRIDS], rel[MAX_GRIDS], Rrs, deep, s, Dm, Do;
+		n = 0;
+		for (k = 0; k < md->n_scenes; k++) n += md->n_bands[k];
+		for (k = 0; k < k_scene; k++) n += md->n_bands[k]*(md->n_bands[k] - 1)/2;
+		for (i = 0; i < nb; i++) {
+			Rrs = md->Rrs_measured[k_region][k_scene][i];
+			s = sqrt(md->rrs_noise[k_scene][i]*md->rrs_noise[k_scene][i] + pow(DEEP_MODEL_ERROR*Rrs, 2.0));
+			if (RATIO_CONSISTENCY == 2 && md->R_inf != NULL && md->R_inf[k_scene][i] > 0.0) {
+				// The measured deep-water Rrs, which includes the scene's offsets.
+				deep = md->R_inf[k_scene][i];
+			} else {
+				// The fitted water's deep Rrs, with the fitted glint offset.
+				deep = 0.5*md->rrs_dp[k_region][k_scene][i]/(1.0 - 1.5*md->rrs_dp[k_region][k_scene][i])
+					+ (GLINT_OFFSET ? md->D[k_scene] : 0.0);
+			}
+			Dm = positive_contrast(md->Rrs_modelled[k_region][k_scene][i] - deep, s);
+			Do = positive_contrast(Rrs - deep, s);
+			ln_m[i] = log(Dm);
+			ln_o[i] = log(Do);
+			rel[i] = s/Do;
 		}
+		for (i = 0; i < nb; i++) {
+			for (j = i + 1; j < nb; j++) {
+				r[n++] = RATIO_WEIGHT*unit*((ln_m[i] - ln_m[j]) - (ln_o[i] - ln_o[j]))/sqrt(rel[i]*rel[i] + rel[j]*rel[j] + RATIO_SIGMA_LN*RATIO_SIGMA_LN);
+			}
+		}
+	}
+#else
+	(void) unit;
+#endif
+}
+
+// The rows of scene k_scene within a region's block: the first and one past the last of its
+// Rrs rows (*a0, *a1) and of its ratio rows (*b0, *b1).
+
+static void scene_rows(model_data *md, int k_scene, int *a0, int *a1, int *b0, int *b1) {
+	int k, n_rrs = 0;
+	*a0 = 0;
+	for (k = 0; k < md->n_scenes; k++) {
+		if (k < k_scene) *a0 += md->n_bands[k];
+		n_rrs += md->n_bands[k];
+	}
+	*a1 = *a0 + md->n_bands[k_scene];
+	*b0 = *b1 = n_rrs;
+	if (RATIO_CONSISTENCY) {
+		for (k = 0; k < k_scene; k++) *b0 += md->n_bands[k]*(md->n_bands[k] - 1)/2;
+		*b1 = *b0 + md->n_bands[k_scene]*(md->n_bands[k_scene] - 1)/2;
+	}
+}
+
+static void region_residuals(double *params, model_data *md, int k_region, double scale, double unit, double *r) {
+	int k_scene;
+	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+		region_scene_residuals(params, md, k_region, k_scene, scale, unit, r);
 	}
 }
 
@@ -2428,7 +2536,7 @@ int samodel_residuals(double *params, model_data *md, double *r) {
 	double scale = residual_scale(md);
 
 	for (k_region = 0; k_region < md->n_regions; k_region++) {
-		region_residuals(params, md, k_region, scale, &r[k_region*n_region]);
+		region_residuals(params, md, k_region, scale, chi_unit(md), &r[k_region*n_region]);
 	}
 	region_prior_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region]);
 	tie_residuals(params, md, chi_unit(md), &r[md->n_regions*n_region + region_prior_count(md)]);
@@ -2448,32 +2556,378 @@ int samodel_residuals(double *params, model_data *md, double *r) {
 static int cholesky_solve(double *A, double *b, int n) {
 
 	// Solves A y = b in place (y in b) for symmetric positive definite A; A is overwritten.
+	// A is sparse (each region's depth and bottom couple only to themselves and to the water,
+	// which comes last), and so is its factor: the sums run over the non-zero entries of each
+	// row of the factor only (nz, n_nz). Only exact zeros are skipped, so the result is the
+	// dense one's.
 
-	int i, j, k;
+	static int *nz = NULL, *n_nz = NULL, capacity = 0;
+	int i, j, k, a;
 	double s;
 
+	if (n > capacity) {
+		free(nz);
+		free(n_nz);
+		nz = malloc(n*n*sizeof(int));
+		n_nz = malloc(n*sizeof(int));
+		capacity = n;
+	}
+
 	for (j = 0; j < n; j++) {
+		int *nz_j = &nz[j*n];
+		n_nz[j] = 0;
+		for (k = 0; k < j; k++) {
+			if (A[j*n + k] != 0.0) nz_j[n_nz[j]++] = k;
+		}
 		s = A[j*n + j];
-		for (k = 0; k < j; k++) s -= A[j*n + k]*A[j*n + k];
+		for (a = 0; a < n_nz[j]; a++) s -= A[j*n + nz_j[a]]*A[j*n + nz_j[a]];
 		if (s <= 0.0) return 0;
 		A[j*n + j] = sqrt(s);
 		for (i = j + 1; i < n; i++) {
 			s = A[i*n + j];
-			for (k = 0; k < j; k++) s -= A[i*n + k]*A[j*n + k];
+			for (a = 0; a < n_nz[j]; a++) s -= A[i*n + nz_j[a]]*A[j*n + nz_j[a]];
 			A[i*n + j] = s/A[j*n + j];
 		}
 	}
 	for (i = 0; i < n; i++) {
 		s = b[i];
-		for (k = 0; k < i; k++) s -= A[i*n + k]*b[k];
+		for (a = 0; a < n_nz[i]; a++) s -= A[i*n + nz[i*n + a]]*b[nz[i*n + a]];
 		b[i] = s/A[i*n + i];
 	}
 	for (i = n - 1; i >= 0; i--) {
 		s = b[i];
-		for (k = i + 1; k < n; k++) s -= A[k*n + i]*b[k];
+		for (k = i + 1; k < n; k++) {
+			if (A[k*n + i] != 0.0) s -= A[k*n + i]*b[k];
+		}
 		b[i] = s/A[i*n + i];
 	}
 	return 1;
+}
+
+// Dense Cholesky of the n x n block L (row-major, leading dimension n) in place (lower
+// triangle); returns 0 if it is not positive definite.
+
+static int dense_cholesky(double *L, int n) {
+	int i, j, k;
+	double s;
+	for (j = 0; j < n; j++) {
+		s = L[j*n + j];
+		for (k = 0; k < j; k++) s -= L[j*n + k]*L[j*n + k];
+		if (s <= 0.0) return 0;
+		L[j*n + j] = sqrt(s);
+		for (i = j + 1; i < n; i++) {
+			s = L[i*n + j];
+			for (k = 0; k < j; k++) s -= L[i*n + k]*L[j*n + k];
+			L[i*n + j] = s/L[j*n + j];
+		}
+	}
+	return 1;
+}
+
+// Solves A y = b in place (y in b) for symmetric positive definite A (n x n), by the Schur
+// complement onto the water block. group[j] is parameter j's region, or -1 for a water
+// parameter; a region's parameters couple only to themselves and to the water. For each
+// region, with D its block, C its coupling to the water and L L' = D:
+//   Y = L^-1 C, z = L^-1 b_region, S = A_water - sum Y'Y, t = b_water - sum Y'z;
+// then S y_water = t, and L' y_region = z - Y y_water. The work is a dense factorisation per
+// region and one of the water block, instead of one of the whole of A. Returns 0 if A (a
+// region's block or S) is not positive definite.
+
+static int schur_solve(const double *A, double *b, int n, const int *group, int n_groups) {
+
+	static double *work = NULL;
+	static int *list = NULL, capacity = 0, list_capacity = 0;
+	int i, j, k, g, nw = 0, nr, *w_idx, *r_idx, *start;
+	double s, *S, *t, *L, *Y, *z, *base;
+
+	if (n > capacity) {
+		free(work);
+		// S and t; per region L (nr^2), Y (nr nw) and z (nr), at most n (n + n + 1) in all.
+		work = malloc((n*n + n + n*(2*n + 1))*sizeof(double));
+		capacity = n;
+	}
+	if (2*n + n_groups + 1 > list_capacity) {
+		free(list);
+		list_capacity = 2*n + n_groups + 1;
+		list = malloc(list_capacity*sizeof(int));
+	}
+	w_idx = list;
+	for (j = 0; j < n; j++) {
+		if (group[j] < 0) w_idx[nw++] = j;
+	}
+	start = &list[n];                // region g's parameters: r_idx[start[g] .. start[g + 1])
+	r_idx = &list[n + n_groups + 1];
+	k = 0;
+	for (g = 0; g < n_groups; g++) {
+		start[g] = k;
+		for (j = 0; j < n; j++) {
+			if (group[j] == g) r_idx[k++] = j;
+		}
+	}
+	start[n_groups] = k;
+
+	S = work;
+	t = &work[nw*nw];
+	for (i = 0; i < nw; i++) {
+		for (j = 0; j < nw; j++) S[i*nw + j] = A[w_idx[i]*n + w_idx[j]];
+		t[i] = b[w_idx[i]];
+	}
+
+	base = &work[n*n + n];
+	for (g = 0; g < n_groups; g++) {
+		int *R = &r_idx[start[g]];
+		nr = start[g + 1] - start[g];
+		if (nr == 0) continue ;
+		L = base;
+		Y = L + nr*nr;
+		z = Y + nr*nw;
+		for (i = 0; i < nr; i++) {
+			for (j = 0; j < nr; j++) L[i*nr + j] = A[R[i]*n + R[j]];
+			for (j = 0; j < nw; j++) Y[i*nw + j] = A[R[i]*n + w_idx[j]];
+			z[i] = b[R[i]];
+		}
+		if (! dense_cholesky(L, nr)) return 0;
+		// Y = L^-1 C and z = L^-1 b_region, by forward substitution.
+		for (i = 0; i < nr; i++) {
+			for (k = 0; k < i; k++) {
+				double l = L[i*nr + k];
+				if (l == 0.0) continue ;
+				for (j = 0; j < nw; j++) Y[i*nw + j] -= l*Y[k*nw + j];
+				z[i] -= l*z[k];
+			}
+			for (j = 0; j < nw; j++) Y[i*nw + j] /= L[i*nr + i];
+			z[i] /= L[i*nr + i];
+		}
+		// S -= Y'Y (lower triangle), t -= Y'z.
+		for (k = 0; k < nr; k++) {
+			const double *y = &Y[k*nw];
+			for (i = 0; i < nw; i++) {
+				if (y[i] == 0.0) continue ;
+				for (j = 0; j <= i; j++) S[i*nw + j] -= y[i]*y[j];
+				t[i] -= y[i]*z[k];
+			}
+		}
+		base = z + nr;
+	}
+
+	if (! dense_cholesky(S, nw)) return 0;
+	for (i = 0; i < nw; i++) {
+		s = t[i];
+		for (k = 0; k < i; k++) s -= S[i*nw + k]*t[k];
+		t[i] = s/S[i*nw + i];
+	}
+	for (i = nw - 1; i >= 0; i--) {
+		s = t[i];
+		for (k = i + 1; k < nw; k++) s -= S[k*nw + i]*t[k];
+		t[i] = s/S[i*nw + i];
+	}
+	for (i = 0; i < nw; i++) b[w_idx[i]] = t[i];
+
+	// Back-substitution for each region: L' y = z - Y y_water.
+	base = &work[n*n + n];
+	for (g = 0; g < n_groups; g++) {
+		int *R = &r_idx[start[g]];
+		nr = start[g + 1] - start[g];
+		if (nr == 0) continue ;
+		L = base;
+		Y = L + nr*nr;
+		z = Y + nr*nw;
+		for (i = 0; i < nr; i++) {
+			s = z[i];
+			for (j = 0; j < nw; j++) s -= Y[i*nw + j]*t[j];
+			z[i] = s;
+		}
+		for (i = nr - 1; i >= 0; i--) {
+			s = z[i];
+			for (k = i + 1; k < nr; k++) s -= L[k*nr + i]*z[k];
+			z[i] = s/L[i*nr + i];
+		}
+		for (i = 0; i < nr; i++) b[R[i]] = z[i];
+		base = z + nr;
+	}
+	return 1;
+}
+
+// Closed-form derivatives of region k_region's Rrs residuals (scale (Rrs - Rrs_measured)) with
+// respect to its depth and bottom parameters, at params: d (bottom_block + 1 rows of the region's
+// n_rrs Rrs residuals each) holds d/dH, then d/dparams[base + k] for the bottom block. With
+//   rrs = rrs_dp (1 - e_C) + rho/pi e_B,  e_C,B = exp(-M_C,B K Hs),  Hs = H + tide,
+//   Rrs = 0.5 rrs/(1 - 1.5 rrs) + Delta,  dRrs/drrs = 0.5/(1 - 1.5 rrs)^2,
+// drrs/dH = K (rrs_dp M_C e_C - rho/pi M_B e_B) (0 where exposed, Hs = 0), and rho = sum_k q_k B_k
+// rho_k with q_k = w_k/sum(w): drho/dw_j = (B_j rho_j - rho)/sum(w), drho/dB_k = q_k rho_k. The
+// bounds' clamps are differentiated as the interior function, as the forward differences (taken
+// inwards) do. Returns 0 (use forward differences) if it does not apply: interreflection, the
+// ratio rows, no water cache, or no cover (sum(w) = 0).
+
+static int region_jacobian(double *params, model_data *md, int k_region, double scale, double *d) {
+#if INTERREFLECTION || RATIO_CONSISTENCY
+	(void) params; (void) md; (void) k_region; (void) scale; (void) d;
+	return 0;
+#else
+	int k, k_scene, k_band, n = 0, nb = md->n_bottoms, block = bottom_block(md), n_rrs = residuals_per_region(md),
+		base = md->n_regions + k_region*block, type;
+	double P, G, X, H, Hs, B[MAX_BOTTOMS], q[MAX_BOTTOMS], w[MAX_BOTTOMS], sum = 0.0, *cache, K, rrs_dp, M_C, M_B,
+		rho, rho_k, rrs, e_C, e_B, dR;
+
+	if (md->iop_cache == NULL || Y_MODEL == 0 || Y_MODEL == 4) return 0;
+	for (k = 0; k < nb; k++) {
+		w[k] = clamp(params[base + k], 0.0, 1.0);
+		sum += w[k];
+	}
+	if (sum <= 0.0) return 0;
+
+	H = samodel_depth(params, k_region);
+	(void) samodel_unpack_bottom(params, md, k_region, B, q);
+	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+		samodel_unpack_scene(params, md, k_scene, &P, &G, &X);
+		for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++, n++) {
+			samodel_Rrs(P, G, X, B, q, H, GLINT_OFFSET ? md->D[k_scene] : 0.0, md, k_scene, k_band, k_region);
+			cache = &md->iop_cache[IOP_CACHE*(k_scene*md->max_n_bands + k_band)];
+			K = cache[3];
+			rrs_dp = cache[4];
+			M_C = cache[6];
+			M_B = cache[7];
+			rho = md->rho[k_region][k_scene][k_band];
+			rrs = md->rrs_modelled[k_region][k_scene][k_band];
+			Hs = H + md->H_tide[k_scene];
+			if (Hs < 0.0) Hs = 0.0;
+			e_C = exp(-M_C*K*Hs);
+			e_B = exp(-M_B*K*Hs);
+			dR = scale*0.5/((1.0 - 1.5*rrs)*(1.0 - 1.5*rrs));
+			d[n] = Hs > 0.0 ? dR*K*(rrs_dp*M_C*e_C - rho/PI*M_B*e_B) : 0.0;
+			for (k = 0; k < nb; k++) {
+				type = md->bottom_type_indexes[k];
+				rho_k = md->bottom_reflectance[type][k_scene][k_band];
+#if BOTTOM_BOUNDS
+				d[(1 + k)*n_rrs + n] = dR*e_B/PI*(B[k]*rho_k - rho)/sum;
+				d[(1 + nb + k)*n_rrs + n] = dR*e_B/PI*q[k]*rho_k;
+#else
+				d[(1 + k)*n_rrs + n] = dR*e_B/PI*rho_k;
+#endif
+			}
+		}
+	}
+	(void) block;
+	return 1;
+#endif
+}
+
+// Absorption a, backscattering bb and their derivatives with respect to ln P, ln G, ln X and
+// Y (da[4], dbb[4]) at one wavelength, as samodel_Rrs and deep_rrs compute them (P, G > 0).
+
+static void water_iops(double a_0, double a_1, double a_w, double b_bw, double lambda, double P, double G,
+	double X, double Y, double *a, double *bb, double *da, double *dbb) {
+	const double S = 0.015;
+	double a_g = G*exp(-S*(lambda - 440.0)), b_p = X*pow(440.0/lambda, Y);
+	*a = a_w + (a_0 + a_1*log(P))*P + a_g;
+	*bb = b_bw + b_p;
+	da[0] = (a_0 + a_1*log(P) + a_1)*P;
+	da[1] = a_g;
+	da[2] = 0.0;
+	da[3] = 0.0;
+	dbb[0] = 0.0;
+	dbb[1] = 0.0;
+	dbb[2] = b_p;
+	dbb[3] = b_p*log(440.0/lambda);
+}
+
+// The derivatives of the self-consistent Y (Y_MODEL 2: Y = F(r), r = rrs_dp(440)/rrs_dp(490),
+// F(r) = 3.44 [1 - 3.17 exp(-2.01 r)]) with respect to ln P, ln G, ln X (dY[3]), by implicit
+// differentiation of the fixed point: dY = F' dr/dtheta/(1 - F' dr/dY). Zero where Y is clamped.
+
+static void water_Y_derivatives(double P, double G, double X, double Y, double *dY) {
+	double lam[2] = {440.0, 490.0}, d[2], dd[2][4], a, bb, da[4], dbb[4], u, du, r, Fp;
+	int k, w;
+	for (w = 0; w < 3; w++) dY[w] = 0.0;
+	if (Y <= Y_MIN || Y >= Y_MAX) return;
+	for (k = 0; k < 2; k++) {
+		water_iops(interp_1d(ref_wlens, a0_Lee, n_ref_wlens, lam[k]), interp_1d(ref_wlens, a1_Lee, n_ref_wlens, lam[k]),
+			interp_1d(ref_wlens, aw_Pope_Fry1997, n_ref_wlens, lam[k]), interp_1d(ref_wlens, bbw_Morel_1974, n_ref_wlens, lam[k]),
+			lam[k], P, G, X, Y, &a, &bb, da, dbb);
+		u = bb/(a + bb);
+		d[k] = (LEE_G0 + LEE_G1*u)*u;
+		for (w = 0; w < 4; w++) {
+			du = (a*dbb[w] - bb*da[w])/((a + bb)*(a + bb));
+			dd[k][w] = (LEE_G0 + 2.0*LEE_G1*u)*du;
+		}
+	}
+	r = d[0]/d[1];
+	Fp = 3.44*3.17*2.01*exp(-2.01*r);
+	{
+		double dr_dY = r*(dd[0][3]/d[0] - dd[1][3]/d[1]);
+		for (w = 0; w < 3; w++) dY[w] = Fp*r*(dd[0][w]/d[0] - dd[1][w]/d[1])/(1.0 - Fp*dr_dY);
+	}
+}
+
+// Closed-form derivatives of every region's Rrs residuals with respect to the water parameters
+// (ln P, ln G, ln X and the glint offset) of their scene, at params: dW[(k_region n_rrs + row)
+// N_WATER + w]. Through a and bb, u = bb/(a + bb), K = a + bb, rrs_dp = (G0 + G1 u) u,
+// M = sec_sun + D(u) sec_view, with Y's dependence by water_Y_derivatives, into
+//   drrs = drrs_dp (1 - e_C) + Hs [rrs_dp e_C d(M_C K) - rho/pi e_B d(M_B K)].
+// Returns 0 (use forward differences) if it does not apply: Y_MODEL other than 2, a fitted Y,
+// interreflection, the ratio rows, or no water cache.
+
+static int water_jacobian(double *params, model_data *md, double scale, double *dW) {
+#if INTERREFLECTION || RATIO_CONSISTENCY || Y_MODEL != 2
+	(void) params; (void) md; (void) scale; (void) dW;
+	return 0;
+#else
+	int k_scene, k_band, k_region, w, n_rrs = residuals_per_region(md), row0 = 0;
+	double P, G, X, Y, dY[3], a, bb, da[4], dbb[4], u, K, rrs_dp, D_C, D_B, M_C, M_B, sec_v,
+		du[3], dK[3], drrs_dp[3], dM_C[3], dM_B[3], H, Hs, rho, rrs, e_C, e_B, dR, B[MAX_BOTTOMS], q[MAX_BOTTOMS];
+
+	if (md->iop_cache == NULL) return 0;
+	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
+		samodel_unpack_scene(params, md, k_scene, &P, &G, &X);
+		Y = samodel_water_Y(P, G, X);
+		water_Y_derivatives(P, G, X, Y, dY);
+		sec_v = md->sec_theta_view[k_scene];
+		for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
+			water_iops(md->a_0[k_scene][k_band], md->a_1[k_scene][k_band], md->a_w[k_scene][k_band],
+				md->b_bw[k_scene][k_band], md->wavelengths[k_scene][k_band], P, G, X, Y, &a, &bb, da, dbb);
+			u = bb/(a + bb);
+			K = a + bb;
+			rrs_dp = (LEE_G0 + LEE_G1*u)*u;
+			D_C = LEE_C0*sqrt(1.0 + LEE_C1*u);
+			D_B = LEE_B0*sqrt(1.0 + LEE_B1*u);
+			M_C = md->sec_theta_sun[k_scene] + D_C*sec_v;
+			M_B = md->sec_theta_sun[k_scene] + D_B*sec_v;
+			for (w = 0; w < 3; w++) {
+				double da_w = da[w] + da[3]*dY[w], dbb_w = dbb[w] + dbb[3]*dY[w];
+				du[w] = (a*dbb_w - bb*da_w)/((a + bb)*(a + bb));
+				dK[w] = (K > 0.0 && K < 2.5) ? da_w + dbb_w : 0.0;
+				drrs_dp[w] = (LEE_G0 + 2.0*LEE_G1*u)*du[w];
+				dM_C[w] = sec_v*LEE_C0*LEE_C1/(2.0*sqrt(1.0 + LEE_C1*u))*du[w];
+				dM_B[w] = sec_v*LEE_B0*LEE_B1/(2.0*sqrt(1.0 + LEE_B1*u))*du[w];
+			}
+			K = clamp(K, 0.0, 2.5);
+			for (k_region = 0; k_region < md->n_regions; k_region++) {
+				double *d = &dW[(k_region*n_rrs + row0 + k_band)*N_WATER];
+				H = samodel_depth(params, k_region);
+				(void) samodel_unpack_bottom(params, md, k_region, B, q);
+				rho = 0.0;
+				for (w = 0; w < md->n_bottoms; w++) {
+					rho += q[w]*B[w]*md->bottom_reflectance[md->bottom_type_indexes[w]][k_scene][k_band];
+				}
+				Hs = H + md->H_tide[k_scene];
+				if (Hs < 0.0) Hs = 0.0;
+				e_C = exp(-M_C*K*Hs);
+				e_B = exp(-M_B*K*Hs);
+				rrs = rrs_dp*(1.0 - e_C) + rho/PI*e_B;
+				dR = scale*0.5/((1.0 - 1.5*rrs)*(1.0 - 1.5*rrs));
+				for (w = 0; w < 3; w++) {
+					d[w] = dR*(drrs_dp[w]*(1.0 - e_C) + Hs*(rrs_dp*e_C*(dM_C[w]*K + M_C*dK[w])
+						- rho/PI*e_B*(dM_B[w]*K + M_B*dK[w])));
+				}
+#if GLINT_OFFSET
+				d[GLINT_INDEX] = scale;
+#endif
+			}
+		}
+		row0 += md->n_bands[k_scene];
+	}
+	return 1;
+#endif
 }
 
 // Jacobian of the residuals r (at x) with respect to the n_free parameters index[]; column j
@@ -2489,6 +2943,25 @@ static int lm_jacobian(model_data *md, double *x, double *r, int *index, int n_f
 		m = samodel_n_residuals(md), n_prior = region_prior_count(md);
 	double h, scale = residual_scale(md), unit = chi_unit(md);
 
+	// The region parameters' columns in closed form, where it applies (region_jacobian).
+	int *analytic = NULL, n_d = (1 + bottom_block(md))*n_region;
+	double *D = NULL;
+	if (ANALYTIC_JACOBIAN) {
+		analytic = malloc(md->n_regions*sizeof(int));
+		D = malloc(md->n_regions*n_d*sizeof(double));
+		for (k_region = 0; k_region < md->n_regions; k_region++) {
+			analytic[k_region] = region_jacobian(x, md, k_region, scale, &D[k_region*n_d]);
+		}
+	}
+
+	// The water parameters' columns in closed form, where it applies (water_jacobian).
+	int water_analytic = 0;
+	double *DW = NULL;
+	if (ANALYTIC_JACOBIAN) {
+		DW = malloc(md->n_regions*n_region*N_WATER*sizeof(double));
+		water_analytic = water_jacobian(x, md, scale, DW);
+	}
+
 	copy_double_vec(x, x_new, samodel_n_params(md));
 	for (j = 0; j < n_free; j++) {
 		i = index[j];
@@ -2498,9 +2971,17 @@ static int lm_jacobian(model_data *md, double *x, double *r, int *index, int n_f
 		if (i < offset) {
 			k_region = i < md->n_regions ? i : (i - md->n_regions)/bottom_block(md);
 			for (k = 0; k < m; k++) J[k*n_free + j] = 0.0;
-			region_residuals(x_new, md, k_region, scale, &r_new[k_region*n_region]);
-			for (k = k_region*n_region; k < (k_region + 1)*n_region; k++) {
-				J[k*n_free + j] = (r_new[k] - r[k])/h;
+			if (analytic != NULL && analytic[k_region]) {
+				// Row of this parameter in the region's derivatives: 0 for H, 1 + k for its
+				// bottom parameter k.
+				int row = i < md->n_regions ? 0 : 1 + (i - md->n_regions) % bottom_block(md);
+				double *d = &D[k_region*n_d];
+				for (k = 0; k < n_region; k++) J[(k_region*n_region + k)*n_free + j] = d[row*n_region + k];
+			} else {
+				region_residuals(x_new, md, k_region, scale, unit, &r_new[k_region*n_region]);
+				for (k = k_region*n_region; k < (k_region + 1)*n_region; k++) {
+					J[k*n_free + j] = (r_new[k] - r[k])/h;
+				}
 			}
 			if (n_prior > 0) {
 				// The prior rows on the region parameters (continuity, coherence, depth prior);
@@ -2511,11 +2992,31 @@ static int lm_jacobian(model_data *md, double *x, double *r, int *index, int n_f
 				}
 			}
 		} else {
-			samodel_residuals(x_new, md, r_new);
-			for (k = 0; k < m; k++) J[k*n_free + j] = (r_new[k] - r[k])/h;
+			// A scene's water changes only that scene's rows of every region, and the tie and
+			// glint rows; every other row's difference is exactly zero.
+			int k_scene = (i - offset)/N_WATER, a0, a1, b0, b1, tail = md->n_regions*n_region + n_prior;
+			scene_rows(md, k_scene, &a0, &a1, &b0, &b1);
+			for (k = 0; k < m; k++) J[k*n_free + j] = 0.0;
+			for (k_region = 0; k_region < md->n_regions; k_region++) {
+				if (water_analytic) {
+					int w = (i - offset) % N_WATER;
+					for (k = a0; k < a1; k++) J[(k_region*n_region + k)*n_free + j] = DW[(k_region*n_region + k)*N_WATER + w];
+					continue ;
+				}
+				double *r_k = &r_new[k_region*n_region];
+				region_scene_residuals(x_new, md, k_region, k_scene, scale, unit, r_k);
+				for (k = k_region*n_region + a0; k < k_region*n_region + a1; k++) J[k*n_free + j] = (r_new[k] - r[k])/h;
+				for (k = k_region*n_region + b0; k < k_region*n_region + b1; k++) J[k*n_free + j] = (r_new[k] - r[k])/h;
+			}
+			tie_residuals(x_new, md, unit, &r_new[tail]);
+			glint_residuals(x_new, md, unit, &r_new[tail + tie_count(md)]);
+			for (k = tail; k < m; k++) J[k*n_free + j] = (r_new[k] - r[k])/h;
 		}
 		x_new[i] = x[i];
 	}
+	free(analytic);
+	free(D);
+	free(DW);
 	return n_free;
 }
 
@@ -2540,9 +3041,42 @@ static void depth_weights(model_data *md, double *w) {
 // unidentified depth gets a large sigma. Overwrites the model-derived data in md (callers
 // recompute them at the optimum).
 
+// J'J (n x n, both triangles) and, if g is not NULL, J'r, for J (m x n, row-major). J is
+// sparse (a region's rows depend only on its own depth and bottom and on the water), so each
+// row adds only the products of its non-zero entries. The terms are added in the same order
+// (by row) as the dense sums and only exact zeros are skipped, so the result is identical.
+
+static void normal_equations(const double *J, const double *r, int m, int n, double *JTJ, double *g, int *nz) {
+	int i, j, k, a, b, n_nz;
+	double v;
+	for (j = 0; j < n*n; j++) JTJ[j] = 0.0;
+	if (g != NULL) {
+		for (j = 0; j < n; j++) g[j] = 0.0;
+	}
+	for (k = 0; k < m; k++) {
+		const double *row = &J[k*n];
+		n_nz = 0;
+		for (j = 0; j < n; j++) {
+			if (row[j] != 0.0) nz[n_nz++] = j;
+		}
+		for (a = 0; a < n_nz; a++) {
+			j = nz[a];
+			v = row[j];
+			if (g != NULL) g[j] += v*r[k];
+			for (b = 0; b <= a; b++) {
+				i = nz[b];
+				JTJ[j*n + i] += v*row[i];
+			}
+		}
+	}
+	for (j = 0; j < n; j++) {
+		for (i = 0; i < j; i++) JTJ[i*n + j] = JTJ[j*n + i];
+	}
+}
+
 double samodel_depth_sigma(model_data *md, double *x) {
 
-	int i, j, k, m, n, n_free, ok, *index;
+	int i, j, m, n, n_free, ok, *index, *index_nz;
 	double *lo, *hi, *r, *r_new, *x_new, *J, *JTJ, *A, *w, *y, *w_region, ridge, diag_max, variance,
 		unit;
 
@@ -2561,6 +3095,7 @@ double samodel_depth_sigma(model_data *md, double *x) {
 	JTJ   = malloc(n*n*sizeof(double));
 	A     = malloc(n*n*sizeof(double));
 	w_region = malloc(md->n_regions*sizeof(double));
+	index_nz = malloc(n*sizeof(int));
 
 	samodel_bounds(md, lo, hi);
 	depth_weights(md, w_region);
@@ -2578,13 +3113,7 @@ double samodel_depth_sigma(model_data *md, double *x) {
 		samodel_residuals(x, md, r);
 		lm_jacobian(md, x, r, index, n_free, hi, J, x_new, r_new);
 
-		for (j = 0; j < n_free; j++) {
-			for (i = 0; i <= j; i++) {
-				JTJ[j*n_free + i] = 0.0;
-				for (k = 0; k < m; k++) JTJ[j*n_free + i] += J[k*n_free + j]*J[k*n_free + i];
-				JTJ[i*n_free + j] = JTJ[j*n_free + i];
-			}
-		}
+		normal_equations(J, r, m, n_free, JTJ, NULL, index_nz);
 
 		// Solve (J'J + ridge max diag(J'J) I) y = w; the variance is u^2 w'y.
 
@@ -2622,6 +3151,7 @@ double samodel_depth_sigma(model_data *md, double *x) {
 	free(JTJ);
 	free(A);
 	free(w_region);
+	free(index_nz);
 
 	return MIN(sqrt(MAX(variance, 0.0)), H_MAX);
 }
@@ -2629,7 +3159,7 @@ double samodel_depth_sigma(model_data *md, double *x) {
 double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations, double ftol,
 	int *n_evaluations) {
 
-	int i, j, k, m, n, n_free, iteration, accepted, pass, solved, new_bounds, *index, *active, *bound;
+	int i, j, k, m, n, n_free, iteration, accepted, pass, solved, new_bounds, *index, *active, *bound, *index_nz, *group;
 	double *lo, *hi, *r, *r_new, *J, *JTJ, *A, *g, *delta, *x_new, *diag,
 		cost, cost_new, lambda, nu, h, step_norm, x_norm, predicted, gain, *fixed_step;
 
@@ -2650,6 +3180,7 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 	diag   = malloc(n*sizeof(double));
 	x_new  = malloc(n*sizeof(double));
 	bound  = malloc(n*sizeof(int));
+	index_nz = malloc(n*sizeof(int));
 	fixed_step = malloc(n*sizeof(double));
 
 	samodel_bounds(md, lo, hi);
@@ -2658,6 +3189,14 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 	for (i = 0; i < n; i++) {
 		x[i] = clamp(x[i], lo[i], hi[i]);
 		if (is_free[i] != 0.0) index[n_free++] = i;
+	}
+
+	// Each free parameter's region (-1: water), for the Schur complement solve.
+
+	group = malloc(n*sizeof(int));
+	for (j = 0; j < n_free; j++) {
+		i = index[j];
+		group[j] = i >= samodel_water_offset(md) ? -1 : (i < md->n_regions ? i : (i - md->n_regions)/bottom_block(md));
 	}
 
 	samodel_residuals(x, md, r);
@@ -2674,14 +3213,8 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 
 		// Gradient J'r and J'J.
 
+		normal_equations(J, r, m, n_free, JTJ, g, index_nz);
 		for (j = 0; j < n_free; j++) {
-			g[j] = 0.0;
-			for (k = 0; k < m; k++) g[j] += J[k*n_free + j]*r[k];
-			for (i = 0; i <= j; i++) {
-				JTJ[j*n_free + i] = 0.0;
-				for (k = 0; k < m; k++) JTJ[j*n_free + i] += J[k*n_free + j]*J[k*n_free + i];
-				JTJ[i*n_free + j] = JTJ[j*n_free + i];
-			}
 			diag[j] = MAX(JTJ[j*n_free + j], 1.0e-12);
 		}
 
@@ -2730,7 +3263,8 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 					}
 				}
 
-				if (! cholesky_solve(A, delta, n_free)) {
+				if (! (SCHUR_SOLVE ? schur_solve(A, delta, n_free, group, md->n_regions)
+						: cholesky_solve(A, delta, n_free))) {
 					solved = 0;
 					break ;
 				}
@@ -2831,6 +3365,8 @@ double samodel_lm(model_data *md, double *x, double *is_free, int max_iterations
 	free(diag);
 	free(x_new);
 	free(bound);
+	free(index_nz);
+	free(group);
 	free(fixed_step);
 
 	return sqrt(cost);
@@ -3835,6 +4371,9 @@ float model_spectral_diff_mean(double ***Rrs_measured, double ***lut_modelled_Rr
 // Self-consistent backscattering slope (Y_MODEL 1 and 2): Y from the ratio of the model's own
 // deep-water reflectance rrs_dp at two wavelengths, which depends on Y, solved by fixed-point
 // iteration. The last result is cached, as it is called with the same P, G, X for every band.
+// The iteration always starts from Y_START, so Y is a function of P, G, X alone: started from
+// the previous call's Y, it depended on the order of calls (by up to the 1e-10 tolerance), and
+// the fits amplify such differences into different minima at some pixels.
 
 static double deep_rrs(int k, double lambda, double P, double G, double X, double Y) {
 
@@ -3868,7 +4407,7 @@ double samodel_water_Y(double P, double G, double X) {
 		return last_Y;
 	}
 
-	Y = last_Y; // Start from the previous solution (usually a nearby P, G, X).
+	Y = Y_START;
 	for (k = 0; k < 50; k++) {
 #if Y_MODEL == 1
 		ratio = deep_rrs(0, 443.0, P, G, X, Y)/deep_rrs(1, 555.0, P, G, X, Y);
@@ -3943,7 +4482,7 @@ void samodel_Rrs(
 
 	const double S = 0.015;
 	int i;
-	double rho, a_phi, a_g, a, Y, M, b_p, bb, u, K, DuC, DuB, 
+	double rho, a_phi, a_g, a, Y, b_p, bb, u, K, DuC, DuB, M_C, M_B, *cache,
 	  f, kd, kup_water, kup_bottom, rrs_dp, rrs_C, rrs_B, rrs;
 
 	double a_0     = md->a_0[k_scene][k_band];
@@ -3975,50 +4514,67 @@ void samodel_Rrs(
 
 	md->rho[k_region][k_scene][k_band] = rho;
 
-	// Compute a - total absorption coefficient. 
+	// The water optics depend only on the scene's water (P, G, X) and the band: they are cached
+	// per scene and band (md->iop_cache) and recomputed only when P, G or X change. Y_MODEL 0 and 4
+	// take Y from the region's Rrs, so they are not cached.
 
-	a_phi = (a_0 + a_1*log(fabs(P)))*fabs(P); // Phytoplankton pigment absorption coefficient.
+	cache = (md->iop_cache != NULL && Y_MODEL != 0 && Y_MODEL != 4) ?
+		&md->iop_cache[IOP_CACHE*(k_scene*md->max_n_bands + k_band)] : NULL;
+	if (cache != NULL && cache[0] == P && cache[1] == G && cache[2] == X) {
+		K = cache[3];
+		rrs_dp = cache[4];
+		u = cache[5];
+		M_C = cache[6];
+		M_B = cache[7];
+	} else {
+		// Compute a - total absorption coefficient. 
 
-	a_g = fabs(G)*exp(-S*(lambda - 440.0)); // Gelbstoff absorption coefficient. 
+		a_phi = (a_0 + a_1*log(fabs(P)))*fabs(P); // Phytoplankton pigment absorption coefficient.
 
-	a = a_w + a_phi + a_g; 
+		a_g = fabs(G)*exp(-S*(lambda - 440.0)); // Gelbstoff absorption coefficient. 
 
-	// Compute bb - total backscattering coefficient.
+		a = a_w + a_phi + a_g; 
 
-	Y = samodel_backscatter_slope(P, G, X, md, k_scene, k_region);
-	// Y = 0.5; // Consistent with more turbid waters per Lee, 2001. 
-	b_p = X*pow(440.0/lambda, Y);
+		// Compute bb - total backscattering coefficient.
 
-	bb = b_bw + b_p;
+		Y = samodel_backscatter_slope(P, G, X, md, k_scene, k_region);
+		// Y = 0.5; // Consistent with more turbid waters per Lee, 2001. 
+		b_p = X*pow(440.0/lambda, Y);
 
-	// Model of Lee et al.
+		bb = b_bw + b_p;
 
-	// Compute u and K. 
+		// Model of Lee et al.
 
-	u = bb/(a + bb);
-	K = a + bb;
-	if (K < 0.0) K = 0.0; 
-	if (K > 2.5) K = 2.5;
+		// Compute u and K. 
+
+		u = bb/(a + bb);
+		K = a + bb;
+		if (K < 0.0) K = 0.0; 
+		if (K > 2.5) K = 2.5;
+		// Compute rrs_dp - the remote sensing reflectance for optically deep water.
+
+		rrs_dp = (LEE_G0 + LEE_G1*u)*u;
+
+		// Compute the optical path elongation factors for scattered photons.
+
+		DuC = LEE_C0*sqrt(1.0 + LEE_C1*u); // Water column. 
+		DuB = LEE_B0*sqrt(1.0 + LEE_B1*u); // Bottom. 
+
+		M_C = sec_theta_sun + DuC*sec_theta_view;
+		M_B = sec_theta_sun + DuB*sec_theta_view;
+		if (cache != NULL) {
+			cache[0] = P; cache[1] = G; cache[2] = X;
+			cache[3] = K; cache[4] = rrs_dp; cache[5] = u; cache[6] = M_C; cache[7] = M_B;
+		}
+	}
 	md->K[k_scene][k_band] = K;
-
-	// Compute rrs_dp - the remote sensing reflectance for optically deep water.
-
-	rrs_dp = (LEE_G0 + LEE_G1*u)*u;
-
 	md->rrs_dp[k_region][k_scene][k_band] = rrs_dp;
-
-	// Compute the optical path elongation factors for scattered photons.
-
-	DuC = LEE_C0*sqrt(1.0 + LEE_C1*u); // Water column. 
-	DuB = LEE_B0*sqrt(1.0 + LEE_B1*u); // Bottom. 
 
 	// Compute rrs. 
 
-	M = sec_theta_sun + DuC*sec_theta_view;
-	rrs_C = rrs_dp*(1.0 - exp(-M*K*H_scene)); // Contribution of the water column. 
+	rrs_C = rrs_dp*(1.0 - exp(-M_C*K*H_scene)); // Contribution of the water column. 
 
-	M = sec_theta_sun + DuB*sec_theta_view;
-	rrs_B = rho/PI*exp(-M*K*H_scene); // Contribution of the bottom. 
+	rrs_B = rho/PI*exp(-M_B*K*H_scene); // Contribution of the bottom. 
 #if INTERREFLECTION
 	{
 		double T = exp(-2.0*D_DIFFUSE*K*H_scene);

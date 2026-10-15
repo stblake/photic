@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
   md.Rrs440 = Rrs440; md.Rrs490 = Rrs490; md.Rrs750 = Rrs750;
   md.H_tide = h_tide; md.sec_theta_sun = sec_sun; md.sec_theta_view = sec_view;
   md.bottom_reflectance = bottom_reflectance; md.rho = rho; md.rrs_dp = rrs_dp;
-  md.rrs_bottom = rrs_bottom; md.rrs_modelled = rrs_modelled; md.Rrs_modelled = Rrs_modelled;
+  md.iop_cache = NULL; md.rrs_bottom = rrs_bottom; md.rrs_modelled = rrs_modelled; md.Rrs_modelled = Rrs_modelled;
 
   allocate_float_array_3d(&bands, NSCENES*NBANDS, NROWS, NCOLS);
   allocate_float_array_2d(&truth, NROWS, NCOLS);
