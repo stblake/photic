@@ -973,7 +973,14 @@ Profiled on a 75-point tier 4 screen case (Tantabiddi, 4 scenes, 9 regions). HEA
 - **Closed-form Jacobian:** against forward differences, mean relative difference 1e-6 (water) and 4e-4 (regions). The large differences are cover weights with near-zero total cover, where the derivative is steep and the forward difference overshoots it. Synthetic regression test: RMSE 0.25 → 0.089 m, max 1.26 → 0.20 m. It falls back to forward differences with the ratio rows, interreflection or Y_MODEL ≠ 2.
 - **Schur solve:** agrees with Cholesky to 5e-13 (relative). Tracking the factor's structure inside the Cholesky instead (byte-identical) was slower than the row-sparse Cholesky.
 - **Harness:** tier 3's scenarios and tier 4's sites now run in parallel (photic is single-threaded). With the steps to the per-scene water columns: tier 3 4417 → 149 s, tier 4 13 500 s (sites in series) → 596 s.
-- The full benchmark of the closed-form Jacobian and Schur solve (`fast3`) is running.
+- **Full benchmark of the closed-form Jacobian and Schur solve (`runs/fast3`)** against HEAD (d9d14d6) and the byte-identical steps with the pure Y (`fast`). Tier 4 hits % / RMSE m:
+  - Bundegi 9.2 / 2.39 (HEAD), 8.6 / 2.74 (fast), 8.6 / 2.68 (fast3);
+  - Tantabiddi 23.2 / 2.51, 23.5 / 2.46, 22.9 / 2.51;
+  - Marina 5.9 / 2.41, 5.9 / 2.43, 6.0 / 2.44;
+  - gulf entrance 0.6 / 4.26, 0.5 / 4.47, 0.5 / 4.42.
+  - Tier 3 (mean hits / median RMSE): clear 45.6 / 1.87, 48.4 / 1.78, 48.5 / 1.80; moderate 24.1 / 3.20, 25.3 / 2.34, 25.6 / 2.29; turbid 12.6 / 1.78, 12.5 / 1.34, 12.7 / 1.37.
+  - fast3 against fast is neutral (every difference within the noise floor). Against HEAD, tier 3 improves in every water type; tier 4 differs by at most 0.6 points and 0.3 m RMSE at one site (Bundegi), within the noise floor. Kept on.
+  - Wall time: tier 3 97 s, tier 4 382 s (sites 106–369 s; HEAD 1232–5242 s each).
 
 ### Phase B order (from Phase A)
 
