@@ -70,16 +70,33 @@ def wanted(name):
     return base in ("MTD_MSIL1C.xml", "MTD_TL.xml", "manifest.safe")
 
 
-def fetch(dest_root):
+# The Arabian Gulf between Abu Dhabi and Dubai (tile 40RBN; tier4_gulf.py). Chosen from Earth Search
+# STAC (2026-10-15): cloud cover 0%, relative orbit 63 (the whole tile), 2021-2025 (the years of the
+# ICESat-2 reference), sun elevation 38-56 deg, a tide changing by at most 0.2 m/h and a spread of
+# tides about MSL (GOT4.10 at 54.6 E, 25.0 N; there is no open gauge record).
+
+GULF_TILE_PREFIX = "tiles/40/R/BN/"
+
+GULF_SCENES = [
+    "S2C_MSIL1C_20250204T070131_N0511_R063_T40RBN_20250204T090729.SAFE",  # sun el. 44, tide -0.38 m
+    "S2B_MSIL1C_20220126T070139_N0400_R063_T40RBN_20220126T074954.SAFE",  # sun el. 42, tide -0.15 m
+    "S2A_MSIL1C_20221018T065901_N0400_R063_T40RBN_20221018T074328.SAFE",  # sun el. 53, tide +0.12 m
+    "S2B_MSIL1C_20221023T065929_N0400_R063_T40RBN_20221023T090520.SAFE",  # sun el. 52, tide +0.47 m
+    "S2A_MSIL1C_20230205T070101_N0509_R063_T40RBN_20230205T074629.SAFE",  # sun el. 44, tide +0.66 m
+    "S2A_MSIL1C_20220131T070121_N0400_R063_T40RBN_20220131T080317.SAFE",  # sun el. 43, tide +0.92 m
+]
+
+
+def fetch(dest_root, scenes=None, tile_prefix=TILE_PREFIX):
     os.makedirs(dest_root, exist_ok=True)
-    for safe in SCENES + EXTRA_SCENES:
-        items = [i for i in list_objects(TILE_PREFIX + safe + "/") if wanted(i["name"])]
+    for safe in scenes or SCENES + EXTRA_SCENES:
+        items = [i for i in list_objects(tile_prefix + safe + "/") if wanted(i["name"])]
         if not items:
-            raise SystemExit("no objects for %s in gs://%s/%s" % (safe, BUCKET, TILE_PREFIX))
+            raise SystemExit("no objects for %s in gs://%s/%s" % (safe, BUCKET, tile_prefix))
         total = sum(int(i["size"]) for i in items)
         print("%s: %d files, %.0f MB" % (safe, len(items), total/1e6), flush=True)
         for i in items:
-            rel = i["name"][len(TILE_PREFIX):]
+            rel = i["name"][len(tile_prefix):]
             path = os.path.join(dest_root, rel)
             if os.path.exists(path) and os.path.getsize(path) == int(i["size"]):
                 continue
@@ -92,5 +109,9 @@ def fetch(dest_root):
 
 
 if __name__ == "__main__":
-    fetch(os.path.join(os.environ.get("PHOTIC_VALIDATION_DATA",
-                                      os.path.expanduser("~/photic_dev/validation_data")), "raw", "s2"))
+    import sys
+    raw = os.path.join(os.environ.get("PHOTIC_VALIDATION_DATA", os.path.expanduser("~/photic_dev/validation_data")), "raw")
+    if sys.argv[1:] == ["gulf"]:
+        fetch(os.path.join(raw, "s2_gulf"), GULF_SCENES, GULF_TILE_PREFIX)
+    else:
+        fetch(os.path.join(raw, "s2"))

@@ -61,9 +61,11 @@ The steps are idempotent: anything already present is reused.
 - `raw/tables/pope97.txt`: Pope & Fry (1997), from omlc.org.
 - `raw/lee/Lee_2_QAA_HOPE_hyper.xls`: Lee's own QAA and HOPE spreadsheet (supplied by the user; not redistributed). Tier 1 checks that `photic_ref` with the spreadsheet's coefficients reproduces its modelled Rrs, and reports the effect of photic's coefficients.
 - `raw/s2/*.SAFE`: Sentinel-2 L1C tile 49KHR, downloaded from the public `gcp-public-data-sentinel-2` bucket (`tier4_fetch_s2.py`).
+- `raw/l8/`: Landsat 8 OLI L1TP (Collection 1, path 115 row 75), six scenes from the public `gcp-public-data-landsat` bucket (`tier4_fetch_l8.py`). `tier4_prepare.py acolite_l8` then `sites_l8` builds `derived/tier4/sites_l8` (~31 m cells); run tier 4 on it with `PHOTIC_TIER4_SITES=sites_l8`.
 - `raw/bathymetry/exmouth`: WA DoT Exmouth point surveys (`EX.zip`; singlebeam; x/y/z in GDA94 MGA zones 49/50; metres relative to AHD; CC BY 4.0) and the 5 m marina composite.
 - `raw/tides`: WA DoT Exmouth 02 tide gauge, 1997–2025, 5-minute data, cm above LAT, AWST (CC BY 4.0).
 - `raw/published`: the photic Exmouth Gulf 30 m product linked from the README.
+- `raw/tides/got`: the GOT4.10c global ocean tide model (NASA GSFC, open), read with pyTMD, for sites without a gauge. At the Exmouth gauge (2019, hourly) it has r = 0.96 but underestimates the range (sd 0.34 against 0.53 m; residual 0.2 m RMS).
 
 ## Acceptance rule for changes to the model core
 

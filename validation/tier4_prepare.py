@@ -34,10 +34,10 @@ SITES = {  # west, east, south, north, cell size (deg; 0.0002 ~ 21 m)
 LIMIT = [-21.99, 113.95, -21.62, 114.45]  # S, W, N, E for ACOLITE
 
 
-def run_acolite(safe, out):
+def run_acolite(inputfile, out, limit=LIMIT):
     sys.path.insert(0, os.path.join(DATA, "tools", "acolite"))
     import acolite as ac
-    settings = dict(inputfile=safe, output=out, limit=LIMIT, s2_target_res=20,
+    settings = dict(inputfile=inputfile, output=out, limit=limit, s2_target_res=20,
                     output_geometry=False, ancillary_data=False, dsf_aot_estimate="fixed",
                     dsf_residual_glint_correction=True, l2w_parameters=["Rrs_*"],
                     rgb_rhot=False, rgb_rhos=False, map_l2w=False,
@@ -45,20 +45,26 @@ def run_acolite(safe, out):
     ac.acolite.acolite_run(settings=settings)
 
 
-def acolite_all():
-    for safe in sorted(glob.glob(os.path.join(DATA, "raw", "s2", "*.SAFE"))):
-        name = os.path.basename(safe)[:-5]
-        out = os.path.join(DATA, "derived", "tier4", "acolite", name)
+def acolite_all(raw="s2", derived="acolite", limit=LIMIT):
+    """ACOLITE on every scene in raw/<raw> (Sentinel-2 .SAFE or Landsat scene directories), written
+    to derived/tier4/<derived>/<scene>."""
+    for scene in sorted(glob.glob(os.path.join(DATA, "raw", raw, "*"))):
+        if not os.path.isdir(scene):
+            continue
+        name = os.path.basename(scene).replace(".SAFE", "")
+        out = os.path.join(DATA, "derived", "tier4", derived, name)
         if glob.glob(os.path.join(out, "*L2W.nc")):
             print("done:", name)
             continue
         print("ACOLITE:", name, flush=True)
-        run_acolite(safe, out)
+        run_acolite(scene, out, limit)
 
 
-def site_grid(site):
-    """Node-registered WGS84 grid (photic convention: row 0 south) for a site."""
-    w, e, s, n, cell = SITES[site]
+def site_grid(site, sites=SITES, min_cell=0.0):
+    """Node-registered WGS84 grid (photic convention: row 0 south) for a site, with cells no
+    smaller than min_cell (deg; Landsat's 30 m pixels)."""
+    w, e, s, n, cell = sites[site]
+    cell = max(cell, min_cell)
     ncols = int(round((e - w)/cell)) + 1
     nrows = int(round((n - s)/cell)) + 1
     lon = w + cell*np.arange(ncols)
@@ -66,12 +72,12 @@ def site_grid(site):
     return lon, lat, cell
 
 
-def reference_depth(site, min_count=3, max_std=0.5):
+def reference_depth(site, min_count=3, max_std=0.5, min_cell=0.0):
     """Median depth below AHD (m, positive down) of the DoT singlebeam soundings in each
     cell, using only the most recent survey that covers the cell; cells with fewer than
     min_count soundings or a spread above max_std (steep or mixed) are nodata."""
     P = np.load(os.path.join(DATA, "derived", "tier4", "soundings_lonlat_zAHD_year.npy"))
-    lon, lat, cell = site_grid(site)
+    lon, lat, cell = site_grid(site, min_cell=min_cell)
     j = np.rint((P[:, 0] - lon[0])/cell).astype(int)
     i = np.rint((P[:, 1] - lat[0])/cell).astype(int)
     m = (i >= 0) & (i < len(lat)) & (j >= 0) & (j < len(lon)) & (P[:, 2] < 0)
@@ -95,6 +101,8 @@ def reference_depth(site, min_count=3, max_std=0.5):
 
 
 PHOTIC_BANDS = [443.0, 492.0, 560.0, 665.0]  # nominal S2 B1-B4 centres
+L8_BANDS = [443.0, 483.0, 561.0, 655.0]      # Landsat 8 OLI B1-B4 centres
+L8_CELL = 0.0003                             # ~31 m
 RED_EDGE_BANDS = PHOTIC_BANDS + [704.0]       # plus B5 (EXPERIMENTS.md B7)
 N_WATER = 1.34
 
@@ -147,30 +155,47 @@ def write_asc(path, grid, lon, lat, cell, nodata=-9999.0):
             f.write(" ".join("%.7g" % v for v in g[i]) + "\n")
 
 
-def prepare_sites(wavelengths=PHOTIC_BANDS, sites_name="sites", scenes_only=None):
-    """photic inputs and reference grids for every site from the ACOLITE scenes (those named in
-    scenes_only, or all), written to derived/tier4/<sites_name>/ (tier4_score.py reads
-    $PHOTIC_TIER4_SITES, default "sites")."""
-    from scipy.spatial import cKDTree
+def gauge_tide():
+    """Tide (m above MSL) at an ISO time from the Exmouth gauge, or None."""
     levels, msl = gauge()
+    fn = lambda isodate: scene_tide(isodate, levels, msl)
+    fn.msl = msl
+    return fn
+
+
+def gauge_reference(site, lon, lat, cell):
+    depth, count, year = reference_depth(site, min_cell=cell)
+    return dict(depth=depth, count=count, year=year)
+
+
+def prepare_sites(wavelengths=PHOTIC_BANDS, sites_name="sites", scenes_only=None, acolite="acolite",
+                  sites=SITES, min_cell=0.0, tide=None, reference=gauge_reference):
+    """photic inputs and reference grids for every site from the ACOLITE scenes in
+    derived/tier4/<acolite>/ (those named in scenes_only, or all), written to
+    derived/tier4/<sites_name>/ (tier4_score.py reads $PHOTIC_TIER4_SITES, default "sites").
+    tide(isodate) gives the water level above MSL at the overpass (default: the Exmouth gauge);
+    reference(site, lon, lat, cell) the reference depth grid and its fields for reference.npz."""
+    from scipy.spatial import cKDTree
+    tide_at = tide or gauge_tide()
     scenes = []
-    for l2w in sorted(glob.glob(os.path.join(DATA, "derived", "tier4", "acolite", "*", "*L2W.nc"))):
-        if scenes_only is not None and os.path.basename(os.path.dirname(l2w)) + ".SAFE" not in scenes_only:
+    for l2w in sorted(glob.glob(os.path.join(DATA, "derived", "tier4", acolite, "*", "*L2W.nc"))):
+        name = os.path.basename(os.path.dirname(l2w))
+        if scenes_only is not None and name not in scenes_only and name + ".SAFE" not in scenes_only:
             continue
         g, lon, lat, rrs = read_l2w(l2w)
         ok = np.isfinite(lon) & np.isfinite(lat)
         tree = cKDTree(np.column_stack([lon[ok], lat[ok]]))
         flat = {w: v[ok] for w, v in rrs.items()}
-        tide = scene_tide(g["isodate"], levels, msl)
+        tide = tide_at(g["isodate"])
         if tide is None:
             print("no tide for", l2w)
             continue
         scenes.append(dict(file=l2w, isodate=g["isodate"], sza=float(g["sza"]), vza=float(g["vza"]),
                            tide=tide, tree=tree, rrs=flat))
-    meta = dict(msl_cm_above_lat=msl, scenes=[{k: s[k] for k in ("file", "isodate", "sza", "vza", "tide")}
+    meta = dict(msl_cm_above_lat=getattr(tide_at, "msl", None), scenes=[{k: s[k] for k in ("file", "isodate", "sza", "vza", "tide")}
                                               for s in scenes], sites={})
-    for site in SITES:
-        lon, lat, cell = site_grid(site)
+    for site in sites:
+        lon, lat, cell = site_grid(site, sites, min_cell)
         out = os.path.join(DATA, "derived", "tier4", sites_name, site)
         os.makedirs(out, exist_ok=True)
         LON, LAT = np.meshgrid(lon, lat)
@@ -179,7 +204,7 @@ def prepare_sites(wavelengths=PHOTIC_BANDS, sites_name="sites", scenes_only=None
         resampled = []
         for s in scenes:
             dist, idx = s["tree"].query(np.column_stack([LON.ravel(), LAT.ravel()]))
-            far = (dist > 1.5*0.0002).reshape(LON.shape)
+            far = (dist > 1.5*max(0.0002, min_cell)).reshape(LON.shape)
             bands = {}
             for wl in wavelengths:
                 src = min(s["rrs"], key=lambda w: abs(w - wl))
@@ -208,8 +233,9 @@ def prepare_sites(wavelengths=PHOTIC_BANDS, sites_name="sites", scenes_only=None
         model = "MODEL Lee_Semi_Analytical IN %s OUT H H_sigma H_error albedo sand seagrass coral kmin btype iod" % (
             " ".join("s%d" % (k + 1) for k in range(len(kept))))
         open(os.path.join(out, "run.bam"), "w").write("\n".join(lines + scene_lines + [model, "EXIT"]) + "\n")
-        depth, count, year = reference_depth(site)
-        np.savez(os.path.join(out, "reference.npz"), depth=depth, count=count, year=year, lon=lon, lat=lat)
+        ref = reference(site, lon, lat, cell)
+        depth = ref["depth"]
+        np.savez(os.path.join(out, "reference.npz"), lon=lon, lat=lat, **ref)
         meta["sites"][site] = dict(shape=list(depth.shape), cell=cell, reference_cells=int(np.isfinite(depth).sum()),
                                    scenes=[s["isodate"] for s, _ in kept],
                                    coverage=[round(c, 3) for _, _, c in resampled])
@@ -229,6 +255,11 @@ if __name__ == "__main__":
         prepare_sites(sites_name="sites16")
     elif sys.argv[1:] == ["sites16_5"]:
         prepare_sites(RED_EDGE_BANDS, "sites16_5")
+    elif sys.argv[1:] == ["acolite_l8"]:
+        acolite_all("l8", "acolite_l8")
+    elif sys.argv[1:] == ["sites_l8"]:
+        prepare_sites(L8_BANDS, "sites_l8", acolite="acolite_l8", min_cell=L8_CELL)
     else:
-        raise SystemExit("usage: tier4_prepare.py acolite|sites|sites5|sites16|sites16_5\n"
-                         "  sites, sites5: the six original scenes; sites16, sites16_5: all scenes")
+        raise SystemExit("usage: tier4_prepare.py acolite|sites|sites5|sites16|sites16_5|acolite_l8|sites_l8\n"
+                         "  sites, sites5: the six original scenes; sites16, sites16_5: all scenes;\n"
+                         "  sites_l8: the Landsat 8 scenes (tier4_fetch_l8.py) on ~31 m cells")

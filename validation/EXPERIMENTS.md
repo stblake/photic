@@ -865,7 +865,8 @@ Back on the semi-analytical model; the profile model is parked on branch `profil
 **LUT and carry-over** need the full benchmark (they act between neighbouring cells, which `ab.py` does not model):
 - **`LUT 0`, tier 3** (no-prior scenarios, mean hits / median RMSE): clear 45.6 / 1.87 → 44.8 / 2.02, moderate 24.1 / 3.20 → 22.8 / 3.58, turbid 12.6 / 1.78 → 12.1 / 1.88. Worse in every water type, and 2.9× slower (12958 s against 4417 s).
 - **`CARRY_OVER 0`, tier 4** (hits / RMSE): Bundegi 9.2 → 8.6 / 2.39 → 2.55, Tantabiddi 23.2 → 22.6 / 2.51 → 2.43, Marina 5.9 → 5.9 / 2.41 → 2.42, gulf entrance 0.6 → 0.6 / 4.26 → 3.97. Neutral to slightly worse.
-- **Decision:** keep both (defaults unchanged). `LUT 0` and `lut0-carry0` at tier 4 are still running.
+- **`LUT 0`, tier 4** (hits / coverage / RMSE): Bundegi 9.2 → 12.2 / 22.0 → 33.7 / 2.39 → 3.23, Tantabiddi 23.2 → 24.1 / 48.9 → 60.2 / 2.51 → 2.60, Marina 5.9 → 5.8 / 37.3 → 38.6 / 2.41 → 2.43, gulf entrance 0.6 → 0.9 / 2.0 → 3.7 / 4.26 → 4.74. Without the LUT, photic gives a depth in more cells and gains a few hits, but its RMSE worsens at three sites. `lut0-carry0` is the same to within 0.2 points and 0.1 m.
+- **Decision:** keep both (defaults unchanged).
 
 ### Physics ratio depth with the profile and SA models (2026-10-14, scratch diagnostics, all cells)
 
@@ -982,6 +983,21 @@ Profiled on a 75-point tier 4 screen case (Tantabiddi, 4 scenes, 9 regions). HEA
   - Tier 3 (mean hits / median RMSE): clear 45.6 / 1.87, 48.4 / 1.78, 48.5 / 1.80; moderate 24.1 / 3.20, 25.3 / 2.34, 25.6 / 2.29; turbid 12.6 / 1.78, 12.5 / 1.34, 12.7 / 1.37.
   - fast3 against fast is neutral (every difference within the noise floor). Against HEAD, tier 3 improves in every water type; tier 4 differs by at most 0.6 points and 0.3 m RMSE at one site (Bundegi), within the noise floor. Kept on.
   - Wall time: tier 3 97 s, tier 4 382 s (sites 106–369 s; HEAD 1232–5242 s each).
+
+### Landsat 8 at Exmouth Gulf (2026-10-15, `sites_l8`, `runs/l8-head`)
+
+Six Landsat 8 OLI L1TP scenes (Collection 1, path 115 row 75, 2018–2021, tides −0.67 to +0.87 m; `tier4_fetch_l8.py`) through the same ACOLITE settings, on ~31 m cells (`tier4_prepare.py acolite_l8`, `sites_l8`; bands 443, 483, 561, 655 nm). The reference is regridded to the 31 m cells, so Sentinel-2's depths (`runs/s2-e551b97`, the same binary; equal to `fast3`) are sampled onto them, nearest cell. Hits % of sounded cells (0–5 m) / coverage / RMSE / bias:
+
+| Site | Sentinel-2 | Landsat 8 |
+|---|---|---|
+| Tantabiddi | 22.4 (28.3) / 46.0 / 2.43 / +0.52 | **40.3 (47.9)** / 64.4 / **1.65** / +0.45 |
+| Bundegi | 9.6 (13.0) / 23.2 / 2.28 / −0.12 | **0.5 (0.7)** / 14.4 / 4.48 / −3.52 |
+| Marina | 5.5 (9.0) / 38.6 / 2.51 / −2.11 | 4.1 (6.6) / 44.8 / 3.03 / −2.45 |
+| Gulf entrance | 0.5 (9.0) / 2.2 / 4.42 / −1.71 | 1.4 (26.1) / 5.3 / 2.68 / −1.45 |
+
+- Landsat is much better in Tantabiddi's clear water and fails at Bundegi, where every leave-one-scene-out run stays 3–4 m too shallow. The 2018-08-22 scene is turbid there (red Rrs over 8–15 m 5.5 × 10⁻³, against 2.1–3.1 in the others); without it photic withholds nearly every cell (coverage 3.5%, bias +0.45 m). So Bundegi on Landsat fails beyond one scene; candidates are OLI's lower signal-to-noise ratio in the turbid inner gulf and the scene dates.
+- The Landsat scenes are from different dates to the Sentinel-2 ones, so sensor and scene conditions are confounded. A pair of same-day scenes (L8 and S2 within an hour) would separate them.
+- Tier 4 (`PHOTIC_TIER4_SITES=sites_l8`) runs in about 5 minutes.
 
 ### Phase B order (from Phase A)
 
