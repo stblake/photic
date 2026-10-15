@@ -273,26 +273,49 @@ def write_inputs(rundir, water, n, H, bottom, tables, luts, noise, prior, contro
     else:
         est = None
     lines += scenes + [model, "EXIT"]
-    open(os.path.join(rundir, "run.bam"), "w").write("\n".join(lines) + "\n")
+    bam = "\n".join(lines) + "\n"
+    open(os.path.join(rundir, "run.bam"), "w").write(bam)
+    # Deep-water Rrs as SCENE RINF (PHOTIC_RINF; unset: none): the exact no-bottom OSOAA Rrs
+    # ("lut", not for the controls) or the image's own deep pixels ("image"); see rinf.py.
+    import rinf
+    m = rinf.mode()
+    if m == "lut" and not control:
+        bam = rinf.add_rinf(bam, {"s%d" % (k + 1): [float(luts[k]["%g" % lam]["R0"][-1]) for lam in BANDS]
+                                  for k in range(n)})
+    elif m == "image":
+        bam = rinf.add_rinf(bam, rinf.image_rinf_for_dir(rundir, bam))
+    if m:
+        open(os.path.join(rundir, "run.bam"), "w").write(bam)
     return est
 
 
-def run_photic(photic, rundir, water, n, H, bottom, tables, luts, noise, prior, control):
+def prepare_photic(rundir, water, n, H, bottom, tables, luts, noise, prior, control):
+    """Write one scenario's inputs; returns what scoring needs. Serial: the inputs depend on
+    ALBEDO_BY_BOTTOM, which run() sets per scenario."""
     est = write_inputs(rundir, water, n, H, bottom, tables, luts, noise, prior, control)
+    kmin_true = min(min(photic_side_K(water, k, lam, tables) for lam in BANDS) for k in range(n))
+    alb_true = np.vectorize(albedo_for)(bottom).astype(float)
+    return dict(rundir=rundir, H=H, est=est, prior=prior, kmin_true=kmin_true, alb_true=alb_true)
+
+
+def execute_photic(photic, rundir):
+    """Run photic in rundir; returns the elapsed time (s). Safe to run in parallel."""
     t0 = time.time()
     with open(os.path.join(rundir, "photic.log"), "w") as log:
         subprocess.run([photic, "run.bam"], cwd=rundir, stdin=subprocess.DEVNULL, stdout=log,
                        stderr=subprocess.STDOUT, check=False)
-    elapsed = time.time() - t0
+    return time.time() - t0
+
+
+def score_photic(case, elapsed):
+    rundir, H, est = case["rundir"], case["H"], case["est"]
     Hm = -read_nc(os.path.join(rundir, "modelled_H.nc"))
     alb = read_nc(os.path.join(rundir, "modelled_albedo.nc"))
     kmin = read_nc(os.path.join(rundir, "modelled_min_K.nc"))
-    kmin_true = min(min(photic_side_K(water, k, lam, tables) for lam in BANDS) for k in range(n))
-    alb_true = np.vectorize(albedo_for)(bottom).astype(float)
-    out = score(H, Hm, alb, kmin, kmin_true, elapsed, albedo_true=alb_true)
-    if prior:
+    out = score(H, Hm, alb, kmin, case["kmin_true"], elapsed, albedo_true=case["alb_true"])
+    if case["prior"]:
         # The prior on its own: photic only adds skill if it beats this.
-        p = score(H, -est, np.full(H.shape, np.nan), np.full(H.shape, np.nan), kmin_true, 0.0)
+        p = score(H, -est, np.full(H.shape, np.nan), np.full(H.shape, np.nan), case["kmin_true"], 0.0)
         out["prior_only"] = {k: p[k] for k in ("bias", "rmse", "mae", "frac_within_tol")}
         if out.get("rmse"):
             out["rmse_skill_vs_prior"] = 1.0 - out["rmse"]/p["rmse"]
@@ -322,7 +345,7 @@ def run(driver, photic, data, workroot, quick=False, jobs=12, photic_work=None, 
         os.makedirs(os.path.join(osoaa["db"], d), exist_ok=True)
     tables = t2.photic_tables(driver, BANDS)
     H, bottom = truth()
-    results = {}
+    cases = {}
     wanted = lambda name: only is None or only in name
     for water in sel["water"]:
         n_max = max(sel["n_scenes"] + ([] if quick else REALISTIC["n_scenes"]))
@@ -332,12 +355,12 @@ def run(driver, photic, data, workroot, quick=False, jobs=12, photic_work=None, 
                 for prior in sel["prior"]:
                     name = "%s_n%d_noise%g%s" % (water, n, noise, "_prior" if prior else "")
                     if wanted(name):
-                        results[name] = run_photic(photic, os.path.join(photic_work, name), water, n,
-                                                   H, bottom, tables, luts, noise, prior, control=False)
+                        cases[name] = prepare_photic(os.path.join(photic_work, name), water, n, H, bottom,
+                                                     tables, luts, noise, prior, control=False)
         name = "%s_n%d_control" % (water, 2)
         if wanted(name):
-            results[name] = run_photic(photic, os.path.join(photic_work, name), water, 2, H, bottom,
-                                       tables, None, 0.0, False, control=True)
+            cases[name] = prepare_photic(os.path.join(photic_work, name), water, 2, H, bottom, tables,
+                                         None, 0.0, False, control=True)
         if quick:
             continue
         for n in REALISTIC["n_scenes"]:
@@ -346,10 +369,14 @@ def run(driver, photic, data, workroot, quick=False, jobs=12, photic_work=None, 
                 if wanted(name):
                     ALBEDO_BY_BOTTOM = REALISTIC_ALBEDO
                     try:
-                        results[name] = run_photic(photic, os.path.join(photic_work, name), water, n,
-                                                   H, bottom, tables, luts, noise, False, control=False)
+                        cases[name] = prepare_photic(os.path.join(photic_work, name), water, n, H, bottom,
+                                                     tables, luts, noise, False, control=False)
                     finally:
                         ALBEDO_BY_BOTTOM = None
+    # photic is single-threaded: run the scenarios in parallel, then score them.
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        elapsed = dict(zip(cases, pool.map(lambda c: execute_photic(photic, c["rundir"]), cases.values())))
+    results = {name: score_photic(case, elapsed[name]) for name, case in cases.items()}
     if only is None:
         results["lut_check"] = lut_check(tables, osoaa, workroot, sel["water"][0])
     return dict(grid="%dx%d" % (NROWS, NCOLS), depth_range=[float(H.min()), float(H.max())],

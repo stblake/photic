@@ -822,6 +822,159 @@ Twelve of the 16 scenes are usable (the four high-sun scenes are masked by ACOLI
   - de-weight the spectra for correlated model error (an effective number of independent residuals) so that a prior can count;
   - a prior that transfers between sites.
 
+### LM follow-ups: LUT and carry-over, seeding with RINF, tier 4 noise (2026-10-14)
+
+Back on the semi-analytical model; the profile model is parked on branch `profile-model`. Of the LM follow-ups:
+- **Done:** the Jacobian σ (B18) and the prior residual (B17).
+- **This entry:** the other three.
+
+**Tooling.**
+- `rinf.py` estimates each scene's deep-water Rrs from the image. It ranks cells by red smoothed over 7 × 7, keeps the darkest 20%, then the darkest 15% of those by green, and takes the median spectrum (the rule found in Phase F; raw single pixels select noise). For tier 3 it can instead give the exact OSOAA no-bottom Rrs at 32 m. It estimates the noise as 1.4826 × MAD of the same cells.
+- Benchmark: `PHOTIC_RINF=image|lut`, `PHOTIC_RSIGMA=image`; unset, the runs are as before.
+- `ab.py`: a `^image`, `^lut` or `^rsigma` suffix, combined with `+`.
+- `samodel.c`:
+  - `CARRY_OVER` (default 1) switches off the start from the previous pixel's water;
+  - with `LUT 0`, `best_lut_spectral_match` and `continuity_threshold` were read uninitialised, and are now set outside the `#if`.
+  - The default build is unchanged (`make test` outputs byte-identical to d9d14d6).
+
+**Seeding with RINF** (`SEED_MODE`, active only with RINF), screen against HEAD on the training split (seed 1):
+
+| Variant | Tier 3 net, RMSE | Tier 4 net, RMSE |
+|---|---|---|
+| mode 1 (H0 added to the grid), image RINF | +2.0, −31% (unclear) | 0.0, 0% (identical) |
+| mode 1, exact tier 3 RINF | +2.0, −12% | 0.0, 0% |
+| mode 2 (grid around H0), image | +4.7, +52% (0–2 m 3.8 → 6.7 m) | −1.3, −3% |
+| mode 2, exact | 0.0, +46% | −1.3, −3% |
+
+- At tier 4, H0 never ranks among the two refined depths in mode 1 (the misfit is nearly flat in depth there).
+- In mode 2, H0 worsens tier 3's shallow depths. The prototype's gain for mode 2 (above) does not carry over to photic's own search.
+- **Decision:** the benchmark does not pass RINF. `SEED_MODE` stays 1, which is inert without RINF.
+
+**Tier 4 noise as RSIGMA** (`^rsigma`): per scene and band, 1–8 × 10⁻⁴ in Rrs. Tier 4 only, against HEAD:
+- **Training split, seed 1:** net **+8.0** [+0.7, +15.3]; hits 9 → 7%, misses 21 → 12%, coverage 30 → 19%; RMSE +17% (unclear).
+- **Training split, seed 2:** net **+8.7** [+2.7, +14.7]; hits 9 → 9%, misses 19 → 11%; RMSE −4% (unclear).
+- The noise makes the optically deep test and the weights realistic, so photic withholds wrong depths while keeping its right ones.
+- **Full tier 4 benchmark (`runs/rsigma-image`, all cells) rejects it.** Hits % of sounded cells / coverage / RMSE, HEAD → RSIGMA:
+  - Bundegi 9.2 → 8.0 / 22.0 → 17.2 / 2.39 → 2.31 m.
+  - Tantabiddi 23.2 → 12.0 / 48.9 → 20.8 / 2.51 → 2.26 m.
+  - Marina 5.9 → 5.7 / 37.3 → 24.9 / 2.41 → 1.92 m.
+  - Gulf entrance 0.6 → 0.4 / 2.0 → 1.3 / 4.26 → 1.98 m.
+  - Within tolerance of covered cells rises (Tantabiddi 47.5 → 57.8%), but only through abstention: every site loses hits, Tantabiddi half of them. That fails the acceptance rule, so the tier 4 input is unchanged.
+  - The screen's net score counts a withheld miss as a gain equal to a kept hit, which over-rewards abstaining. It disagrees with the full benchmark here.
+
+**LUT and carry-over** need the full benchmark (they act between neighbouring cells, which `ab.py` does not model):
+- **`LUT 0`, tier 3** (no-prior scenarios, mean hits / median RMSE): clear 45.6 / 1.87 → 44.8 / 2.02, moderate 24.1 / 3.20 → 22.8 / 3.58, turbid 12.6 / 1.78 → 12.1 / 1.88. Worse in every water type, and 2.9× slower (12958 s against 4417 s).
+- **`CARRY_OVER 0`, tier 4** (hits / RMSE): Bundegi 9.2 → 8.6 / 2.39 → 2.55, Tantabiddi 23.2 → 22.6 / 2.51 → 2.43, Marina 5.9 → 5.9 / 2.41 → 2.42, gulf entrance 0.6 → 0.6 / 4.26 → 3.97. Neutral to slightly worse.
+- **Decision:** keep both (defaults unchanged). `LUT 0` and `lut0-carry0` at tier 4 are still running.
+
+### Physics ratio depth with the profile and SA models (2026-10-14, scratch diagnostics, all cells)
+
+The bottom contrast D_b = rrs_b − rrs∞_b (rrs∞ from rinf.py's deep cells, which also removes a flat atmospheric offset) gives, for 560/665 nm, H = [ln(D_560/D_665) − ln(ρ_560/ρ_665)]/(M Δa_w), with no fitting and no soundings. A cell is used where D > 3σ in both bands in at least half the scenes, the scenes agree (spread < 0.5 + 0.1H), and H < 4 m. Otherwise the model's depth is kept.
+
+**Tier 4 hits (% of all sounded cells), all / 0–5 m:**
+
+| Site | Profile | Profile + ratio | SA (HEAD) | SA + ratio | Ratio used |
+|---|---|---|---|---|---|
+| Bundegi | 21.6 / 29.9 | 20.8 / 28.8 | 9.2 / 12.3 | **17.9 / 24.4** | 34% |
+| Tantabiddi | 54.3 / 70.7 | **65.9 / 86.1** | 23.2 / 29.0 | **63.4 / 82.1** | 70% |
+| Marina | 20.9 / 33.0 | 14.2 / 22.2 | 5.9 / 9.4 | **9.2 / 14.7** | 21% |
+| Gulf entrance | 1.5 / 33.0 | 0.9 / 20.2 | 0.6 / 13.3 | 0.7 / 16.0 | 2% |
+
+- The ratio alone: Tantabiddi 0–2 / 2–5 m hits 86 / 82% of all cells; Bundegi 36 / 22%; Marina 32 / 0.4% (2–5 m biased −2 m: darker, greener bottoms than sand's shape ratio).
+- **Its reach is the red's: about 5 m.** At 5–10 m it gives a depth on 4–31% of cells, all biased shallow by 3–7 m. It does not break the profile model's ceiling.
+- **SA + ratio gains at every site; profile + ratio only at Tantabiddi** (it loses 6.7 points at Marina and 0.6 at the gulf entrance).
+- **Ratio depth as an attenuation calibration fails.** The bright envelope of ln D_443…560 against ratio depth gives two-way K that is noisy and often negative (0–5 m of depth range is too short, and the depth comes from D_560 itself).
+
+**All ratios and all scenes jointly** (`multiratio.py`, `jointfit.py` in the scratchpad): weighted least squares per pixel of ln D_sb = intercepts − M_s κ_sb (H + t_s), with κ from QAA on rrs∞ or pure water only:
+- **spectral** (per-scene intercept, bottom class shape): worse than the red/green ratio alone (Tantabiddi 50.5% against 61.4%, Marina 1.8%). Blue/green bands attenuate almost equally here: their two-way Δκ is 0.02–0.09 m⁻¹ from the soundings, and QAA's predicted Δκ has the wrong sign in half the scenes. Bottom colour uncertainty of 0.1 in ln ratio is then 1–5 m of depth, so blue/green ratios mostly measure bottom colour.
+- **angular (B13), with or without tides; two-way (band and scene intercepts, no bottom shape):** no depth information. Hits ≤ 9%, and median depth does not increase with sounded depth (except angular with κ shared across scenes, which orders depth at Bundegi and Marina but 3–5× too deep). The scenes' sun angles are 25–36° and view angles 6–7°, so M changes by about 3% between scenes. With tides of ±0.7 m, the geometric signal is about 0.2–0.9 in ln at 10 m, below the scene-to-scene radiometric and water differences (0.2–0.9 in ln, as in the tide regression above).
+- **common** (one brightness, shape, spectral + angular + tide): Tantabiddi 0–2 m 85% but 2–5 m 39%; worse overall.
+
+**Conclusion.**
+- The physics red/green ratio is a strong, sounding-free shallow estimator (≤ 4 m) wherever the bottom is bright. It is worth using as a gate or prior in the SA model.
+- On these scenes no combination of ratios, angles or tides carries depth information beyond the red's reach. The blue/green attenuation difference is too small for the bottom colour uncertainty, and the multi-scene geometry is too similar.
+- **Next:** feed the gated ratio depth into `Lee_Semi_Analytical` as a prior (B17 prior row, σ from the scene spread), and test it on the full benchmark.
+
+**Consistency between the ratios** (`consist.py`). With one depth, every band pair must give the same H. Fitting ln(D_i/D_j) = c + k·(water column) to the soundings per scene (binned medians; 0.5–4 m with red, 0.5–10 m without):
+
+| Pair | Slope k, soundings | Predicted: QAA / pure water | Intercept c, soundings (sand table) | Depth scatter at the fitted line |
+|---|---|---|---|---|
+| 560/665 | 0.10–0.71 (Tantabiddi 0.45–0.56) | 0.38–0.61 / 0.79–0.83 | −0.38 to +0.63 (−0.08) | 0.3–1.0 m |
+| 492/560 | −0.13 to +0.10 | −0.05 to +0.10 / 0.11–0.12 | −0.27 to −1.34 (−0.14) | 0.8–43 m (Tantabiddi 2.3–3.4) |
+| 443/560 | −0.27 to +0.16 | −0.18 to +0.05 / 0.13–0.14 | −0.74 to −2.54 (−0.30) | 1.4–16 m (Tantabiddi 3.6–6.4) |
+
+- **They do not agree, so the ratio model is wrong in three places:**
+  - **The red/green slope is 30–45% below pure water's** at Tantabiddi (0.45–0.56 against 0.79–0.83). It gave good shallow depths only because the intercept error offsets the slope error near 2 m; by 4 m the physics line reads about 3.2 m.
+  - **The intercepts are far from the sand table**, worst in the blue (−0.7 to −2.5 against −0.3). Part of this is the model itself: D_i = (ρ_i/π) e^(−K_B H) − rrs∞_i e^(−K_C H), so brightness cancels only where rrs∞ ≪ ρ/π. That fails in the blue and over dark bottoms.
+  - **The blue/green slope is near zero and changes sign between scenes and sites:** in gulf water κ_443 ≈ κ_560.
+- **Even with slope and intercept fitted to the soundings, one pixel's blue/green depth scatters 2–6 m at Tantabiddi** (more elsewhere). Blue/green carries little depth information here, because bottom colour varies more than the depth signal.
+- **Next:** a sounding-free calibration from the condition itself. Over shallow pixels, the regression of y_bg on y_gr gives k_bg/k_gr and the intercepts. It still needs the red/green slope as an anchor, which the soundings put well below pure water's.
+
+**Consistency as a constraint in the fit** (`selfcal.py`, `selfcal2.py`; sounding-free). All pixels of a site are fitted jointly:
+
+ln D_spb = a_sp + β_sb − K_sb (H_p + t_s), with D > 3σ, weights (D/σ)² capped at 400 (σ_lnD ≥ 0.05).
+
+- **H_p:** one per pixel, shared by every band and scene. This is the consistency constraint.
+- **K_sb (attenuation) and β_sb (bottom colour and reference):** per scene and band, shared by all pixels. These are the terms that made the pairs disagree; here they are fitted.
+- **a_sp:** brightness per pixel and scene, so only band ratios matter.
+
+Alternating weighted least squares, 60–80 iterations, a few seconds per site. Gauge (only differences between bands are identified):
+- K_560 = β_560 = 0;
+- scale: the mean over scenes of K_665/A_s = 1, with A_s the red/green attenuation difference, M_s(κ_665 − κ_560), from QAA on rrs∞ ("water" uses a_w only);
+- offset: the mean β_665 equals sand's red/green colour.
+
+Bottom constraints:
+- **bright:** a_sp = a_p + g_s, the same bottom brightness in every scene up to a per-scene gain;
+- **classes:** three bottom colours shared by all pixels, with each pixel assigned to the best one.
+
+**Tier 4 hits (% of all cells), all / 0–5 / 5–10 m:**
+
+| Site | SA (HEAD) | Profile | H only, QAA anchor | H only, water anchor | + bright | + classes |
+|---|---|---|---|---|---|---|
+| Bundegi | 9.2 | 21.6 | **44.1** / 61 / 2.8 | 16.9 | 36.2 | 42.8 |
+| Tantabiddi | 23.2 | **54.3** | 36.6 / 46 / 11.8 | 43.0 | 36.2 | 36.6 |
+| Marina | 5.9 | 20.9 | 21.6 / 34 / 2.0 | 10.7 | **29.0** / 37 / 19.2 | 21.6 |
+| Gulf entrance | 0.6 | 1.5 | 2.9 / 38 / 12.7 | 0.7 | 1.5 | 3.5 |
+
+- **With the QAA anchor, the H-only fit beats the SA model at every site** (by 9–35 points). It beats the profile model everywhere except Tantabiddi (−17.7: its 0–2 m cells are read too deep, 17.5% hits against 88% with the water anchor).
+- The fitted K_443 and K_492 are below K_560 in every Tantabiddi scene (clear water). At Marina and the gulf entrance they vary in sign between scenes.
+- **Brightness shared across scenes:** Marina +7.4 (5–10 m 2 → 19%, over 10 m 0 → 9%), but Bundegi −7.9 and the gulf entrance −1.4. Scene gains do not hold everywhere.
+- **Shared bottom classes:** no change, because almost every pixel stays in the sand class.
+- **The anchor sets the depth scale.** The red/green attenuation difference from pure water compresses depths (good at 0–2 m, poor beyond). QAA's is about 40% smaller, which matches the soundings' slope (0.45–0.56 at Tantabiddi). The anchor was chosen after seeing these results, so treat it as tuned on the benchmark sites.
+- **Depth beyond about 5 m remains weak** (5–10 m hits ≤ 13% except Marina with brightness shared), since the information there is only blue/green.
+
+### Ratio consistency in the fit (2026-10-15, `RATIO_CONSISTENCY`, `PROFILE_RATIO`, off)
+
+The consistency condition (one H for every band ratio) inside the optimisation instead of after it. For every pair of bands i < j of a scene, a residual on the log ratio of the bottom contrasts D_b = Rrs_b − Rrs_deep,b, modelled against measured, [Δ ln(D_i/D_j)]/σ_ln, in chi units, with σ_ln² = (s_i/D_i)² + (s_j/D_j)² (s: noise and the 3% model error). In `Lee_Semi_Analytical` the water is shared by the window's regions, so the rows tie H and the attenuation differences K_i − K_j together in the same fit.
+- **Mode 1 (Rrs_deep from the fitted water) fails:** the measured contrasts then move with the fit, and a water that puts the pixel at its deep Rrs zeroes every ratio row. Screen (test split): tier 3 0–2 m RMSE 0.30 → 5.91 m.
+- **Mode 2 (Rrs_deep = SCENE RINF from the image, `rinf.py`)**:
+  - synthetic regression test: RMSE 0.18 → 0.11 m, max 1.10 → 0.49 m;
+  - screen against the same RINF without the rows: train +7.0 points, ΔRMSE −0.43 m (significant); test −3.3 points, +0.18 m (unclear);
+  - weight 0.5 or RATIO_SIGMA_LN 0.1: neither consistent on both splits;
+  - full tier 3 (mean hits / median RMSE), RINF image → + rows: clear 45.7 / 1.83 → 47.2 / 2.20, moderate 24.9 / 2.97 → 26.0 / 2.11, turbid 12.7 / 1.26 → 12.7 / 1.60. Mixed, within the noise floor below. Tier 4 is still running.
+- **Profile model (`PROFILE_RATIO`, branch `profile-ratio`)**: the water is fixed (QAA), so the rows tie only H and the bottom. Full benchmark against `paper-default`: Marina 20.9 → 24.7 hits, RMSE 3.01 → 2.75 m; Tantabiddi 54.3 → 47.8; RMSE worse at Bundegi (1.68 → 2.07) and the gulf entrance (3.85 → 4.30); tier 3 clear 31.4 → 29.9, turbid 10.1 → 11.9. **Fails the acceptance rule.** With κ fixed, the rows push depths along the forward model's ratio error (the red/green slope 30–45% too steep, above).
+
+### Speed (2026-10-15)
+
+Profiled on a 75-point tier 4 screen case (Tantabiddi, 4 scenes, 9 regions). HEAD: 30 s; nearly all of it in the LM's finite-difference Jacobian (the forward model), JᵀJ and the Cholesky solve.
+
+| Step | Time | Numbers |
+|---|---|---|
+| HEAD | 30 s | |
+| Water optics (a, bb, u, K, rrs_dp, M) cached per scene and band (`iop_cache`); Y a function of P, G, X alone | 10.0 s | change once (round-off) |
+| JᵀJ and J'r from each row's non-zeros | 6.2 s | identical |
+| Cholesky over each row's non-zeros | 4.5 s | identical |
+| A water parameter's Jacobian column re-evaluates only its scene | 3.4 s | identical |
+| Closed-form Jacobian (`ANALYTIC_JACOBIAN`): depth, cover, brightness, ln P, ln G, ln X (Y by implicit differentiation of its fixed point), glint | | change (round-off) |
+| Schur complement onto the water block for the LM steps (`SCHUR_SOLVE`) | 1.8 s | change (round-off) |
+
+- **Y:** `samodel_water_Y` started its fixed-point iteration from the previous call's Y, so Y depended on the order of calls by up to its 1e-10 tolerance; it now starts from Y_START = 1.
+- **Noise floor:** perturbations at round-off level move about a third of the cells with depths by more than 0.1 m, and a fifth by more than 1 m (different local minima). The pure-Y change alone, full benchmark: tier 4 Bundegi 9.2 → 8.6 hits, RMSE 2.39 → 2.74 m, Tantabiddi 23.2 → 23.5, Marina 5.9 → 5.9, gulf entrance 0.6 → 0.5; tier 3 clear 45.6 → 48.4, moderate RMSE 3.20 → 2.34 m. Differences of about ±0.5 points or ±0.3 m RMSE at one tier 4 site are within noise.
+- **Closed-form Jacobian:** against forward differences, mean relative difference 1e-6 (water) and 4e-4 (regions). The large differences are cover weights with near-zero total cover, where the derivative is steep and the forward difference overshoots it. Synthetic regression test: RMSE 0.25 → 0.089 m, max 1.26 → 0.20 m. It falls back to forward differences with the ratio rows, interreflection or Y_MODEL ≠ 2.
+- **Schur solve:** agrees with Cholesky to 5e-13 (relative). Tracking the factor's structure inside the Cholesky instead (byte-identical) was slower than the row-sparse Cholesky.
+- **Harness:** tier 3's scenarios and tier 4's sites now run in parallel (photic is single-threaded). With the steps to the per-scene water columns: tier 3 4417 → 149 s, tier 4 13 500 s (sites in series) → 596 s.
+- The full benchmark of the closed-form Jacobian and Schur solve (`fast3`) is running.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

@@ -52,7 +52,7 @@ def published_on_grid(path, lon, lat):
 def run(photic, data, workroot, only=None):
     sites_dir = os.path.join(data, "derived", "tier4", os.environ.get("PHOTIC_TIER4_SITES", "sites"))
     published = glob.glob(os.path.join(data, "raw", "published", "exmouth_gulf", "*.tif"))
-    results = {}
+    cases = {}
     for site_dir in sorted(glob.glob(os.path.join(sites_dir, "*"))):
         if not os.path.isdir(site_dir):
             continue
@@ -62,16 +62,35 @@ def run(photic, data, workroot, only=None):
         rundir = os.path.join(workroot, site)
         shutil.rmtree(rundir, ignore_errors=True)
         os.makedirs(rundir)
-        for f in glob.glob(os.path.join(site_dir, "*.asc")) + [os.path.join(site_dir, "run.bam")]:
+        for f in glob.glob(os.path.join(site_dir, "*.asc")):
             os.symlink(f, os.path.join(rundir, os.path.basename(f)))
+        bam = open(os.path.join(site_dir, "run.bam")).read()
+        import rinf
+        if rinf.mode():
+            # Deep-water Rrs as SCENE RINF, from each scene's own deep pixels (PHOTIC_RINF; rinf.py).
+            bam = rinf.add_rinf(bam, rinf.image_rinf_for_dir(site_dir, bam))
+        if rinf.rsigma_mode():
+            # Noise per band as SCENE RSIGMA, from the same deep pixels (PHOTIC_RSIGMA; rinf.py).
+            bam = rinf.add_rsigma(bam, rinf.image_rinf_for_dir(site_dir, bam, rinf.image_rsigma))
+        open(os.path.join(rundir, "run.bam"), "w").write(bam)
+        cases[site] = (site_dir, rundir)
+
+    def execute(rundir):
         t0 = time.time()
         with open(os.path.join(rundir, "photic.log"), "w") as log:
             subprocess.run([photic, "run.bam"], cwd=rundir, stdin=subprocess.DEVNULL, stdout=log,
                            stderr=subprocess.STDOUT, check=False)
-        elapsed = time.time() - t0
+        return time.time() - t0
+
+    # photic is single-threaded: run the sites in parallel, then score them.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=max(len(cases), 1)) as pool:
+        elapsed = dict(zip(cases, pool.map(lambda c: execute(c[1]), cases.values())))
+    results = {}
+    for site, (site_dir, rundir) in cases.items():
         ref = np.load(os.path.join(site_dir, "reference.npz"))
         H = -tier3_scenes.read_nc(os.path.join(rundir, "modelled_H.nc"))
-        res = dict(seconds=elapsed, photic=metrics(ref["depth"], H))
+        res = dict(seconds=elapsed[site], photic=metrics(ref["depth"], H))
         if published:
             P = published_on_grid(published[0], ref["lon"], ref["lat"])
             res["published_photic"] = metrics(ref["depth"], P)

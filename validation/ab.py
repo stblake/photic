@@ -47,6 +47,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -88,14 +89,19 @@ def model_sources():
 
 
 def parse_variant(spec):
-    """ref[:flags][%sites][#scenes][@start] -> (build spec, sites set or None, scenes or None,
-    start or None)."""
+    """ref[:flags][%sites][#scenes][@start][^rinf] -> (build spec, sites set or None, scenes or
+    None, start or None, rinf or None). ^image or ^lut passes each scene's deep-water Rrs as SCENE
+    RINF (rinf.py), which seeds the depth search with H0; ^rsigma the tier 4 noise as RSIGMA from
+    the same deep pixels (tier 3 already passes its simulated noise); combine with +."""
+    spec, _, rinf_mode = spec.partition("^")
+    if rinf_mode and not set(rinf_mode.split("+")) <= {"image", "lut", "rsigma"}:
+        raise SystemExit("unknown ^%s (image, lut or rsigma, combined with +)" % rinf_mode)
     start = None
     if spec.endswith(("@truth", "@prior", "@emp")):
         spec, _, start = spec.rpartition("@")
     spec, _, scenes = spec.partition("#")
     spec, _, sites = spec.partition("%")
-    return spec, sites or None, scenes or None, start
+    return spec, sites or None, scenes or None, start, rinf_mode or None
 
 
 def scene_names(case, scenes):
@@ -242,7 +248,7 @@ def prior_depth(case, H, start):
     return H*(1.0 + np.random.default_rng(12345).normal(0.0, 0.2, H.shape))
 
 
-def run_case(photic, case, pts, rundir, fresh=False, start=None, scenes=None):
+def run_case(photic, case, pts, rundir, fresh=False, start=None, scenes=None, rinf_mode=None):
     done = os.path.join(rundir, "done.json")
     if not fresh and os.path.exists(done):
         # The same build, sample and case were run already (rundir encodes all three).
@@ -285,7 +291,18 @@ def run_case(photic, case, pts, rundir, fresh=False, start=None, scenes=None):
             lines += [line + " POINTS ab_points"]
         elif line.strip():
             lines.append(line)
-    open(os.path.join(rundir, "run.bam"), "w").write("\n".join(lines) + "\n")
+    bam = "\n".join(lines) + "\n"
+    if rinf_mode:
+        import rinf
+        parts = set(rinf_mode.split("+"))
+        if "lut" in parts and case["tier"] == 3:
+            water, n = re.match(r"t3_([a-z]+)_n(\d+)_", case["name"]).groups()
+            bam = rinf.add_rinf(bam, rinf.lut_rinf(water, int(n), DATA))
+        elif parts & {"lut", "image"}:
+            bam = rinf.add_rinf(bam, rinf.image_rinf_for_dir(case["dir"]))
+        if "rsigma" in parts and case["tier"] == 4:
+            bam = rinf.add_rsigma(bam, rinf.image_rinf_for_dir(case["dir"], fn=rinf.image_rsigma))
+    open(os.path.join(rundir, "run.bam"), "w").write(bam)
     t0 = time.time()
     with open(os.path.join(rundir, "photic.log"), "w") as log:
         subprocess.run([photic, "run.bam"], cwd=rundir, stdin=subprocess.DEVNULL, stdout=log,
@@ -453,12 +470,12 @@ def main():
 
     variants = {}
     for spec in (args.A, args.B):
-        bspec, sites_set, scenes, start = parse_variant(spec)
+        bspec, sites_set, scenes, start, rinf_mode = parse_variant(spec)
         key, photic = build(bspec)
-        # Site sets, scene selections and starts run the same build; their runs are kept apart.
+        # Site sets, scene selections, starts and RINF run the same build; their runs are kept apart.
         key += ("%" + sites_set if sites_set else "") + ("#" + scenes.replace(",", "+") if scenes else "") + \
-            ("@" + start if start else "")
-        variants[spec] = (key, photic, scenes, start, sites_set)
+            ("@" + start if start else "") + ("^" + rinf_mode if rinf_mode else "")
+        variants[spec] = (key, photic, scenes, start, sites_set, rinf_mode)
     key_a, photic_a = variants[args.A][:2]
     key_b, photic_b = variants[args.B][:2]
     opts = {v[0]: v[2:] for v in variants.values()}
@@ -466,7 +483,7 @@ def main():
     cases = tier3_cases(split["water"]) + tier4_cases(split["sites"], args.sites)
     # A variant's own tier 4 site set (%sites): the same sites and survey, other inputs.
     alt = {}
-    for key, (_, _, sites_set) in opts.items():
+    for key, (_, _, sites_set, _) in opts.items():
         if sites_set:
             for c in tier4_cases(split["sites"], sites_set):
                 alt[(key, c["site"])] = c
@@ -478,7 +495,7 @@ def main():
     with ThreadPoolExecutor(args.jobs) as ex:
         outs = list(ex.map(lambda job: run_case(job[1], case_for(job[0], job[2]), points[job[2]["name"]],
                                                 os.path.join(AB, "runs", job[0], tag, job[2]["name"]),
-                                                args.fresh, opts[job[0]][1], opts[job[0]][0]), jobs))
+                                                args.fresh, opts[job[0]][1], opts[job[0]][0], opts[job[0]][3]), jobs))
     runs = {(v, c["name"]): o for (v, _, c), o in zip(jobs, outs)}
 
     rng = np.random.default_rng(0)
