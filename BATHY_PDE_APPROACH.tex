@@ -1,0 +1,844 @@
+% BATHY_PDE_APPROACH.tex
+%
+% Bathymetry as a coupled radiative transfer inverse problem: rationale, physics and an
+% implementation specification for photic.
+%
+% Build: pdflatex BATHY_PDE_APPROACH.tex (three times, for the cross-references).
+
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\definecolor{dark-blue}{rgb}{0,0,0.45}
+\hypersetup{colorlinks, linkcolor={dark-blue}, citecolor={blue}, urlcolor={blue}}
+
+\numberwithin{equation}{section}
+
+\newcommand{\bxi}{\boldsymbol{\xi}}
+\newcommand{\bx}{\mathbf{x}}
+\newcommand{\rTOA}{\rho^{\mathrm{TOA}}}
+\newcommand{\robs}{\rho^{\mathrm{obs}}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{Bathymetry as a Coupled Radiative Transfer Inverse Problem:\\
+Rationale, Physics and Implementation Specification for \textit{photic}}
+\author{Design specification}
+\date{16 October 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\textit{photic} inverts atmospherically corrected reflectance with Lee's semi-analytical
+model, one pixel neighbourhood at a time. ACOLITE does the atmospheric correction beforehand,
+for each scene separately. This document specifies a replacement for both steps, built in
+stages.
+
+The forward model becomes the radiative transfer equation (RTE), the integro-differential
+transport equation that HydroLight solves. It covers the atmosphere, the sea surface, the water
+column and the bottom, and it is evaluated over each band's spectral response. The RTE is never
+solved inside the fit. Its exact solution is precomputed as a lookup table over a few
+dimensionless variables, using a discrete-ordinate solver written for \textit{photic}. The fit
+interpolates the table, which gives the speed of a table with an interpolation error that is
+measured and kept below the sensor noise. The atmosphere is handled the same way, from the
+6SV-based tables that ACOLITE distributes.
+
+The inversion keeps \textit{photic}'s structure: a bounded Levenberg--Marquardt fit over a pixel
+window and all scenes at once, with depth and bottom shared across scenes and water properties
+per scene. In the later stages each scene's aerosol joins the fitted parameters. Part~I gives
+the rationale and the physics. Part~II is the specification: modules, data formats, commands,
+numerical methods, milestones, tests and acceptance criteria.
+\end{abstract}
+
+\tableofcontents
+
+%============================================================================================
+\part{Rationale and physics}
+
+%--------------------------------------------------------------------------------------------
+\section{Does this already exist?}\label{sec:prior}
+
+We found no published method that does all of the following at once:
+\begin{enumerate}
+\item solves the full RTE, not a parametric approximation, for the coupled
+atmosphere--water--bottom system;
+\item retrieves bottom depth;
+\item inverts several scenes jointly, with depth and bottom shared across them.
+\end{enumerate}
+Each part exists separately.
+
+\begin{itemize}
+\item \textbf{Exact water-column RT.} HydroLight solves the RTE in the water column by invariant
+imbedding, for given inherent optical properties (IOPs), depth and bottom reflectance
+\cite{mobley1994,oceanopticsbook}. OSOAA \cite{chami2015} and CAO-DISORT \cite{jin1994} solve
+the coupled atmosphere--ocean problem. All three are forward models.
+\item \textbf{Coupled atmosphere--ocean inversion.} Joint retrievals of aerosol and water
+properties exist for open and coastal ocean colour. Examples are the multi-angle polarimetric
+retrieval developed for PACE \cite{gao2019} and POLYMER \cite{steinmetz2011}. None models a
+bottom.
+\item \textbf{Bayesian shallow-water inversion.} Thompson et al.\ \cite{thompson2017} solve for
+the most probable depth, seafloor reflectance and water properties. Their atmospheric
+correction is a separate step run beforehand \cite{thompson2018}.
+\item \textbf{Lookup tables of RT solutions.} Spectrum matching against tables of HydroLight
+spectra over discrete water, bottom and depth combinations is established \cite{mobley2005}.
+\item \textbf{Multi-temporal bathymetry.} Published multi-image satellite methods mostly
+composite the images, then fit an empirical or machine-learning model. \textit{photic}'s
+temporal extension \cite{blake2020} is the joint physical case, but it uses Lee's model on
+corrected reflectance.
+\end{itemize}
+
+%--------------------------------------------------------------------------------------------
+\section{Why change the forward model}\label{sec:why}
+
+Validation of \textit{photic} found the following (\code{validation/EXPERIMENTS.md};
+\code{REVIEW.md}, \S2d):
+\begin{enumerate}
+\item \textbf{False depths fit as well as true ones.} With one bottom type selected by fit, deep
+water at the Gulf entrance gets false shallow depths: RMSE 10.8\,m, bias $-6.8$\,m. Their
+misfit is as low as that of the correct solution.
+\item \textbf{Errors the fit cannot see.} The tables were sampled at band centres. Averaged over
+the Sentinel-2 B2 response, pure-water absorption is 32\% higher. In the synthetic tests that
+gives depth errors of $-17\%$ to $+28\%$ at a reduced $\chi \le 0.15$.
+\item \textbf{The correction is fixed before the inversion.} Changing ACOLITE's aerosol
+retrieval (tiled, or with adjacency correction) moves tier 4 by more than the noise floor, in
+opposite directions at different sites. The inversion cannot push back on an aerosol estimate
+that its own fit rejects.
+\item \textbf{Lee's model approximates the RTE.} It is a fit to HydroLight runs. With four
+visible bands, a structural error of a few per cent becomes metres of depth.
+\end{enumerate}
+Joint processing of several scenes holds constraints that per-scene correction throws away.
+The seabed is the same in every scene up to tide, so an aerosol estimate that makes one scene's
+bottom signal consistent with the others is more likely to be right.
+
+%--------------------------------------------------------------------------------------------
+\section{The forward problem}\label{sec:forward}
+
+\subsection{The coupled RTE}
+
+$\bx$ is horizontal position and $z$ height (positive upwards, mean sea surface at $z=0$).
+Scene $t$ has tide $\eta_t$, so its water column is $-D_t < z < 0$ with
+\begin{equation}
+D_t(\bx) = H(\bx) + \eta_t(\bx),
+\end{equation}
+where $H$ is the depth below the common datum (\textit{photic}'s \code{HTIDE} convention). For
+each wavelength $\lambda$ and direction $\bxi$ ($\mu = \bxi\cdot\hat{\mathbf z}$), the radiance
+satisfies
+\begin{equation}\label{eq:rte3d}
+\bxi\cdot\nabla L + c\,L = \int_{S^2}\beta(\bxi'\!\to\bxi)\,L(\bxi')\dd\Omega',
+\end{equation}
+in the atmosphere ($0<z<z_T$) and in the water. $c = a+b$ is the beam attenuation and $\beta$
+the volume scattering function. The boundary conditions are:
+\begin{align}
+&z=z_T,\ \mu<0: && L = F_0\,\delta(\bxi-\bxi_0), \label{eq:bc-toa}\\
+&z=0: && \begin{pmatrix} L^{\uparrow}(0^+)\\ L^{\downarrow}(0^-)\end{pmatrix}
+  = \begin{pmatrix} \mathcal{R}_{aw} & \mathcal{T}_{wa}\\ \mathcal{T}_{aw} & \mathcal{R}_{wa}\end{pmatrix}
+    \begin{pmatrix} L^{\downarrow}(0^+)\\ L^{\uparrow}(0^-)\end{pmatrix}, \label{eq:bc-surf}\\
+&z=-D_t,\ \mu>0: && L = \frac{\rho_b}{\pi}\int_{\mu'<0}|\mu'|\,L(\bxi')\dd\Omega'. \label{eq:bc-bot}
+\end{align}
+The surface operators are Fresnel reflection and transmission, averaged over the Cox--Munk
+distribution of wave slopes \cite{coxmunk1954} for a rough surface. The bottom is Lambertian,
+with $\rho_b(\bx,\lambda) = B(\bx)\,\hat\rho_{k(\bx)}(\lambda)$: one shape $\hat\rho_k$ from the
+bottom library per pixel (\textit{photic}'s single-type rule) and a brightness $B$.
+
+\subsection{Water IOPs}
+
+These are \textit{photic}'s present IOP model, with the scattering coefficient and phase
+function made explicit:
+\begin{align}
+a &= a_w + (a_0 + a_1\ln P)_+\,P + G\,e^{-S_g(\lambda-440)}, \label{eq:iop-a}\\
+b_{bp} &= X\,(440/\lambda)^{Y}, \qquad b_p = b_{bp}/B_p, \qquad b_w = 2\,b_{bw}, \label{eq:iop-b}\\
+\beta &= b_w\,\tilde\beta_w + b_p\,\tilde\beta_{\mathrm{FF}}(\,\cdot\,;B_p). \label{eq:iop-beta}
+\end{align}
+\begin{itemize}
+\item $\tilde\beta_w(\psi) \propto 1 + 0.835\cos^2\psi$ is the pure-water phase function.
+\item $\tilde\beta_{\mathrm{FF}}$ is the Fournier--Forand phase function \cite{fournier1994} with
+backscatter fraction $B_p$, fixed by default at 0.0183, the Petzold average.
+\item The tables $a_w$, $b_{bw}$, $a_0$ and $a_1$ come from \code{model/data}.
+\item $(\cdot)_+$ is the existing clamp at zero.
+\end{itemize}
+
+\subsection{The measurement}
+
+Band $j$ of scene $t$ is the response-weighted average
+\begin{equation}\label{eq:obs}
+R_{rs,j} = \frac{\int S_j(\lambda)\,F_0(\lambda)\,R_{rs}(\lambda)\dd\lambda}{\int S_j(\lambda)\,F_0(\lambda)\dd\lambda}
+\end{equation}
+for water-leaving reflectance (stages M1 and M2). At top of atmosphere (stage M3) the same
+average is applied to $\rTOA$. $S_j$ comes from \code{model/data/srf}; $F_0$ is the
+extraterrestrial solar irradiance (new data file, \S\ref{sec:data}).
+
+\subsection{A hierarchy of approximations}
+
+\begin{description}
+\item[Column (levels 0--1).] The water and bottom are a plane-parallel column at each pixel,
+exact for horizontally uniform water and bottom. The atmosphere is plane-parallel. At level
+1, neighbouring pixels are coupled through the atmospheric adjacency kernel
+\cite{tanre1981,vermote1997}.
+\item[3D (level 2).] Monte Carlo or SHDOM \cite{evans1998}, used only to check the column
+approximation at reef edges. It is never used inside the fit.
+\end{description}
+
+%--------------------------------------------------------------------------------------------
+\section{Lookup tables from the PDE solution}\label{sec:lut}
+
+The RTE is solved offline and stored as a table that the fit interpolates. The table's only
+error is interpolation, which can be measured and reduced. The structural error of Lee's
+fitted model cannot.
+
+\subsection{Why the table is small}
+
+\begin{enumerate}
+\item \textbf{Similarity.} For a homogeneous column, the monochromatic RTE depends on the IOPs and
+depth only through three quantities:
+\begin{equation}\label{eq:similarity}
+\omega = \frac{b}{c}, \qquad \tau = c\,D, \qquad f_w = \frac{b_w}{b}.
+\end{equation}
+$\omega$ is the single-scattering albedo and $\tau$ the optical depth. $f_w$ is the share of
+molecular scattering, which sets the mixed phase function \eqref{eq:iop-beta} for a fixed
+$B_p$. Wavelength is not a dimension: \eqref{eq:iop-a}--\eqref{eq:iop-b} map each wavelength
+to its own $(\omega,\tau,f_w)$. So the same table serves every band and every response
+sub-sample. The interface depends on wavelength only through the refractive index of water,
+which is held at 1.34.
+
+\item \textbf{The bottom in closed form.} For a Lambertian bottom, the remote-sensing reflectance
+just above the surface, in any direction, is exactly
+\begin{equation}\label{eq:bottom-closed}
+R_{rs}(\rho_b) = R_0 + \frac{A\,\rho_b}{1 - C\,\rho_b}.
+\end{equation}
+\begin{itemize}
+\item $R_0$ is the reflectance over a black bottom.
+\item $A = E_{b0}\,L_e$, where $E_{b0}$ is the irradiance reaching a black bottom and $L_e$ the
+radiance leaving the surface per unit irradiance emitted isotropically by the bottom.
+\item $C$ is the fraction of that emitted irradiance which the column and surface return to the
+bottom.
+\end{itemize}
+None of these depends on $\rho_b$. Two solutions with the same operator determine them: one
+over a black bottom, and one with an isotropically emitting bottom and no sky.
+
+\item \textbf{One solve gives every direction.} A discrete-ordinate solution gives the radiance
+in all directions, so view angle and azimuth add storage but no solves.
+\end{enumerate}
+
+\subsection{Illumination}
+
+The table is built for two illuminations of the surface: the direct sun at $\theta_s$, and a
+uniform sky of unit irradiance. A scene band's reflectance is
+\begin{equation}\label{eq:illum}
+R_{rs} = (1-s)\,R_{rs}^{\mathrm{dir}} + s\,R_{rs}^{\mathrm{sky}},
+\end{equation}
+where $s$ is the diffuse fraction of the downwelling irradiance. $s$ comes from the atmosphere
+tables at the scene's aerosol optical depth, or from a Rayleigh-only estimate when none is
+given. The uniform sky is an approximation. Its effect on near-nadir $R_{rs}$ is small and is
+measured in test T6 (\S\ref{sec:tests}).
+
+%--------------------------------------------------------------------------------------------
+\section{The inverse problem}\label{sec:inverse}
+
+\subsection{Unknowns}
+
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+Symbol & Meaning & Shared across scenes? & Stage\\
+\midrule
+$H$ & depth below datum, per region of the window & yes & M1\\
+$k$, $B$ & bottom type (discrete), brightness per region & yes & M1\\
+$\ln P, \ln G, \ln X$ & water IOPs per scene (window-constant) & no & M1\\
+$\Delta_t$ & glint offset per scene (\code{GLINT\_OFFSET}) & no & M1\\
+$\tau_{a,t}$ & aerosol optical depth at 550\,nm per scene & no & M3\\
+$m_t$ & aerosol model per scene (discrete) & no & M3\\
+$\delta\eta_t$ & tide-datum offset per scene & no & M4\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Objective}
+
+For each window (\textit{photic}'s pixel neighbourhood), the fit minimises
+\begin{equation}\label{eq:objective}
+\chi^2 = \sum_{t,j,r}\frac{\big(R_{t,j}^{\mathrm{model}}(\theta) - R_{t,j}^{\mathrm{obs}}\big)_r^2}{\sigma_{t,j}^2}
+ + \sum_i \frac{(\theta_i - \theta_i^{\mathrm{prior}})^2}{\sigma_i^2},
+\end{equation}
+by bounded Levenberg--Marquardt, as \code{samodel\_lm} does now. The prior rows are the existing
+continuity, coherence and depth-prior rows, plus the aerosol prior of stage M3. At stage M3,
+$R$ is the TOA reflectance and the bands include NIR and SWIR.
+
+\subsection{Gradients}
+
+At stages M1--M4 the forward model is local to the window, so the Jacobian follows from the
+chain rule through the table interpolant (\S\ref{sec:jacobian}). No adjoint is needed. The
+adjoint RTE becomes necessary only for the optional global solve (M6), in which the
+atmosphere and adjacency couple all pixels. The design for that is in
+Appendix~\ref{app:adjoint}.
+
+\subsection{Discrete choices}
+
+The bottom type and aerosol model are chosen by block-coordinate descent:
+\begin{enumerate}
+\item fit the continuous parameters for each candidate;
+\item keep the candidate with the lowest $\chi^2$ (\code{SELECT\_BY\_FIT}).
+\end{enumerate}
+The optically deep alternative is the existing test, with $R_0(\tau\to\infty)$ from the
+table.
+
+%============================================================================================
+\part{Implementation specification}
+
+%--------------------------------------------------------------------------------------------
+\section{Scope and milestones}\label{sec:milestones}
+
+Each milestone is a separate branch and change. Its forward model is switchable, and the
+existing model stays the default until the acceptance rule of \code{validation/README.md}
+(tier 3 and tier 4 depth metrics improve, with no regressions) says otherwise.
+
+\begin{longtable}{@{}p{1.1cm}p{5.6cm}p{7.6cm}@{}}
+\toprule
+& Deliverable & Done when\\
+\midrule
+\endhead
+M0 & Band averaging of the existing model (\code{SCENE ... SRF}); spectral data in files. &
+Done on branch \code{data-inputs}; benchmarked; adopted as the acceptance rule decides.\\
+M1 & \code{rtwater.c}: discrete-ordinate solver for the water column. &
+Passes tests T1--T4 (\S\ref{sec:tests}).\\
+M2 & \code{rttable.c}: per-scene tables, interpolation and derivatives. RT forward model in
+\code{samodel.c} behind \code{SET FORWARD RT}; ACOLITE $R_{rs}$ input. &
+T5--T8 pass; \code{make test-rt} passes; tier 2 RT-vs-OSOAA error $<1\%$; tier 3 and 4
+benchmarked against M0.\\
+M3 & \code{atmos.c}: reader for ACOLITE's LUTs; TOA forward model; aerosol per scene in the fit;
+NIR/SWIR bands. &
+T9--T11 pass; tier 4 run from L1 TOA reflectance, compared with ACOLITE input.\\
+M4 & Tide-datum offsets per scene; optically deep test from the table. &
+Tier 4, including Gulf entrance false depths, benchmarked.\\
+M5 & Adjacency (level 1). & Reef-edge 3D check (level 2); tier 4.\\
+M6 & Optional global solve with the adjoint (Appendix~\ref{app:adjoint}). & Research; not
+scheduled.\\
+\bottomrule
+\end{longtable}
+
+%--------------------------------------------------------------------------------------------
+\section{Software architecture}\label{sec:arch}
+
+New modules follow the conventions in \code{CLAUDE.md}: C17, 2-space indentation in new files,
+\code{//} comments in sentence case, British spelling, globals declared in \code{common.h} and
+defined in \code{common.c}. OpenMP is not used.
+
+\begin{longtable}{@{}p{2.6cm}p{11.8cm}@{}}
+\toprule
+File & Responsibility\\
+\midrule
+\endhead
+\code{rtwater.c/.h} & Discrete-ordinate solution of one homogeneous water layer under a Fresnel
+interface, over a black or isotropically emitting Lambertian bottom (\S\ref{sec:solver}). Pure
+numerics, with no \textit{photic} state.\\
+\code{rttable.c/.h} & Table axes, build, cache file I/O, validation against direct solves, and
+interpolation with derivatives (\S\ref{sec:table}).\\
+\code{atmos.c/.h} (M3) & ACOLITE LUT reader; band-averaged path reflectance, transmittances,
+spherical albedo and diffuse fraction as functions of $\tau_a$, with derivatives
+(\S\ref{sec:atmos}).\\
+\code{spectra.c} & Gains the solar irradiance $F_0$ and the band sub-sampling used by
+\eqref{eq:obs}.\\
+\code{samodel.c} & A forward-model switch in \code{samodel\_Rrs} and the Jacobian code
+(\S\ref{sec:samodel}); aerosol parameters (M3).\\
+\code{bam.c} & Commands and \code{SCENE} keywords (\S\ref{sec:commands}).\\
+\code{model/tests/} & \code{rt\_check.c} (T1--T8), and \code{synth\_gen} in RT mode for
+\code{make test-rt}.\\
+\code{validation/} & \code{tier2\_osoaa.py} gains an RT-mode comparison; \code{rt\_table\_check.py}
+compares tables with OSOAA (T4).\\
+\bottomrule
+\end{longtable}
+
+\paragraph{Dependencies.} \code{rtwater.c} needs a real symmetric or nonsymmetric eigensolver for
+matrices up to $64\times64$ and an LU solver. Write them in C (Householder reduction and QR
+iteration, as in DISORT's \code{ASYMTX} \cite{stamnes1988}), or use LAPACK if the build adds
+it. The default is in-tree code, so that the dependencies stay NetCDF and PGPLOT.
+
+%--------------------------------------------------------------------------------------------
+\section{The water-column solver (\code{rtwater.c})}\label{sec:solver}
+
+\subsection{Problem}
+
+The solver handles a homogeneous slab of optical thickness $\tau$ and single-scattering albedo
+$\omega$, with a phase function given by its Legendre moments $\chi_\ell$, $\ell = 0..2N-1$. It
+lies under an interface with relative refractive index $n_w = 1.34$, on a Lambertian bottom.
+It returns, per unit downwelling irradiance just above the surface:
+\begin{itemize}
+\item the remote-sensing reflectance just above the surface at the requested view direction;
+\item the irradiance reaching the bottom;
+\end{itemize}
+for the three source cases: direct sun, uniform sky, and emitting bottom with no sky.
+
+\subsection{Discretisation}
+
+\begin{itemize}
+\item \textbf{Streams.} Use $N$ streams per hemisphere in the water (default $N=24$, at most 32).
+They are split into a refracted cone ($0$ to the critical angle, $\arcsin(1/n_w) \approx
+48.3^\circ$) and a total-internal-reflection region, each with its own double-Gauss quadrature,
+as CAO-DISORT does \cite{jin1994}. This keeps the interface's discontinuity at the critical
+angle on a quadrature boundary.
+\item \textbf{Azimuth.} Expand in Fourier modes $m = 0..M$, with $M = 2N-1$. The Lambertian
+bottom couples only $m=0$. The direct beam drives every mode. The sky drives only $m=0$.
+\item \textbf{Phase function.} The Fournier--Forand moments are computed once per $B_p$ by
+Gauss--Legendre integration of the analytic phase function, with 2000 or more nodes
+concentrated at small angles. Use $\delta$-M truncation \cite{wiscombe1977}, and correct the
+single scattering into the view direction with the full phase function, as in Nakajima and
+Tanaka's TMS method \cite{nakajima1988}. The FF phase function is strongly forward-peaked, so
+without truncation $N$ would have to be in the hundreds.
+\item \textbf{Interface.} At M1--M2 the interface is flat: Fresnel reflection and transmission
+are diagonal in the quadrature. Radiance in the refracted cone is mapped through Snell's law
+with the $n^2$ radiance factor, and total internal reflection applies beyond the critical
+angle. In the stage after M3, Cox--Munk rough-surface operators are integrated numerically per
+Fourier mode, for a wind speed $w$.
+\item \textbf{Solution.} In each mode, a homogeneous layer has the eigen solution of
+\cite{stamnes1988}, with the reduced $N\times N$ eigenproblem. The direct beam adds a
+particular solution. The boundary conditions form a $2N\times2N$ linear system:
+\begin{itemize}
+\item at the top, downward radiance is the transmitted sky plus $\mathcal{R}_{wa}$ applied to
+the upward radiance;
+\item at the bottom, upward radiance is $\rho/\pi$ times the downward irradiance for $m=0$, and
+zero for $m>0$; for the emission case, a unit isotropic source.
+\end{itemize}
+The sources share one factorisation of each mode's system.
+\item \textbf{Output.} Evaluate the upwelling radiance just below the surface at the view
+direction refracted into the water from the discrete-ordinate solution, using the source
+function integration of \cite{stamnes1988}, then transmit it through the interface. Return
+$R_0$, $E_{b0}$, $L_e$ and $C$ for \eqref{eq:bottom-closed}, for the direct and sky sources.
+\end{itemize}
+
+\subsection{API}
+
+\begin{verbatim}
+typedef struct {
+  int n_streams;            // per hemisphere, default 24
+  double n_water;           // 1.34
+  double bp;                // FF backscatter fraction, default 0.0183
+  double wind;              // 0: flat surface (M1-M2)
+} rt_settings;
+
+typedef struct {
+  double R0, A, C;          // R_rs = R0 + A rho/(1 - C rho), per E_d(0+)
+} rt_coeffs;
+
+// Prepare moments, quadrature and interface operators; 0 on success.
+int rt_init(const rt_settings *s, rt_workspace **w);
+// Solve one node (omega, tau, f_w); geometry in air, degrees.
+int rt_solve(rt_workspace *w, double omega, double tau, double f_w,
+             double theta_sun, double theta_view, double dphi,
+             rt_coeffs *direct, rt_coeffs *sky);
+void rt_free(rt_workspace *w);
+\end{verbatim}
+The optically deep limit, $\tau\to\infty$, is solved directly: there is no bottom boundary,
+and the upward radiance is the layer's reflection eigenvector solution. It gives $R_0^\infty$
+with $A = 0$.
+
+\subsection{Cost}
+
+The target is $\le 1$\,ms per node on one core, with $N=24$ and all modes. Most of the cost
+is the eigenproblems and the boundary-condition factorisation. They are shared by all three
+sources and by every view direction.
+
+%--------------------------------------------------------------------------------------------
+\section{Tables (\code{rttable.c})}\label{sec:table}
+
+\subsection{Axes}
+
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+Axis & Range & Transform & Nodes (default)\\
+\midrule
+$\omega$ & 0.02--0.995 & $u = \ln(1-\omega)$ & 32\\
+$\tau$ & $10^{-3}$--$\tau_{\max}$ (40), plus $\infty$ & $v = \ln\tau$ & 48 + deep\\
+$f_w$ & 0--1 & linear & 7\\
+\bottomrule
+\end{tabular}
+\end{center}
+Geometry is fixed per table: one table per scene, for that scene's $(\theta_s, \theta_v,
+\Delta\phi)$ in air, each rounded to $0.1^\circ$ for the cache key. Every node stores $(R_0, A,
+C)$ for the direct and sky sources, 6 doubles, so a table is $32\times49\times7\times6\times8$
+bytes $\approx$ 0.5\,MB.
+
+\subsection{Build}
+
+Build all nodes with \code{rt\_solve}; 11\,000 nodes take about 10--20\,s per scene at the
+target cost. Then validate (below). Tables are cached as NetCDF in \code{\$PHOTIC\_CACHE}
+(default \code{\$HOME/.cache/photic/rt}),
+keyed by a hash of:
+\begin{itemize}
+\item the geometry;
+\item the \code{rt\_settings};
+\item the axes;
+\item the solver version string.
+\end{itemize}
+A scene whose table is in the cache costs nothing.
+
+\paragraph{Cache file format.} The file has the dimensions \code{omega}, \code{tau},
+\code{fw}, \code{source} (2: direct, sky) and \code{coeff} (3: R0, A, C), and the variable
+\code{table(source, coeff, fw, tau, omega)} as a double. It holds the axis variables and the
+following global attributes:
+\begin{itemize}
+\item \code{theta\_sun}, \code{theta\_view} and \code{delta\_phi};
+\item \code{n\_streams}, \code{n\_water}, \code{bp} and \code{wind};
+\item \code{solver\_version};
+\item the validation statistics: \code{max\_rel\_error}, \code{p95\_rel\_error} and
+\code{n\_checks}.
+\end{itemize}
+
+\subsection{Interpolation}\label{sec:interp}
+
+Use tensor-product cubic Hermite interpolation in $(u,v,f_w)$. The node derivatives come from
+centred finite differences of the node values in the transformed coordinates (one-sided at the
+ends). This makes the interpolant $C^1$ and exact for cubics. Interpolate the coefficients
+$R_0$, $A$ and $C$, never $R_{rs}$ itself, so \eqref{eq:bottom-closed} stays exact in $\rho_b$.
+Each evaluation returns the value and its three partial derivatives.
+
+\subsection{Validation of a table}
+
+After a build, solve 200 random off-node points directly, drawn uniformly in the transformed
+coordinates and $\rho_b\in[0,1]$. Compare $R_{rs}$ for $s = 0.2$. Record the maximum and 95th
+percentile relative errors in the file. Then:
+\begin{itemize}
+\item if the 95th percentile exceeds 0.3\% or the maximum exceeds 1\%, double the nodes along
+the axis with the largest error contribution, and rebuild;
+\item after two refinements, print a warning and continue.
+\end{itemize}
+The threshold is about a tenth of tier 4's noise level ($R_{rs}$ noise about $5\times10^{-4}$
+on signals about $5\times10^{-3}$).
+
+\subsection{Derivatives for the fit}\label{sec:jacobian}
+
+For one band sub-sample, with $D = H + \eta_t$,
+\begin{align*}
+\omega &= b/c, & \tau &= cD, & f_w &= b_w/b, & c &= a+b, & b &= b_w + b_p.
+\end{align*}
+The partial derivatives of the similarity variables with respect to the IOPs are
+\begin{align}
+\frac{\partial\omega}{\partial a} &= -\frac{b}{c^2}, & \frac{\partial\omega}{\partial b_p} &= \frac{a}{c^2},
+& \frac{\partial\tau}{\partial a} &= \frac{\partial\tau}{\partial b_p} = D, & \frac{\partial\tau}{\partial H} &= c,\\
+\frac{\partial f_w}{\partial b_p} &= -\frac{b_w}{b^2}, & \frac{\partial f_w}{\partial a} &= 0. \nonumber
+\end{align}
+The IOP derivatives with respect to $\ln P$, $\ln G$, $\ln X$ and $Y$ are those of
+\code{water\_iops}, with $b_p = b_{bp}/B_p$. For the bottom,
+\begin{equation}
+\frac{\partial R_{rs}}{\partial\rho_b} = \frac{A}{(1-C\rho_b)^2}, \qquad
+\frac{\partial\rho_b}{\partial B} = \hat\rho_k.
+\end{equation}
+Band averaging \eqref{eq:obs} is linear, so the Jacobian rows are the same weighted sums of
+the sub-sample derivatives. All derivatives are those of the interpolant, so the
+Gauss--Newton model and the depth $\sigma$ (\code{DEPTH\_SIGMA}) are consistent with the
+misfit the fit evaluates.
+
+%--------------------------------------------------------------------------------------------
+\section{Changes to \code{samodel.c}}\label{sec:samodel}
+
+\begin{enumerate}
+\item \textbf{Forward model switch.} Add a global \code{forward\_model}, set by \code{SET
+FORWARD LEE|RT}, default LEE. Declare it in \code{common.h} and define it in \code{common.c}.
+In RT mode:
+\begin{itemize}
+\item \code{samodel()} gets or builds each scene's table before the pixel loop, and prints
+the table's validation statistics;
+\item \code{samodel\_Rrs} computes each band from its sub-samples, \eqref{eq:obs} and
+\eqref{eq:illum}, through the table;
+\item it fills \code{rrs\_dp} with $R_0^{\infty}$ and \code{rrs\_bottom} with the bottom term,
+which the optically deep test and the index of optical depth use.
+\end{itemize}
+\item \textbf{Sub-samples.} For a scene with \code{SRF}, the sub-samples are 5\,nm steps across
+the band's response, with weights $S_jF_0\Delta\lambda$, precomputed per scene and band. The
+IOP tables are interpolated at each sub-sample. Without \code{SRF}, there is one sub-sample at
+the band wavelength.
+\item \textbf{Jacobians.} \code{region\_jacobian} and \code{water\_jacobian} get RT branches built
+from \S\ref{sec:jacobian}. Until they exist, RT mode uses the existing finite-difference path
+(\code{ANALYTIC\_JACOBIAN 0}), which is correct but slower.
+\item \textbf{Removed in RT mode.} Lee's coefficients (\code{LEE\_*}), the $D_u$ path elongations,
+\code{INTERREFLECTION} (now exact in \eqref{eq:bottom-closed}) and the conversion
+$0.5\,r_{rs}/(1-1.5\,r_{rs})$ are all subsumed by the table.
+\item \textbf{Kept.} The parameter vector, bounds, prior rows, \code{GLINT\_OFFSET},
+\code{Y\_MODEL}, single-type selection, profile search, LUT warm starts, depth $\sigma$ and
+outputs.
+\item \textbf{The cache of IOPs.} \code{iop\_cache} is extended with the sub-sample $(\omega, \tau/D,
+f_w)$ per scene, so that only $\tau$ is recomputed when $H$ changes.
+\end{enumerate}
+
+%--------------------------------------------------------------------------------------------
+\section{The atmosphere (\code{atmos.c}, M3)}\label{sec:atmos}
+
+\subsection{Data}
+
+ACOLITE distributes 6SV-based LUTs per sensor, already averaged over each band's response
+(\code{ACOLITE-LUT-202110}). There is one NetCDF file per aerosol model (MOD1 continental,
+MOD2 maritime) and per pressure (500, 750, 1013 and 1100\,hPa). Each band variable has the
+dimensions \code{(par, azi, thv, ths, wnd, tau)}. The \code{par} attribute lists the
+parameters, including \code{romix} (path reflectance), \code{utott} and \code{dtott} (total
+up and down transmittances), \code{astot} (spherical albedo) and the direct components. The
+axes are relative azimuth 0--180$^\circ$, view and sun zenith 0--80$^\circ$, and
+$\tau_{550}$ 0.001--5. They are not part of \textit{photic}'s repository: ACOLITE's licence
+applies and they total 1.3\,GB. They are read from the user's ACOLITE installation.
+
+\subsection{TOA model}
+
+\begin{equation}\label{eq:toa}
+\rTOA_j = T_{g,j}\Big[\rho_{\mathrm{path},j}(\tau_a)
+  + \frac{T^{\downarrow}_j(\tau_a)\,T^{\uparrow}_j(\tau_a)\,\pi R_{rs,j}}{1 - S_j(\tau_a)\,\pi R_{rs,j}}
+  + T^{\mathrm{dir}}_j\,\Delta_t\Big].
+\end{equation}
+\begin{itemize}
+\item $\rho_{\mathrm{path}}$, $T^\downarrow$, $T^\uparrow$ and $S$ are interpolated from the
+LUT: multilinear in angle and pressure, cubic in $\ln\tau_a$, with derivatives.
+\item $T_g$ is the gas transmittance, from ACOLITE's gas LUT with the ozone and water vapour
+from the L1 metadata, as ACOLITE does.
+\item $R_{rs,j}$ is the band's water-leaving reflectance from the table, with the sky fraction
+$s = 1 - T^{\downarrow,\mathrm{dir}}/T^{\downarrow}$ in \eqref{eq:illum}.
+\item $\Delta_t$ is the existing glint offset, now in TOA units.
+\end{itemize}
+
+\subsection{In the fit}
+
+Add $\tau_{a,t}$ as a per-scene water-block parameter, bounded to $[0.001, 1.5]$. Its prior
+comes from a dark-spectrum estimate over the scene's deep and dark pixels in SWIR, which
+\code{atmos.c} computes once per scene, as ACOLITE's DSF does. The prior's $\sigma$ is 0.03,
+or as set. The aerosol model is a discrete choice per scene, made in that first pass by the
+better SWIR fit, then fixed. The bands are the scene's visible, NIR and SWIR bands. Over water
+the NIR and SWIR water-leaving terms are taken as zero, which pins $\tau_a$.
+
+\subsection{Inputs}
+
+Use L1 TOA reflectance grids, written by \code{validation/tier4\_prepare.py} from ACOLITE's L1R
+output (\code{l1r\_export\_geotiff}). They are resampled to the site grid like the L2W bands.
+Scenes get the keyword \code{TOA} (\S\ref{sec:commands}).
+
+%--------------------------------------------------------------------------------------------
+\section{Commands and data}\label{sec:commands}\label{sec:data}
+
+\subsection{Commands}
+
+\begin{longtable}{@{}p{6.4cm}p{8cm}@{}}
+\toprule
+Command & Effect\\
+\midrule
+\endhead
+\code{SET FORWARD LEE|RT} & Forward model of \code{MODEL Lee\_Semi\_Analytical} (default LEE).\\
+\code{SET RTSTREAMS n} & Streams per hemisphere (default 24).\\
+\code{SET RTBP x} & Fournier--Forand backscatter fraction (default 0.0183).\\
+\code{SET RTCACHE dir} & Table cache directory.\\
+\code{COMPUTE RTTABLE SCENE s} & Build (or load) scene $s$'s table and print its validation.\\
+\code{PRINT RTTABLE SCENE s} & Print a table's settings and statistics.\\
+\code{SCENE ... SRF f [AOT x]} & M2: $\tau_{550}$ for the sky fraction (default: from \code{ATMOSLUT}
+if given, else Rayleigh only).\\
+\code{SCENE ... SRF f TOA ATMOSLUT dir} & M3: the bands are TOA reflectance; ACOLITE LUT directory
+\code{[PRESSURE hPa] [AEROSOL MOD1|MOD2|FIT] [OZONE cm] [WATERVAPOUR cm]}.\\
+\bottomrule
+\end{longtable}
+\code{SCENE} keywords stay positional and optional, after \code{SRF}, in the order shown. RT mode
+requires \code{SRF} on every scene. Without it, photic prints a warning and uses one
+sub-sample at the band wavelength.
+
+\subsection{New data files}
+
+\begin{itemize}
+\item \code{model/data/f0\_thuillier\_2003.csv}: extraterrestrial solar irradiance, 1\,nm,
+350--1000\,nm, from Thuillier et al.\ \cite{thuillier2003}, for the weights in \eqref{eq:obs}.
+\item \code{model/data/srf/}: add the NIR and SWIR bands for M3 (S2 B8, B8A, B11, B12; OLI B5,
+B6, B7).
+\item No RT tables are committed: they are built per scene and cached. The optional global
+table (Appendix~\ref{app:global}) would be a downloadable data file.
+\end{itemize}
+
+%--------------------------------------------------------------------------------------------
+\section{Tests}\label{sec:tests}
+
+\subsection{Unit and solver tests (\code{model/tests/rt\_check.c}, \code{make test-rt})}
+
+\begin{longtable}{@{}p{0.8cm}p{6.4cm}p{7.2cm}@{}}
+\toprule
+& Test & Pass\\
+\midrule
+\endhead
+T1 & Energy: $\omega=1$, white bottom; flux in equals flux out. & Relative error $<10^{-6}$.\\
+T2 & Thin layer: $\tau=10^{-4}$, compared with analytic single scattering plus Fresnel
+reflection of the bottom. & $<0.1\%$.\\
+T3 & Convergence in $N$: 16, 24, 32 and 48 streams. & $R_{rs}$ changes by $<0.2\%$ from 24
+to 48.\\
+T4 & Against OSOAA (scalar build), on the tier 2 grid of water types, depths, bottoms and sun
+angles. & Median $<0.5\%$, 95th percentile $<1.5\%$, for $\omega\le0.95$.\\
+T5 & Closed form \eqref{eq:bottom-closed}: direct solves at $\rho_b = 0, 0.3, 0.7, 1$ against the
+coefficients. & $<10^{-6}$.\\
+T6 & Uniform-sky approximation: a uniform sky against a Rayleigh sky, from the atmosphere
+tables, for $\theta_s = 20$--$60^\circ$. & Report; expected $<1\%$ at near-nadir view.\\
+T7 & Table interpolation: the 200-point validation of every table. & 95th percentile $<0.3\%$,
+maximum $<1\%$.\\
+T8 & Jacobian: interpolant derivatives against centred differences of the interpolant. &
+$<10^{-5}$ relative.\\
+T9 & ACOLITE LUT reader: \code{romix}, \code{dtott} etc.\ at nodes, against direct reads of the
+NetCDF file. & Exact at nodes.\\
+T10 & TOA model: ACOLITE's own $\rho_w$ for a scene, put through \eqref{eq:toa} at ACOLITE's
+$\tau_a$, against the L1R TOA. & Agreement within ACOLITE's conventions; report the
+difference.\\
+T11 & Aerosol retrieval on synthetic TOA scenes (OSOAA with aerosol, PHOTIC\_TIER3\_SKY). &
+$\tau_a$ within 0.02.\\
+\bottomrule
+\end{longtable}
+
+\code{make test-rt} also runs \code{synth\_gen} in RT mode: synthetic scenes from the RT
+forward model, inverted by \code{MODEL Lee\_Semi\_Analytical} with \code{SET FORWARD RT}. Its
+outputs are compared with a committed baseline, as \code{make test} does now. The existing
+\code{make test} is unchanged.
+
+\subsection{Benchmark}
+
+\begin{itemize}
+\item \textbf{Tier 2.} RT mode against OSOAA on the existing cases. This is T4 at scale, and
+replaces the tier's role of measuring Lee's structural error.
+\item \textbf{Tier 3.} The \code{\_insitu} scenarios, with bottoms from held-out measured
+spectra. They are the main synthetic test. A new water truth, OSOAA at 5\,nm sub-samples and
+then band-averaged, makes tier 3 independent of the band-centre tables. It is built once and
+cached.
+\item \textbf{Tier 4.} Exmouth on Sentinel-2 and Landsat 8 (Tantabiddi, Bundegi, Marina, Gulf
+entrance); later, the Arabian Gulf site with ICESat-2 ATL24 truth. M3 runs from L1 TOA
+reflectance.
+\item \textbf{Acceptance.} Use the existing rule: tier 3 and tier 4 depth metrics must improve,
+with no regressions beyond the noise floor of about $\pm0.5$ points or $\pm0.3$\,m RMSE at one
+site. Run time is reported. The target is at most $2\times$ the present model once each
+scene's table is cached.
+\end{itemize}
+
+%--------------------------------------------------------------------------------------------
+\section{Risks and open questions}\label{sec:risks}
+
+\begin{itemize}
+\item \textbf{The bottom library.} An exact forward model cannot correct a bottom shape that does
+not match the seabed. In the \code{\_insitu} tier 3 scenarios, fitting a single type per pixel
+against heterogeneous measured bottoms is much worse than fitting mixtures (RMSE 5--6\,m
+against about 2\,m in clear water). The bottom parameterisation needs its own decision,
+independent of the RT work.
+\item \textbf{Aerosol--water trade-off.} With four visible bands, $\tau_a$ and $X$ can trade off.
+The defences are the SWIR bands, the shared seabed across scenes and the prior from the dark
+spectrum.
+\item \textbf{Sky illumination.} The uniform sky approximation is quantified by T6. If it matters,
+add an atmosphere-derived sky radiance distribution as a third source.
+\item \textbf{Raman scattering and fluorescence} are not in the elastic RTE. Raman adds a few per
+cent in clear blue water. A correction table can be added later.
+\item \textbf{Stratified water} and non-Lambertian bottoms are outside the table.
+\item \textbf{Surface roughness} is flat in M1--M2. Cox--Munk operators come with the TOA model.
+\item \textbf{Licences.} ACOLITE's LUTs are read in place, not redistributed. The in situ
+spectra are CC BY 3.0 and their attribution is in the data file.
+\end{itemize}
+
+%--------------------------------------------------------------------------------------------
+\appendix
+\section{A global table (optional)}\label{app:global}
+
+The per-scene table can be replaced by one global table with the sun angle (12 nodes) and view
+direction (8 zenith nodes, with azimuthal Fourier coefficients) as further axes. That is about
+$10^5$ solves, or minutes on a workstation, and a file of some tens to a few hundred megabytes.
+It is worth doing only if per-scene builds become a bottleneck, for example with many short
+scenes.
+
+\section{Global solve with the adjoint (M6, optional)}\label{app:adjoint}
+
+When the atmosphere is a smooth field coupled across all pixels, or adjacency is modelled,
+the inversion becomes one PDE-constrained problem over the whole site:
+\begin{equation}
+\min_{u}\ \tfrac12\sum_{t,j}\Big\|\frac{\rTOA_{t,j}[u]-\robs_{t,j}}{\sigma_{t,j}}\Big\|^2
+ + \alpha_H\,\mathrm{TV}_\epsilon(H) + \alpha_w\sum_t\|\nabla\theta^t_w\|^2 + \alpha_a\sum_t\|\Delta\theta^t_a\|^2.
+\end{equation}
+Write the RTE and its boundary conditions as $\mathcal{A}(u)L = q$. The adjoint radiance $L^*$
+solves $\mathcal{A}^*L^* = \sum_j\mathcal{M}_j^*\,(\rTOA_j-\robs_j)/\sigma_j^2$. The gradient
+is then $\partial\mathcal{J}/\partial u_i = -\langle L^*,\partial_{u_i}\mathcal{A}\,L\rangle$,
+whatever the number of unknowns \cite{box1988,hinze2009}.
+
+For depth, map the column to $s = z/D\in(-1,0)$. $D$ then becomes a coefficient,
+$\mu\,\partial_sL = D(-cL + \int\beta L)$, and the gradient is
+\begin{equation}
+\frac{\partial\mathcal{J}}{\partial H} = \sum_t\int_{-1}^{0}\!\!\int L_t^{*}\Big(-cL_t + \int\beta L_t\Big)\dd\Omega\dd s.
+\end{equation}
+Matrix-free Gauss--Newton uses tangent-linear products for $Jv$ and adjoint products for
+$J^{\mathsf T}w$. With the table forward model, only the atmospheric and adjacency couplings
+need adjoints; the column part is the table's own derivative.
+
+%--------------------------------------------------------------------------------------------
+\begin{thebibliography}{99}
+
+\bibitem{blake2020} S.~Blake, \textit{photic}: a physics-based shallow water bathymetry model
+for multispectral imagery, arXiv:2002.02298 (2020).
+
+\bibitem{box1988} M.~A. Box, S.~A.~W. Gerstl, C.~Simmer, Application of the adjoint
+formulation to the calculation of atmospheric radiative effects, \textit{Beitr.\ Phys.\
+Atmos.}\ 61 (1988) 303--311.
+
+\bibitem{chami2015} M.~Chami, B.~Lafrance, B.~Fougnie, J.~Chowdhary, T.~Harmel, F.~Waquet,
+OSOAA: a vector radiative transfer model of coupled atmosphere--ocean system for a rough sea
+surface, \textit{Opt.\ Express} 23 (2015) 27829--27852.
+
+\bibitem{coxmunk1954} C.~Cox, W.~Munk, Measurement of the roughness of the sea surface from
+photographs of the sun's glitter, \textit{J.\ Opt.\ Soc.\ Am.}\ 44 (1954) 838--850.
+
+\bibitem{evans1998} K.~F. Evans, The spherical harmonics discrete ordinate method for
+three-dimensional atmospheric radiative transfer, \textit{J.\ Atmos.\ Sci.}\ 55 (1998)
+429--446.
+
+\bibitem{fournier1994} G.~R. Fournier, J.~L. Forand, Analytic phase function for ocean water,
+\textit{Proc.\ SPIE} 2258, Ocean Optics XII (1994) 194--201.
+
+\bibitem{gao2019} M.~Gao, P.-W. Zhai, B.~A. Franz, et al., Inversion of multiangular
+polarimetric measurements over open and coastal ocean waters: a joint retrieval algorithm for
+aerosol and water-leaving radiance properties, \textit{Atmos.\ Meas.\ Tech.}\ 12 (2019)
+3921--3941.
+
+\bibitem{hinze2009} M.~Hinze, R.~Pinnau, M.~Ulbrich, S.~Ulbrich, \textit{Optimization with PDE
+Constraints}, Springer (2009).
+
+\bibitem{jin1994} Z.~Jin, K.~Stamnes, Radiative transfer in nonuniformly refracting layered
+media: atmosphere--ocean system, \textit{Appl.\ Opt.}\ 33 (1994) 431--442.
+
+\bibitem{mobley1994} C.~D. Mobley, \textit{Light and Water: Radiative Transfer in Natural
+Waters}, Academic Press (1994).
+
+\bibitem{mobley2005} C.~D. Mobley, L.~K. Sundman, C.~O. Davis, et al., Interpretation of
+hyperspectral remote-sensing imagery by spectrum matching and look-up tables, \textit{Appl.\
+Opt.}\ 44 (2005) 3576--3592.
+
+\bibitem{nakajima1988} T.~Nakajima, M.~Tanaka, Algorithms for radiative intensity
+calculations in moderately thick atmospheres using a truncation approximation, \textit{J.\
+Quant.\ Spectrosc.\ Radiat.\ Transfer} 40 (1988) 51--69.
+
+\bibitem{oceanopticsbook} C.~D. Mobley (ed.), Ocean Optics Web Book,
+\url{https://www.oceanopticsbook.info/view/introduction/overview}.
+
+\bibitem{stamnes1988} K.~Stamnes, S.-C. Tsay, W.~Wiscombe, K.~Jayaweera, Numerically stable
+algorithm for discrete-ordinate-method radiative transfer in multiple scattering and emitting
+layered media, \textit{Appl.\ Opt.}\ 27 (1988) 2502--2509.
+
+\bibitem{steinmetz2011} F.~Steinmetz, P.-Y. Deschamps, D.~Ramon, Atmospheric correction in
+presence of sun glint: application to MERIS, \textit{Opt.\ Express} 19 (2011) 9783--9800.
+
+\bibitem{tanre1981} D.~Tanr\'e, M.~Herman, P.-Y. Deschamps, Influence of the background
+contribution upon space measurements of ground reflectance, \textit{Appl.\ Opt.}\ 20 (1981)
+3676--3684.
+
+\bibitem{thompson2017} D.~R. Thompson, E.~J. Hochberg, G.~P. Asner, et al., Airborne mapping
+of benthic reflectance spectra with Bayesian linear mixtures, \textit{Remote Sens.\ Environ.}\
+200 (2017) 18--30.
+
+\bibitem{thompson2018} D.~R. Thompson, V.~Natraj, R.~O. Green, et al., Optimal estimation for
+imaging spectrometer atmospheric correction, \textit{Remote Sens.\ Environ.}\ 216 (2018)
+355--373.
+
+\bibitem{thuillier2003} G.~Thuillier, M.~Herse, D.~Labs, et al., The solar spectral
+irradiance from 200 to 2400 nm as measured by the SOLSPEC spectrometer from the ATLAS and
+EURECA missions, \textit{Solar Phys.}\ 214 (2003) 1--22.
+
+\bibitem{vermote1997} E.~F. Vermote, D.~Tanr\'e, J.-L. Deuz\'e, M.~Herman, J.-J. Morcrette,
+Second Simulation of the Satellite Signal in the Solar Spectrum, 6S: an overview, \textit{IEEE
+Trans.\ Geosci.\ Remote Sens.}\ 35 (1997) 675--686.
+
+\bibitem{wiscombe1977} W.~J. Wiscombe, The delta-M method: rapid yet accurate radiative flux
+calculations for strongly asymmetric phase functions, \textit{J.\ Atmos.\ Sci.}\ 34 (1977)
+1408--1422.
+
+\end{thebibliography}
+
+\end{document}
