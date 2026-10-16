@@ -8,26 +8,36 @@
 //
 //   id wavelength P G X B bottom_index H tide theta_sun theta_view Rrs440 Rrs490 Rrs750
 //
-// (angles are subsurface, in degrees; bottom_index selects photic's bottom table:
-// 0 sand, 1 seagrass, 2 coral, 3 macrophytes, 4 dark sediment, 5 coral sand,
-// 6 green algae, 7 red algae). For each case, sets up model_data the way samodel()
+// (angles are subsurface, in degrees; bottom_index selects a type of photic's default bottom
+// library, model/data/bottom_hydrolight.csv: 0 sand, 1 seagrass, 2 coral, 3 macrophytes,
+// 4 dark sediment, 5 coral sand, 6 green algae, 7 red algae). For each case, sets up model_data the way samodel()
 // does (tables interpolated at the wavelength), calls samodel_Rrs() and writes a CSV
 // row with the interpolated table values and the model outputs.
 
 #include "common.h"
 #include "samodel.h"
+#include "spectra.h"
 
-extern int n_ref_wlens;
-extern double ref_wlens[], aw_Pope_Fry1997[], bbw_Morel_1974[], a0_Lee[], a1_Lee[],
-  bottom_type_sand[], bottom_type_seagrass[], bottom_type_coral[], bottom_type_macrophytes[],
-  bottom_type_dark_sediment[], bottom_type_coral_sand[], bottom_type_green_algae[],
-  bottom_type_red_algae[];
+// The spectral data the benchmark's truth was built with (spectra_inputs.py): the legacy water
+// tables and the bottom library $PHOTIC_BENCH_BOTTOM or bottom_hydrolight.csv.
+
+static int read_bench_spectra(void) {
+  static const char *water[] = {"aw_pope_fry_1997.csv", "bbw_morel_1974.csv", "aphi_lee_1994.csv"};
+  char path[1024];
+  const char *env = getenv("PHOTIC_BENCH_BOTTOM");
+  int i;
+  for (i = 0; i < 3; i++) {
+    snprintf(path, sizeof(path), "%s/%s", spectra_data_dir(), water[i]);
+    if (spectra_read_water(path) != 0) return 1;
+  }
+  if (env && *env) return spectra_read_bottom(env);
+  snprintf(path, sizeof(path), "%s/bottom_hydrolight.csv", spectra_data_dir());
+  return spectra_read_bottom(path);
+}
+
 
 int main(void) {
 
-  double *bottom_tables[8] = {bottom_type_sand, bottom_type_seagrass, bottom_type_coral,
-    bottom_type_macrophytes, bottom_type_dark_sediment, bottom_type_coral_sand,
-    bottom_type_green_algae, bottom_type_red_algae};
   model_data md;
   double **a_0, **a_1, **a_w, **b_bw, **wl, **K, **Rrs440, **Rrs490, **Rrs750,
     ***bottom_reflectance, ***rho, ***rrs_dp, ***rrs_bottom, ***rrs_modelled, ***Rrs_modelled,
@@ -36,6 +46,8 @@ int main(void) {
   long id;
   int bottom;
   char line[1024];
+
+  if (read_bench_spectra() != 0 || spectra_load_defaults() != 0) return 1;
 
   memset(&md, 0, sizeof(md));
   md.n_scenes = 1;
@@ -73,7 +85,7 @@ int main(void) {
         &r440, &r490, &r750) != 14)
       continue ;
 
-    if (bottom < 0 || bottom > 7) {
+    if (bottom < 0 || bottom >= spectra_n_bottoms()) {
       printf("\nERROR: bottom index %d out of range.\n", bottom);
       return 1;
     }
@@ -81,11 +93,11 @@ int main(void) {
     // As in samodel().
 
     wl[0][0] = lambda;
-    a_0[0][0] = interp_1d(ref_wlens, a0_Lee, n_ref_wlens, lambda);
-    a_1[0][0] = interp_1d(ref_wlens, a1_Lee, n_ref_wlens, lambda);
-    a_w[0][0] = interp_1d(ref_wlens, aw_Pope_Fry1997, n_ref_wlens, lambda);
-    b_bw[0][0] = interp_1d(ref_wlens, bbw_Morel_1974, n_ref_wlens, lambda);
-    bottom_reflectance[0][0][0] = interp_1d(ref_wlens, bottom_tables[bottom], n_ref_wlens, lambda);
+    a_0[0][0] = spectra_water(WATER_A0, lambda);
+    a_1[0][0] = spectra_water(WATER_A1, lambda);
+    a_w[0][0] = spectra_water(WATER_AW, lambda);
+    b_bw[0][0] = spectra_water(WATER_BBW, lambda);
+    bottom_reflectance[0][0][0] = spectra_bottom(bottom, lambda);
     h_tide[0] = tide;
     sec_sun[0] = 1.0/cos(theta_sun*PI/180.0);
     sec_view[0] = 1.0/cos(theta_view*PI/180.0);

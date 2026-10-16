@@ -1,4 +1,9 @@
 // Synthetic regression test for MODEL Lee_Semi_Analytical (see makefile: make test).
+// The spectral data are pinned here, so that changing photic's defaults does not move the test.
+READ WATER ../../data/aw_pope_fry_1997.csv
+READ WATER ../../data/bbw_morel_1974.csv
+READ WATER ../../data/aphi_lee_1994.csv
+READ BOTTOM ../../data/bottom_hydrolight.csv
 READ GRID s1_b443 s1_b443.asc
 READ GRID s1_b482 s1_b482.asc
 READ GRID s1_b561 s1_b561.asc

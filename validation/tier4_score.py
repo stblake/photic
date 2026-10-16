@@ -72,7 +72,9 @@ def run(photic, data, workroot, only=None):
         if rinf.rsigma_mode():
             # Noise per band as SCENE RSIGMA, from the same deep pixels (PHOTIC_RSIGMA; rinf.py).
             bam = rinf.add_rsigma(bam, rinf.image_rinf_for_dir(site_dir, bam, rinf.image_rsigma))
-        open(os.path.join(rundir, "run.bam"), "w").write(bam)
+        import spectra_inputs
+        open(os.path.join(rundir, "run.bam"), "w").write(
+            spectra_inputs.with_spectra(bam, os.path.join(os.path.dirname(site_dir), "meta.json"), site))
         cases[site] = (site_dir, rundir)
 
     def execute(rundir):

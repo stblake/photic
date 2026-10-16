@@ -1,0 +1,48 @@
+# Absorption coefficient of pure water, a_w (1/m).
+# 400-700 nm: Pope, R. M. and Fry, E. S. (1997), Absorption spectrum (380-700 nm) of pure water.
+#   II. Integrating cavity measurements, Applied Optics 36(33), 8710-8723; the published
+#   2.5 nm table sampled every 10 nm (exact at every node).
+# 710-800 nm: source not recorded (carried over from photic's original table); not used by
+#   bands below 700 nm.
+wavelength,aw
+400,0.00663
+410,0.00473
+420,0.00454
+430,0.00495
+440,0.00635
+450,0.00922
+460,0.00979
+470,0.0106
+480,0.0127
+490,0.015
+500,0.0204
+510,0.0325
+520,0.0409
+530,0.0434
+540,0.0474
+550,0.0565
+560,0.0619
+570,0.0695
+580,0.0896
+590,0.1351
+600,0.2224
+610,0.2644
+620,0.2755
+630,0.2916
+640,0.3108
+650,0.34
+660,0.41
+670,0.439
+680,0.465
+690,0.516
+700,0.624
+710,0.827
+720,1.231
+730,1.65768
+740,2.38147
+750,2.47014
+760,2.5045
+770,2.47509
+780,2.35431
+790,2.17654
+800,2.01226

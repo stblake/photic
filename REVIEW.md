@@ -107,7 +107,7 @@ Standalone utilities (they build with `common.c nc.c io.c` plus a helper, and `-
     | Region size | (2n−1)² (L2971, L2981), but allocation uses (2n+1)² | (2r+1)² |
     | a₀/a₁ | Lee's coefficients | CSIRO coefficients from Appendix A |
 
-    The alternative `a0_Blake`/`a1_Blake` coefficient arrays have 36 entries instead of 41, so enabling them would read out of bounds.
+    **[fixed, data]** The alternative `a0_Blake`/`a1_Blake` arrays (36 entries instead of 41) are gone. The full Appendix A table is now `model/data/aphi_bunbury_csiro.csv`, which `READ WATER` loads; Lee's coefficients stay the default.
 
 ### Low
 17. `PLOTTING=1` does not compile: there is a stray `}` at L1364. [verified] `LUT=0` reads uninitialised variables (L1008, L1104), and `ALL_BOTTOMS=0` leaves `best_*` unset.
@@ -121,7 +121,7 @@ Standalone utilities (they build with `common.c nc.c io.c` plus a helper, and `-
 20. Dead code:
     - `samodel_display` (wrong parameter layout);
     - `polcyn_depth` (declared, never defined);
-    - `spectral_weights`, `bottom_coral_dekker`;
+    - **[fixed]** `spectral_weights`, `bottom_coral_dekker` (removed when the tables moved to `model/data`);
     - `if (true || …)` (L2547);
     - an unreachable `k_shallow > n_shallow_pre` check (L808).
 21. Type mixing: `approx_equal` (float) is used on doubles; `vec_mean2_double` returns float; progress timing uses `clock()`.
@@ -196,6 +196,24 @@ New finding:
 - **high: photic's χ → Y relation gives Y = 0 in moderate and turbid water** (true Y = 1), so the forward model cannot fit the true state (12–21% reflectance error at the truth). Tier 2 missed this because it passed the true Y.
 
 ---
+
+## 2d. Audit of the model's spectral data (October 2026)
+
+The SA model's data were checked against their sources. All of it now lives in `model/data/*.csv`, read by `spectra.c` (`READ WATER`, `READ BOTTOM`, `SCENE ... SRF`; see `model/data/README.md`).
+
+| # | Severity | Finding | Status |
+|---|---|---|---|
+| 1 | high | Tables are sampled at band centres. SRF-averaged a_w is +32% in S2 B2 and +12–18% in L8 B2/B3, which gives depth errors of −17% to +28% that the misfit cannot see. | **[fixed, optional]** `SCENE ... SRF` averages every table over the band's response; the files are in `model/data/srf`. Off unless given. |
+| 2 | high | The bottom library (HydroLight averages) does not match measured seabeds: sand 443/560 0.74 vs 0.55 in situ. At four bands seagrass and coral are confused. | **[data]** `bottom_measured.csv`: 7 classes from 350 in situ spectra (five PANGAEA libraries), built by `validation/bottom_library.py`, with half of each class held out. Not the default; see EXPERIMENTS.md. Without `READ BOTTOM`, photic uses one built-in bright sand. |
+| 3 | medium | Tier 2/3 truth uses photic's own tables at band centres, so it cannot detect 1 or 2. | **[partly fixed]** Tier 3 `_insitu` scenarios draw each pixel's bottom from held-out in situ spectra, SRF-averaged. Water truth is still monochromatic at band centres. |
+| 4 | medium | The CDOM slope 0.015 is hard-coded three times. | **[fixed]** `CDOM_SLOPE`. |
+| 5 | medium | Brightness bounds were measured at 560 nm but applied to tables normalised at 550 nm. | **[fixed]** The bounds are now part of the library file, at 550 nm (`bottom_measured.csv`). `bottom_hydrolight.csv` keeps the old values and documents them. |
+| 6 | medium | The paper says CSIRO a₀/a₁, but the code uses Lee's. | **[data]** `aphi_bunbury_csiro.csv` holds the paper's table. |
+| 7 | low | b_bw (Morel 1974) is 12–15% above Zhang et al. (2009). | **[data]** `bbw_zhang_2009.csv` is available; not the default. |
+| 8 | low | a_φ goes negative for P < 0.006. | **[fixed]** `aphi_shape` holds a_φ/P at ≥ 0. |
+| 9 | low | Albedo > 1 is possible for types 3–7. | Bounded by 1/max shape under `BOTTOM_BOUNDS`. Every type in `bottom_measured.csv` has bounds. |
+| 10 | low | `spectral_weights` is unused; `bottom_coral_dekker` is malformed; `samodel_h0` hard-codes Lee's constants. | **[fixed]** |
+| 11 | low | a_w beyond 700 nm has no recorded source; Pope & Fry is only sampled every 10 nm. | **[data]** `aw_pope_fry_1997_full.csv` holds the full 2.5 nm table. The values beyond 727.5 nm are still unsourced and flagged. |
 
 ## 3. Interpreter (`bam.c`)
 

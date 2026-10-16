@@ -225,6 +225,9 @@ struct scene_struct {
   int ps_p;
   int ps_g; 
   int ps_x;
+  bool srf_present;          // SRF given: the tables are averaged over each band's response
+  int srf;                   // spectra.c handle of the response file
+  int srf_band[MAX_GRIDS];   // its band for each scene band
 };
 
 typedef struct scene_struct scene;
@@ -369,8 +372,6 @@ extern float *model_depths, *sounding_depths, *sounding_errors, *sounding_weight
 
 // Bottom spectra. 
 
-extern float **bottom_spectra;
-extern int n_bottom_spectra;
 
 // Graphics defaults. 
 

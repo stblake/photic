@@ -38,15 +38,28 @@
 
 #include "common.h"
 #include "samodel.h"
+#include "spectra.h"
 
-extern int n_ref_wlens;
-extern double ref_wlens[], aw_Pope_Fry1997[], bbw_Morel_1974[], a0_Lee[], a1_Lee[],
-  bottom_type_sand[], bottom_type_seagrass[], bottom_type_coral[], bottom_type_macrophytes[],
-  bottom_type_dark_sediment[], bottom_type_coral_sand[], bottom_type_green_algae[],
-  bottom_type_red_algae[];
+// The spectral data the benchmark's truth was built with (spectra_inputs.py): the legacy water
+// tables and the bottom library $PHOTIC_BENCH_BOTTOM or bottom_hydrolight.csv.
+
+static int read_bench_spectra(void) {
+  static const char *water[] = {"aw_pope_fry_1997.csv", "bbw_morel_1974.csv", "aphi_lee_1994.csv"};
+  char path[1024];
+  const char *env = getenv("PHOTIC_BENCH_BOTTOM");
+  int i;
+  for (i = 0; i < 3; i++) {
+    snprintf(path, sizeof(path), "%s/%s", spectra_data_dir(), water[i]);
+    if (spectra_read_water(path) != 0) return 1;
+  }
+  if (env && *env) return spectra_read_bottom(env);
+  snprintf(path, sizeof(path), "%s/bottom_hydrolight.csv", spectra_data_dir());
+  return spectra_read_bottom(path);
+}
+
 
 #define MAX_P 512
-#define N_TYPES 8
+#define N_TYPES spectra_n_bottoms()
 
 static model_data *lab_md;
 static double lab_full[MAX_P];
@@ -94,9 +107,6 @@ static void print_errors(model_data *md) {
 
 int main(void) {
 
-  double *bottom_tables[N_TYPES] = {bottom_type_sand, bottom_type_seagrass, bottom_type_coral,
-    bottom_type_macrophytes, bottom_type_dark_sediment, bottom_type_coral_sand,
-    bottom_type_green_algae, bottom_type_red_algae};
   model_data *md;
   int n_scenes, n_bands, n_regions, origin, n_bottoms, k, k_scene, k_band, k_region, i,
     n_params, used, konvge, kcount, icount, numres, ifault;
@@ -104,7 +114,9 @@ int main(void) {
     reqmin, error, h;
   char line[65536], word[32], *s;
 
-  // Setup.
+  // Setup: the spectral data are photic's defaults ($PHOTIC_DATA to change them).
+
+  if (read_bench_spectra() != 0 || spectra_load_defaults() != 0) return 1;
 
   if (fgets(line, sizeof(line), stdin) == NULL ||
       sscanf(line, "SETUP %d %d %d %d %d", &n_scenes, &n_bands, &n_regions, &origin, &n_bottoms) != 5) {
@@ -159,7 +171,7 @@ int main(void) {
   md->Y_scene = calloc(n_scenes, sizeof(double));
   allocate_double_array_2d(&md->R_inf, n_scenes, n_bands);
   md->prev = calloc(8*n_scenes, sizeof(double));
-  md->a_w640 = interp_1d(ref_wlens, aw_Pope_Fry1997, n_ref_wlens, 640.0);
+  md->a_w640 = spectra_water(WATER_AW, 640.0);
 
   for (k = 0; k < N_TYPES; k++) {
     strcpy(md->B_type_name[k], "type");
@@ -186,12 +198,12 @@ int main(void) {
       for (k_band = 0; k_band < n_bands; k_band++) {
         md->wavelengths[k_scene][k_band] = v[k_band];
         md->raw_wavelengths[k_scene][k_band] = v[k_band];
-        md->a_0[k_scene][k_band] = interp_1d(ref_wlens, a0_Lee, n_ref_wlens, v[k_band]);
-        md->a_1[k_scene][k_band] = interp_1d(ref_wlens, a1_Lee, n_ref_wlens, v[k_band]);
-        md->a_w[k_scene][k_band] = interp_1d(ref_wlens, aw_Pope_Fry1997, n_ref_wlens, v[k_band]);
-        md->b_bw[k_scene][k_band] = interp_1d(ref_wlens, bbw_Morel_1974, n_ref_wlens, v[k_band]);
+        md->a_0[k_scene][k_band] = spectra_water(WATER_A0, v[k_band]);
+        md->a_1[k_scene][k_band] = spectra_water(WATER_A1, v[k_band]);
+        md->a_w[k_scene][k_band] = spectra_water(WATER_AW, v[k_band]);
+        md->b_bw[k_scene][k_band] = spectra_water(WATER_BBW, v[k_band]);
         for (k = 0; k < N_TYPES; k++) {
-          md->bottom_reflectance[k][k_scene][k_band] = interp_1d(ref_wlens, bottom_tables[k], n_ref_wlens, v[k_band]);
+          md->bottom_reflectance[k][k_scene][k_band] = spectra_bottom(k, v[k_band]);
         }
       }
     } else if (strcmp(word, "RINF") == 0) {

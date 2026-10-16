@@ -48,6 +48,38 @@ ALBEDO_BY_BOTTOM = None
 
 def albedo_for(name):
     return ALBEDO_BY_BOTTOM[name] if ALBEDO_BY_BOTTOM else B_ALBEDO
+
+
+# Scenes with measured bottoms (the "_insitu" scenarios): each pixel's bottom is a spectrum drawn
+# from the held-out half of its class's in situ spectra (model/data/bottom_spectra_insitu.nc,
+# bottom_library.py), averaged over the
+# Sentinel-2A response of each band. They are independent of photic's bottom library, unlike the
+# other scenarios, whose bottoms are photic's own tables. Set by run(); None otherwise.
+INSITU_RHO = None
+INSITU = dict(n_scenes=[2, 4], noise=[0.0, 5e-4])
+
+
+def insitu_truth(bottom, data, seed=7):
+    """{band: reflectance grid} and the reflectance at 550 nm, from held-out in situ spectra."""
+    import bottom_library
+    import spectra_inputs
+    held = [e for e in bottom_library.load_all() if e["half"] == 1]
+    lam, R, cls = bottom_library.LAM, np.array([e["Rs"] for e in held]), np.array([e["cls"] for e in held])
+    srf = spectra_inputs.read_csv(os.path.join(spectra_inputs.DATADIR, "srf", "S2A_MSI.csv"))
+    band_of = {443.0: "B1", 490.0: "B2", 560.0: "B3", 665.0: "B4"}
+    rng = np.random.default_rng(seed)
+    rho = {b: np.zeros(bottom.shape) for b in BANDS}
+    r550 = np.zeros(bottom.shape)
+    for name in np.unique(bottom):
+        idx = np.flatnonzero(cls == name)
+        m = bottom == name
+        pick = idx[rng.integers(0, len(idx), m.sum())]
+        for b in BANDS:
+            w = srf[band_of[b]]
+            spec = np.array([np.interp(srf["wavelength"], lam, R[i]) for i in pick])
+            rho[b][m] = spec @ w/w.sum()
+        r550[m] = [np.interp(550.0, lam, R[i]) for i in pick]
+    return rho, r550
 ALBEDO_NODES = (0.0, 0.5, 1.0)
 BOTTOM_COLUMNS = [(0, 16, "sand"), (16, 24, "seagrass"), (24, 32, "coral")]
 DEPTH_BINS = [(0, 2), (2, 5), (5, 10), (10, 20), (20, 30)]
@@ -173,6 +205,8 @@ def scene_bands(water, k, H, bottom, tables, lut, control):
             rho = np.zeros(H.shape)
             for name, b in t2.BOTTOMS.items():
                 rho[bottom == name] = albedo_for(name)*tables[(lam, b)]["rho"]
+            if INSITU_RHO is not None:
+                rho = INSITU_RHO[0][lam]
             out[lam] = lut_rrs(lut, lam, H + tide, rho)
         return out
     # Control: photic's forward model with its own chi -> Y relation (fixed point, as in
@@ -273,7 +307,8 @@ def write_inputs(rundir, water, n, H, bottom, tables, luts, noise, prior, contro
     else:
         est = None
     lines += scenes + [model, "EXIT"]
-    bam = "\n".join(lines) + "\n"
+    import spectra_inputs
+    bam = spectra_inputs.with_spectra("\n".join(lines) + "\n")
     open(os.path.join(rundir, "run.bam"), "w").write(bam)
     # Deep-water Rrs as SCENE RINF (PHOTIC_RINF; unset: none): the exact no-bottom OSOAA Rrs
     # ("lut", not for the controls) or the image's own deep pixels ("image"); see rinf.py.
@@ -294,7 +329,7 @@ def prepare_photic(rundir, water, n, H, bottom, tables, luts, noise, prior, cont
     ALBEDO_BY_BOTTOM, which run() sets per scenario."""
     est = write_inputs(rundir, water, n, H, bottom, tables, luts, noise, prior, control)
     kmin_true = min(min(photic_side_K(water, k, lam, tables) for lam in BANDS) for k in range(n))
-    alb_true = np.vectorize(albedo_for)(bottom).astype(float)
+    alb_true = INSITU_RHO[1] if INSITU_RHO is not None else np.vectorize(albedo_for)(bottom).astype(float)
     return dict(rundir=rundir, H=H, est=est, prior=prior, kmin_true=kmin_true, alb_true=alb_true)
 
 
@@ -334,7 +369,7 @@ def run(driver, photic, data, workroot, quick=False, jobs=12, photic_work=None, 
     """Run the scenarios. workroot holds the shared OSOAA lookup tables; photic_work (default
     workroot/photic) holds this run's photic directories. only: run just the scenarios whose
     names contain this string (the lookup-table check is then skipped)."""
-    global ALBEDO_BY_BOTTOM
+    global ALBEDO_BY_BOTTOM, INSITU_RHO
     sel = QUICK if quick else FULL
     photic_work = photic_work or os.path.join(workroot, "photic")
     osoaa = dict(root=os.path.join(data, "tools", OSOAA_BUILD[0]),
@@ -348,7 +383,7 @@ def run(driver, photic, data, workroot, quick=False, jobs=12, photic_work=None, 
     cases = {}
     wanted = lambda name: only is None or only in name
     for water in sel["water"]:
-        n_max = max(sel["n_scenes"] + ([] if quick else REALISTIC["n_scenes"]))
+        n_max = max(sel["n_scenes"] + ([] if quick else REALISTIC["n_scenes"] + INSITU["n_scenes"]))
         luts = [build_lut(water, k, tables, osoaa, workroot, jobs) for k in range(n_max)]
         for n in sel["n_scenes"]:
             for noise in sel["noise"]:
@@ -373,6 +408,16 @@ def run(driver, photic, data, workroot, quick=False, jobs=12, photic_work=None, 
                                                      tables, luts, noise, False, control=False)
                     finally:
                         ALBEDO_BY_BOTTOM = None
+        for n in INSITU["n_scenes"]:
+            for noise in INSITU["noise"]:
+                name = "%s_n%d_noise%g_insitu" % (water, n, noise)
+                if wanted(name):
+                    INSITU_RHO = insitu_truth(bottom, data)
+                    try:
+                        cases[name] = prepare_photic(os.path.join(photic_work, name), water, n, H, bottom,
+                                                     tables, luts, noise, False, control=False)
+                    finally:
+                        INSITU_RHO = None
     # photic is single-threaded: run the scenarios in parallel, then score them.
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         elapsed = dict(zip(cases, pool.map(lambda c: execute_photic(photic, c["rundir"]), cases.values())))

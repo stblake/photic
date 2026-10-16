@@ -81,6 +81,7 @@
 
 
 #include "samodel.h"
+#include "spectra.h"
 #if _OPENMP
 #include <omp.h>
 #endif
@@ -90,7 +91,25 @@
 
 #define LOCALLY_AVERAGE 1
 
+// Bottom search (EXPERIMENTS.md, "Inversion and correction variants"): 1, every bottom type at once (cover
+// weights); 0, each type alone and, with BOTTOM_PAIRS, each pair, keeping the best fit, which
+// restricts each pixel to one class or two.
+
+#ifndef ALL_BOTTOMS
 #define ALL_BOTTOMS 1
+#endif
+#ifndef BOTTOM_PAIRS
+#define BOTTOM_PAIRS 1
+#endif
+
+// How the bottom search picks among its fits: 1, the misfit the fit minimised (the root sum
+// of squares of samodel_residuals; every single-type fit has the same parameters); 0, the
+// legacy weighted model_error (spectral error, the depths' spread over the regions, and
+// attenuation heuristics), as before.
+
+#ifndef SELECT_BY_FIT
+#define SELECT_BY_FIT 1
+#endif
 #define MAX_BOTTOMS 12
 
 #define SAM 0
@@ -165,6 +184,12 @@
 #define LEE_C1 2.4
 #define LEE_B0 1.04
 #define LEE_B1 5.4
+#endif
+
+// Spectral slope of CDOM and detritus absorption, a_g(lambda) = G exp(-S (lambda - 440)) (1/nm).
+
+#ifndef CDOM_SLOPE
+#define CDOM_SLOPE 0.015
 #endif
 
 // Bottom-surface interreflection (EXPERIMENTS.md B11). Light reflected by the bottom is partly
@@ -262,16 +287,14 @@
 
 // Bottom brightness bounded by class (EXPERIMENTS.md B8). Each region has cover weights
 // w_k in [0, 1] and a brightness b_k per bottom type, rho = sum_k (w_k/sum w) b_k rho_k(lambda),
-// with b_k within the range measured in situ for its class (Heron Reef and Moreton Bay,
-// 10th-90th percentile at 560 nm, widened): sediment 0.15-0.75, seagrass 0.03-0.15,
-// coral 0.03-0.25. Without it (0), B_k in [0, 1] is linear and unbounded below.
+// with b_k within the bounds the bottom library gives for its type (brightness_min and
+// brightness_max, the reflectance at 550 nm). Without it (0), B_k in [0, 1] is linear and
+// unbounded below.
 
 #ifndef BOTTOM_BOUNDS
 #define BOTTOM_BOUNDS 1
 #endif
 
-static const double bright_lo[8] = {0.15, 0.03, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0};
-static const double bright_hi[8] = {0.75, 0.15, 0.25, 1.0, 1.0, 1.0, 1.0, 1.0};
 
 // Seeding the depth search with a physics-based first estimate H0 (samodel_h0), which needs the
 // deep-water Rrs of each scene (SCENE RINF): 0 off; 1 H0 added to the depth grid; 2 the grid
@@ -330,192 +353,16 @@ static const double bright_hi[8] = {0.75, 0.15, 0.25, 1.0, 1.0, 1.0, 1.0, 1.0};
 
 #define ALBEDO_START 0.3
 
-// Reference wavelengths. 
-
-int n_ref_wlens = 41;
-
-double ref_wlens[] = {400, 410, 420, 430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 
-	530, 540, 550, 560, 570, 580, 590, 600, 610, 620, 630, 640, 650, 660, 
-	670, 680, 690, 700, 710, 720, 730, 740, 750, 760, 770, 780, 790, 800};
-
-//
-//	Spectral Weights
-//
-
-// These are ~ 1/K where K is the average of the ocean-type waters (I, IA, IB, II, III) from 
-// Jerlov's table of spectral attenuation coefficients. 
-
-// Ref: Jerlov, N, Marine Optics, 2nd Edition, Table XXVII, pp. 135, 1976.
-
-double spectral_weights[] = {12.56,13.40,14.35,15.36,16.40,17.61,18.38,19.23,19.20,18.30,
-	17.48,16.32,15.30,14.21,13.11,12.17,10.76,9.649,7.236,5.086,3.922,3.519,3.191,2.938,
-	2.738,2.564,2.406,2.267,2.073,1.855,1.678,1.500,1.500,1.500,1.500,1.500,1.500,1.500,
-	1.500,1.500,1.500};
-
-//
-//	Absorption Coefficients of Pure Water
-//
-
-// Ref: R. Pope and E. Fry, “Absorption spectrum 380-700nm of pure waters: II. Integrating 
-//		cavity measurements,” Appl. Opt. 36, pp. 8710–8723, 1997.
-
-double aw_Pope_Fry1997[] = {0.00663,0.00473,0.00454,0.00495,0.00635,0.00922,0.00979,0.0106,0.0127,
-	0.015,0.0204,0.0325,0.0409,0.0434,0.0474,0.0565,0.0619,0.0695,0.0896,0.1351,0.2224,0.2644,
-	0.2755,0.2916,0.3108,0.34,0.41,0.439,0.465,0.516,0.624,0.827,1.231,1.65768,2.38147,2.47014,
-	2.5045,2.47509,2.35431,2.17654,2.01226};
-
-//
-//	Backscattering Coefficients of Pure Water
-//
-
-// Ref: A. Morel, “Optical properties of pure water and pure sea waters,” in Optical Aspects of Oceanography, 
-//		N. G. Jerlov and E. S. Nielsen, eds. Academic, pp. 1–24, New York, 1974
-
-double bbw_Morel_1974[] = {0.0038,0.00341552,0.00307784,0.00278035,0.00251749,0.00228457,0.00207763,
-	0.0018933,0.0017287,0.00158138,0.00144921,0.00133039,0.00122334,0.00112671,0.0010393,0.000960099,
-	0.000888199,0.000822817,0.000763262,0.000708928,0.000659279,0.000613844,0.000572204,0.000533988,
-	0.000498868,0.000466549,0.00043677,0.000409298,0.000383923,0.000360458,0.000338734,0.000318601,
-	0.000299921,0.000282571,0.000266441,0.000251431,0.000237448,0.00022441,0.000212243,0.000200879,
-	0.000190254};
-
-// 
-//	a_0(lambda), a_1(lambda) as given in Lee, 1994
-//
-
-// Ref: Z. P. Lee, “Visible-infrared remote-sensing model and applications for ocean waters,” 
-//		Ph.D. dissertation  Department of Marine Science, University of South Florida, St. Petersburg, Fla., 1994 .
-
-double a0_Lee[] = {0.684266,0.778234,0.86369,0.960272,1,0.96339,0.931107,0.869651,0.788982,
-	0.755811,0.733335,0.691062,0.632722,0.568079,0.504551,0.426236,0.343342,0.294978,0.278405,
-	0.259509,0.238935,0.274531,0.319712,0.342135,0.333133,0.350196,0.560974,0.843456,0.74852,
-	0.4,0.15,0.06,0.026,0.013,0.013,0.013,0.013,0.013,0.013,0.013,0.013};
-
-double a1_Lee[] = {0.0205345,0.0129366,0.0064013,0.00168429,0,0.00602146,0.0109083,0.0157169,0.0152315,
-	0.0255969,0.0559074,0.0865174,0.098141,0.0968975,0.0899322,0.0780758,0.0658936,0.0596445,0.0581118,
-	0.0539721,0.0494872,0.057845,0.0673832,0.0717643,0.0684625,0.0713488,0.112818,0.159471,0.138835,
-	0.0811786,0.03,0.012,0.0054,0.0028,0.0028,0.0028,0.0028,0.0028,0.0028,0.0028,0.0028};
-
-//
-//	Bottom Albedo Spectrums
-//
-
-// Ref: Lee et al, Properties of the water column and bottom derived from Airborne Visible Infrared 
-//		Imaging Spectrometer (AVIRIS) data, JOURNAL OF GEOPHYSICAL RESEARCH, VOL. 106, 
-//		NO. C6, PAGES 11639-11651, JUNE 15,2001
-
-double bottom_sand_Lee[] = {0.583466,0.596165,0.623453,0.659155,0.696085,0.721449,0.752614,0.784261,
-	0.810131,0.838364,0.870429,0.898984,0.930959,0.955174,0.976314,1,1.02848,1.05523,1.08057,
-	1.11548,1.13863,1.15436,1.16485,1.18209,1.19692,1.20153,1.17874,1.15904,1.18503,1.25993,
-	1.34427,1.39835,1.43151,1.46162,1.49477,1.51586,1.52225,1.54963,1.56201,1.57216,1.57973};
-
-double bottom_seagrass_Lee[] = {0.271406,0.277846,0.274747,0.274747,0.271616,0.267027,0.275068,
-	0.277633,0.288372,0.31707,0.402691,0.540072,0.697163,0.817698,0.890198,0.973223,1.06845,
-	1.109,1.03897,0.948927,0.895306,0.857696,0.802312,0.722199,0.606007,0.489014,0.445886,
-	0.451764,0.570228,1.08633,2.52329,4.4967,6.0473,6.69215,6.91428,7.02582,7.09853,7.1631,
-	7.23864,7.29724,7.35732};
-
-double a0_Blake[] = {0.693224,0.898908,0.992684,1.02963,1.,0.792275,0.748701,0.776112,0.726627,0.632112,
-		     0.515369,0.407641,0.328754,0.27633,0.236208,0.197239,0.168193,0.154953,0.157945,
-		     0.164272,0.160942,0.164892,0.178776,0.199702,0.241388,0.264834,0.314421,0.49153,
-		     0.464896,0.19484,0.0780387,0.0442571,0.0320876,0.0209004,0.0167131,0.0126202};
-
-double a1_Blake[] = {0.0103484,0.0227841,0.0237051,0.0138089,0.0,-0.0229181,-0.0227291,-0.00745802,
-		     -0.0000655587,-0.00108625,0.000734957,0.00391282,0.00617119,0.008739,0.0100529,0.00974627,
-		     0.0104398,0.0107561,0.0110176,0.0105372,0.0106184,0.0107536,0.0107262,0.0132929,0.0212209,
-		     0.0258873,0.023263,0.0317735,0.0294253,0.0100652,0.00588207,0.00401144,0.0036124,0.00252763,
-		     0.00382846,0.00287507};
+// The spectral data (water tables and the bottom library) are read from files: spectra.c,
+// model/data/README.md.
 
 
-// Ref: Mapping seaweed forests with IKONOS image based on bottom surface reflectance, Remote 
-//		Sensing of the Marine Environment II, edited by Robert J. Frouin, Naoto Ebuchi, Delu Pan, 
-//		Toshiro Saino, Proc. of SPIE Vol. 8525
+// A water table for a scene band: averaged over the band's response when the scene has one
+// (SCENE ... SRF), otherwise at the band's wavelength.
 
-double bottom_rock_Sagawa[] = {0.446844,0.463106,0.489994,0.520033,0.547332,0.577717,0.613093,0.640429,
-	0.664388,0.686469,0.716171,0.746174,0.789359,0.854467,0.937349,1.,1.06547,1.10031,1.11612,
-	1.12155,1.11591,1.09913,1.07528,1.06594,1.06857,1.07232,1.05406,1.03511,1.05512,1.15098,
-	1.28489,1.38377,1.45716,1.5079,1.54188,1.55929,1.57666,1.59186,1.60415,1.61531,1.6261};
-
-double bottom_brown_alga_Sagawa[] = {1.02407,1.01035,0.95028,0.94553,0.942414,0.915504,0.874995,
-	0.847023,0.85149,0.855956,0.864693,0.875119,0.885544,0.913803,0.951189,1.,1.12001,
-	1.24112,1.19843,1.19843,1.22309,1.10903,0.981867,0.926624,1.00622,0.947069,0.817357,
-	0.803944,0.979778,1.35551,3.15296,7.23477,10.3982,11.0253,10.7855,10.9471,11.1577,
-	11.1373,11.3919,11.8403,12.2725};
-
-double bottom_red_seaweed_Sagawa[] = {0.659643,0.74779,0.753905,0.759553,0.734172,0.735914,0.743928,
-	0.752305,0.762707,0.784911,0.828281,0.86661,0.924044,0.982859,1.00066,1.,0.980934,0.963559,
-	0.966101,0.967321,0.958482,0.967321,0.992428,1.00604,1.01299,1.05706,1.07768,1.13556,1.17604,
-	1.25306,1.4027,1.78951,2.26202,2.54165,2.64516,2.72694,2.79462,2.86691,2.92661,2.98747,3.04329};
-
-// Ref: Nicole Pinnel, Bolivar, South Australia 
-
-double bottom_sand_Bolivar[] = {0.831952,0.830508,0.834468,0.831049,0.845008,0.862618,0.878175,0.893138,
-	0.911949,0.917074,0.927628,0.941394,0.951449,0.96914,0.982218,1.,1.01706,1.0287,1.03817,
-	1.03768,1.0442,1.03516,1.02352,1.01749,1.02367,1.01656,0.971376,0.924693,0.940348,1.02032,
-	1.13057,1.19403,1.20302,1.21271,1.22576,1.23423,1.23815,1.24207,1.24403,1.24558,1.25408};
-
-// Ref: Dekker, Imaging Spectronomy of Waters, 2002
-
-double bottom_coral_dekker[] = {0.383243, 0.410755, 0.393293, 0.401978, 0.44859, 0.503933, 0.533888,
-	0.575502, 0.639226, 0.695987, 0.734558, 0.797606, 0.86595, 0.905876, 
-	0.939073, 1., 1.0991, 1.24556, 1.33291, 1.35833, 1.44966, 1.59142, 
-	1.53355, 1.47955, 1.44494, 1.43629, 1.28982, 1.03614, 1.08886, 1.72366, 2.99676, 3.1, 3.2, 3.3, 
-	3.4, 3.5, 3.6, 3.7, 3.8, 3.9};
-
-// Averaged bottom types from HYDROLIGHT. 
-
-int n_bottom_table = 8;
-
-double bottom_type_sand[] = {0.634432,0.654965,0.682443,0.712079,0.74123,0.769656,0.802245,0.827992,
-	0.854624,0.878036,0.89898,0.924542,0.94899,0.965671,0.982481,1.,1.01237,1.02994,1.04658,1.07139,
-	1.08139,1.08884,1.09447,1.09916,1.10557,1.10758,1.101,1.08464,1.08658,1.12477,1.17063,1.20125,
-	1.21407,1.22691,1.23186,1.24098,1.24708,1.25257,1.25607,1.26361,1.26789};
-
-double bottom_type_seagrass[] = {0.542201,0.538755,0.543345,0.550218,0.550218,0.562483,0.606813,0.607225,
-	0.63619,0.650873,0.670997,0.735138,0.808387,0.887508,0.949743,1.,1.03488,1.04312,1.03199,1.00882,
-	0.95964,0.903696,0.85915,0.848253,0.830917,0.807567,0.785207,0.839027,1.09213,1.68562,2.5015,
-	4.15478,5.11731,5.77383,6.02484,6.11441,6.16467,6.22648,6.27581,6.29811,6.34481};
-
-double bottom_type_coral[] = {0.437155,0.381353,0.353904,0.339709,0.358934,0.382172,0.390592,0.407088,
-	0.462696,0.522577,0.60409,0.707443,0.764575,0.826841,0.892756,1.,1.15687,1.3644,1.44365,1.40967,
-	1.48473,1.53551,1.41572,1.32706,1.25349,1.20397,0.955824,0.643935,0.669901,1.38703,2.42848,
-	3.3846,3.6429,3.89712,4.10336,4.23733,4.32766,4.37486,4.43428,4.47756,4.52468};
-
-double bottom_type_macrophytes[] = {0.443737,0.401082,0.382427,0.382427,0.382427,0.382427,0.402497,
-	0.409674,0.443211,0.44772,0.494445,0.620241,0.755823,0.882367,0.973539,1.,1.09947,1.09321,
-	1.11723,1.09127,1.06283,1.03064,0.919521,0.896435,0.839186,0.769511,0.645607,0.60577,
-	0.743085,1.1217,2.17169,3.27124,3.47565,3.3989,3.48151,3.59713,3.65614,3.65521,3.67159,3.6131,3.58176};
-
-double bottom_type_dark_sediment[] = {0.57054,0.564806,0.583536,0.596254,0.616995,0.640224,0.669295,
-	0.691865,0.722327,0.740098,0.765618,0.801745,0.850374,0.901024,0.943913,1.,1.05834,1.10294,
-	1.13346,1.17132,1.20427,1.20038,1.16874,1.16074,1.14623,1.14875,1.03881,0.903713,0.894767,
-	1.05454,1.30921,1.49551,1.58863,1.64064,1.65234,1.66933,1.68055,1.69243,1.70471,1.72121,1.72876};
-
-double bottom_type_coral_sand[] = {0.616201,0.636915,0.659543,0.685341,0.71562,0.742639,0.769601,
-	0.792999,0.818446,0.840791,0.86273,0.890834,0.912898,0.940877,0.970795,1.,1.03073,1.05991,
-	1.08887,1.1141,1.13666,1.15865,1.18297,1.20189,1.22277,1.23953,1.25598,1.27532,1.29161,
-	1.31127,1.3302,1.348,1.36099,1.37632,1.38579,1.39478,1.40298,1.41371,1.42261,1.43402,1.44206};
-
-double bottom_type_green_algae[] = {0.16848,0.188393,0.188646,0.17936,0.170655,0.190607,0.220843,0.241126,
-	0.262068,0.294282,0.357834,0.516557,0.717781,0.898626,0.975598,1.,1.00009,0.946152,0.874696,0.829798,
-	0.807546,0.763138,0.701775,0.673854,0.606387,0.524554,0.426766,0.3044,0.284069,0.48541,0.912011,
-	1.33421,1.52307,1.61754,1.65643,1.66741,1.66741,1.66741,1.66741,1.66741,1.66298};
-
-double bottom_type_red_algae[] = {1.25032,1.13331,1.06326,1.00005,0.925705,0.983453,1.,1.,0.975044,
-	0.877564,0.877766,0.987416,1.04918,1.03747,1.,1.,1.01387,1.16916,1.56137,2.08995,2.44941,
-	2.40749,2.30252,2.33337,2.48719,2.53279,2.21543,1.72598,1.80604,2.72284,4.35056,5.67543,
-	6.32734,6.72766,6.90232,6.98939,7.04997,7.09008,7.11525,7.09872,7.04973};
-
-double bottom_type_sand66_green_algea33[] = {0.478636,0.498941,0.517326,0.533971,0.550487,0.576063,
-	0.607836,0.631737,0.656448,0.682768,0.717879,0.787759,0.871049,0.942379,0.979206,0.999,
-	1.00727,1.00101,0.988295,0.98987,0.989118,0.979293,0.962609,0.956435,0.938234,0.912327,
-	0.875376,0.823737,0.818259,0.910737,1.08334,1.24433,1.31575,1.35576,1.37201,1.38174,
-	1.3858,1.38946,1.39179,1.39681,1.39819};
-
-double bottom_type_sand50_green_algea50[] = {0.401456,0.421679,0.435545,0.445719,0.455943,0.480132,
-	0.511544,0.534559,0.558346,0.586159,0.628407,0.720549,0.833386,0.932149,0.97904,1.,1.00623,
-	0.988044,0.960637,0.950595,0.944467,0.92599,0.898123,0.886508,0.855977,0.816069,0.763881,
-	0.694521,0.685326,0.805089,1.04132,1.26773,1.36857,1.42222,1.44415,1.45419,1.45724,1.45999,
-	1.46174,1.46551,1.46544};
+static double scene_water(scene *sc, int k_band, int table, double lambda) {
+	return sc->srf_present ? spectra_water_srf(table, sc->srf, sc->srf_band[k_band]) : spectra_water(table, lambda);
+}
 
 
 void samodel(
@@ -560,7 +407,7 @@ void samodel(
 		blue_sum, green_sum, red_sum, blue, green, red;
 
 	double ***Rrs_measured, ***Rrs_modelled, ***rrs_modelled, ***rrs_bottom, ***rrs_dp, ***rho,
-		**wavelengths, **raw_wavelengths, *start, *min, *step, **bottom_types, ***bottom_reflectance,
+		**wavelengths, **raw_wavelengths, *start, *min, *step, ***bottom_reflectance,
 		**a_0, **a_1, **a_w, **b_bw, **K, **rrs_noise, *theta_view, *theta_sun, *sec_theta_view, *sec_theta_sun,
 		**Rrs440, **Rrs490, **Rrs550, **Rrs640, **Rrs750, *h_tide, 
 		a_w640, pixels_per_sec, elapsed, refl, total_start_depth,
@@ -694,32 +541,11 @@ void samodel(
 	md->H_tide          = h_tide; 
 	md->empirical_depth_present = empirical_depth_present;
 
-	// Set the table of bottom reflectances. 
+	// Names of the bottom types, from the library.
 
-	allocate_double_array_2d(&bottom_types, n_bottom_table, n_ref_wlens);
-
-	for (i = 0; i < n_ref_wlens; i++) {
-		bottom_types[0][i] = bottom_type_sand[i];
-		// bottom_types[0][i] = bottom_sand_Lee[i];
-		// bottom_types[0][i] = bottom_type_sand66_green_algea33[i];
-		// bottom_types[0][i] = bottom_type_sand50_green_algea50[i];
-		bottom_types[1][i] = bottom_type_seagrass[i];
-		bottom_types[2][i] = bottom_type_coral[i];
-		bottom_types[3][i] = bottom_type_macrophytes[i];
-		bottom_types[4][i] = bottom_type_dark_sediment[i];
-		bottom_types[5][i] = bottom_type_coral_sand[i];
-		bottom_types[6][i] = bottom_type_green_algae[i];
-		bottom_types[7][i] = bottom_type_red_algae[i];
+	for (i = 0; i < spectra_n_bottoms(); i++) {
+		snprintf(md->B_type_name[i], MAX_STRING_LEN, "%s", spectra_bottom_name(i));
 	}
-
-	strcpy(md->B_type_name[0], "sand");
-	strcpy(md->B_type_name[1], "seagrass");
-	strcpy(md->B_type_name[2], "coral");
-	strcpy(md->B_type_name[3], "macrophytes");
-	strcpy(md->B_type_name[4], "dark sediment");
-	strcpy(md->B_type_name[5], "coral_sand");
-	strcpy(md->B_type_name[6], "green_algae");
-	strcpy(md->B_type_name[7], "red algae");
 
 	// Allocate memory for variable model parameters. 
 
@@ -737,7 +563,7 @@ void samodel(
 
 	// Compute a_w(640).
 
-	md->a_w640 = interp_1d(ref_wlens, aw_Pope_Fry1997, n_ref_wlens, 640.0);
+	md->a_w640 = spectra_water(WATER_AW, 640.0);
 
 	printf("\na_w(640) = %.5f\n", md->a_w640);
 
@@ -759,6 +585,11 @@ void samodel(
 		for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
 			wavelengths[k_scene][k_band] = scene_data[scene_indexes[k_scene]].wavelengths[k_band];
 			raw_wavelengths[k_scene][k_band] = wavelengths[k_scene][k_band];
+			if (scene_data[scene_indexes[k_scene]].srf_present) {
+				// The band's centroid, for the terms not averaged over its response (CDOM, b_bp).
+				wavelengths[k_scene][k_band] = spectra_srf_centroid(scene_data[scene_indexes[k_scene]].srf,
+					scene_data[scene_indexes[k_scene]].srf_band[k_band]);
+			}
 			printf("%.2f\t", wavelengths[k_scene][k_band]);
 		}
 		printf("\n");
@@ -787,8 +618,7 @@ void samodel(
 	printf("\na_0 = \n\t");
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 		for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
-		  a_0[k_scene][k_band] = interp_1d(ref_wlens, a0_Lee, n_ref_wlens, wavelengths[k_scene][k_band]);
-		  // a_0[k_scene][k_band] = interp_1d(ref_wlens, a0_Blake, n_ref_wlens, wavelengths[k_scene][k_band]);
+			a_0[k_scene][k_band] = scene_water(&scene_data[scene_indexes[k_scene]], k_band, WATER_A0, wavelengths[k_scene][k_band]);
 			printf("%.5f\t", a_0[k_scene][k_band]);
 		}
 		printf("\n\t");
@@ -797,8 +627,7 @@ void samodel(
 	printf("\na_1 = \n\t");
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 		for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
-		  a_1[k_scene][k_band] = interp_1d(ref_wlens, a1_Lee, n_ref_wlens, wavelengths[k_scene][k_band]);
-		  // a_1[k_scene][k_band] = interp_1d(ref_wlens, a1_Blake, n_ref_wlens, wavelengths[k_scene][k_band]);
+			a_1[k_scene][k_band] = scene_water(&scene_data[scene_indexes[k_scene]], k_band, WATER_A1, wavelengths[k_scene][k_band]);
 			printf("%.5f\t", a_1[k_scene][k_band]);
 		}
 		printf("\n\t");
@@ -807,7 +636,7 @@ void samodel(
 	printf("\nb_bw = \n\t");
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 		for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
-			b_bw[k_scene][k_band] = interp_1d(ref_wlens, bbw_Morel_1974, n_ref_wlens, wavelengths[k_scene][k_band]);
+			b_bw[k_scene][k_band] = scene_water(&scene_data[scene_indexes[k_scene]], k_band, WATER_BBW, wavelengths[k_scene][k_band]);
 			printf("%.5f\t", b_bw[k_scene][k_band]);
 		}
 		printf("\n\t");
@@ -816,7 +645,7 @@ void samodel(
 	printf("\na_w = \n\t");
 	for (k_scene = 0; k_scene < md->n_scenes; k_scene++) {
 		for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
-			a_w[k_scene][k_band] = interp_1d(ref_wlens, aw_Pope_Fry1997, n_ref_wlens, wavelengths[k_scene][k_band]);
+			a_w[k_scene][k_band] = scene_water(&scene_data[scene_indexes[k_scene]], k_band, WATER_AW, wavelengths[k_scene][k_band]);
 			printf("%.5f\t", a_w[k_scene][k_band]);
 		}
 		printf("\n\t");
@@ -845,7 +674,9 @@ void samodel(
 	for (k_bottom = 0; k_bottom < md->n_bottoms; k_bottom++) {
 		for (i = 0; i < md->n_scenes; i++) {
 			for (j = 0; j < md->n_bands[i]; j++) {
-				bottom_reflectance[k_bottom][i][j] = interp_1d(ref_wlens, bottom_types[k_bottom], n_ref_wlens, md->wavelengths[i][j]);
+				bottom_reflectance[k_bottom][i][j] = scene_data[scene_indexes[i]].srf_present ?
+					spectra_bottom_srf(k_bottom, scene_data[scene_indexes[i]].srf, scene_data[scene_indexes[i]].srf_band[j]) :
+					spectra_bottom(k_bottom, md->wavelengths[i][j]);
 			}
 		}
 	}
@@ -2014,7 +1845,6 @@ min/mean/max min(K) = %.4f %.4f %.4f\n",
 	free_double_array_2d(K, nscenes);
 	free_double_array_2d(rrs_noise, nscenes);
 
-	free_double_array_2d(bottom_types, n_bottom_table);
 	free_double_array_3d(bottom_reflectance, max_bottom_types, nscenes); 
 
   // End of parallel region.
@@ -2083,8 +1913,8 @@ void samodel_bounds(model_data *md, double *lo, double *hi) {
 #if BOTTOM_BOUNDS
 			lo[n_regions + k*block + k_bottom] = 0.0;      // cover weight
 			hi[n_regions + k*block + k_bottom] = 1.0;
-			lo[n_regions + k*block + nb + k_bottom] = MIN(bright_lo[type], 1.0/shape_max);
-			hi[n_regions + k*block + nb + k_bottom] = MIN(bright_hi[type], 1.0/shape_max);
+			lo[n_regions + k*block + nb + k_bottom] = MIN(spectra_bottom_min(type), 1.0/shape_max);
+			hi[n_regions + k*block + nb + k_bottom] = MIN(spectra_bottom_max(type), 1.0/shape_max);
 #else
 			lo[n_regions + k*block + k_bottom] = 0.0;
 			hi[n_regions + k*block + k_bottom] = 1.0/shape_max;
@@ -2175,7 +2005,7 @@ void samodel_pack(model_data *md, double *H, double *albedo, double *q, double *
 #if BOTTOM_BOUNDS
 			type = md->bottom_type_indexes[k];
 			params[n_regions + k_region*block + k] = clamp(q[k_region*n_bottoms + k], 0.0, 1.0);
-			params[n_regions + k_region*block + n_bottoms + k] = clamp(albedo[k_region], bright_lo[type], bright_hi[type]);
+			params[n_regions + k_region*block + n_bottoms + k] = clamp(albedo[k_region], spectra_bottom_min(type), spectra_bottom_max(type));
 #else
 			(void) type;
 			params[n_regions + k_region*block + k] = clamp(albedo[k_region]*q[k_region*n_bottoms + k], 0.0, 1.0);
@@ -2411,6 +2241,23 @@ static double positive_contrast(double D, double s) {
 }
 #endif
 
+// Fixed weights of the Rrs rows by wavelength (EXPERIMENTS.md, "Inversion and correction variants"):
+// 1 below 640 nm, BAND_WEIGHT_RED from 640 to 750 nm (red and
+// red edge, which see little of the bottom), 0 beyond. 0: every band 1, as before.
+
+#ifndef BAND_WEIGHTS
+#define BAND_WEIGHTS 0
+#endif
+#ifndef BAND_WEIGHT_RED
+#define BAND_WEIGHT_RED 0.5
+#endif
+
+static inline double band_weight(model_data *md, int k_scene, int k_band) {
+	double lambda = md->wavelengths[k_scene][k_band];
+	if (! BAND_WEIGHTS || lambda < 640.0) return 1.0;
+	return lambda < 750.0 ? BAND_WEIGHT_RED : 0.0;
+}
+
 // The rows of scene k_scene in the residuals of region k_region (r: the region's block): its Rrs
 // rows and its ratio rows. A scene's rows depend only on its own water, so a water parameter's
 // Jacobian column needs only its scene's rows (lm_jacobian).
@@ -2427,7 +2274,7 @@ static void region_scene_residuals(double *params, model_data *md, int k_region,
 	samodel_unpack_scene(params, md, k_scene, &P, &G, &X);
 	for (k_band = 0; k_band < md->n_bands[k_scene]; k_band++) {
 		samodel_Rrs(P, G, X, B, q, H, GLINT_OFFSET ? md->D[k_scene] : 0.0, md, k_scene, k_band, k_region);
-		r[n++] = scale*(md->Rrs_modelled[k_region][k_scene][k_band] - md->Rrs_measured[k_region][k_scene][k_band]);
+		r[n++] = scale*band_weight(md, k_scene, k_band)*(md->Rrs_modelled[k_region][k_scene][k_band] - md->Rrs_measured[k_region][k_scene][k_band]);
 	}
 
 #if RATIO_CONSISTENCY
@@ -2793,7 +2640,7 @@ static int region_jacobian(double *params, model_data *md, int k_region, double 
 			if (Hs < 0.0) Hs = 0.0;
 			e_C = exp(-M_C*K*Hs);
 			e_B = exp(-M_B*K*Hs);
-			dR = scale*0.5/((1.0 - 1.5*rrs)*(1.0 - 1.5*rrs));
+			dR = scale*band_weight(md, k_scene, k_band)*0.5/((1.0 - 1.5*rrs)*(1.0 - 1.5*rrs));
 			d[n] = Hs > 0.0 ? dR*K*(rrs_dp*M_C*e_C - rho/PI*M_B*e_B) : 0.0;
 			for (k = 0; k < nb; k++) {
 				type = md->bottom_type_indexes[k];
@@ -2812,16 +2659,25 @@ static int region_jacobian(double *params, model_data *md, int k_region, double 
 #endif
 }
 
+// Phytoplankton absorption per unit P, a_phi/P = a_0 + a_1 ln P (Lee 1994), held at zero where
+// it would go negative (in the red for P below about 0.006 /m), as absorption cannot.
+
+static double aphi_shape(double a_0, double a_1, double P) {
+	double v = a_0 + a_1*log(P);
+	return v > 0.0 ? v : 0.0;
+}
+
 // Absorption a, backscattering bb and their derivatives with respect to ln P, ln G, ln X and
 // Y (da[4], dbb[4]) at one wavelength, as samodel_Rrs and deep_rrs compute them (P, G > 0).
 
 static void water_iops(double a_0, double a_1, double a_w, double b_bw, double lambda, double P, double G,
 	double X, double Y, double *a, double *bb, double *da, double *dbb) {
-	const double S = 0.015;
+	const double S = CDOM_SLOPE;
 	double a_g = G*exp(-S*(lambda - 440.0)), b_p = X*pow(440.0/lambda, Y);
-	*a = a_w + (a_0 + a_1*log(P))*P + a_g;
+	double shape = aphi_shape(a_0, a_1, P);
+	*a = a_w + shape*P + a_g;
 	*bb = b_bw + b_p;
-	da[0] = (a_0 + a_1*log(P) + a_1)*P;
+	da[0] = shape > 0.0 ? (shape + a_1)*P : 0.0;
 	da[1] = a_g;
 	da[2] = 0.0;
 	da[3] = 0.0;
@@ -2841,8 +2697,8 @@ static void water_Y_derivatives(double P, double G, double X, double Y, double *
 	for (w = 0; w < 3; w++) dY[w] = 0.0;
 	if (Y <= Y_MIN || Y >= Y_MAX) return;
 	for (k = 0; k < 2; k++) {
-		water_iops(interp_1d(ref_wlens, a0_Lee, n_ref_wlens, lam[k]), interp_1d(ref_wlens, a1_Lee, n_ref_wlens, lam[k]),
-			interp_1d(ref_wlens, aw_Pope_Fry1997, n_ref_wlens, lam[k]), interp_1d(ref_wlens, bbw_Morel_1974, n_ref_wlens, lam[k]),
+		water_iops(spectra_water(WATER_A0, lam[k]), spectra_water(WATER_A1, lam[k]),
+			spectra_water(WATER_AW, lam[k]), spectra_water(WATER_BBW, lam[k]),
 			lam[k], P, G, X, Y, &a, &bb, da, dbb);
 		u = bb/(a + bb);
 		d[k] = (LEE_G0 + LEE_G1*u)*u;
@@ -2914,7 +2770,7 @@ static int water_jacobian(double *params, model_data *md, double scale, double *
 				e_C = exp(-M_C*K*Hs);
 				e_B = exp(-M_B*K*Hs);
 				rrs = rrs_dp*(1.0 - e_C) + rho/PI*e_B;
-				dR = scale*0.5/((1.0 - 1.5*rrs)*(1.0 - 1.5*rrs));
+				dR = scale*band_weight(md, k_scene, k_band)*0.5/((1.0 - 1.5*rrs)*(1.0 - 1.5*rrs));
 				for (w = 0; w < 3; w++) {
 					d[w] = dR*(drrs_dp[w]*(1.0 - e_C) + Hs*(rrs_dp*e_C*(dM_C[w]*K + M_C*dK[w])
 						- rho/PI*e_B*(dM_B[w]*K + M_B*dK[w])));
@@ -3472,9 +3328,14 @@ void samodel_optimise(model_data *md) {
 
 		//	Individual bottom types.
 
-		lowest_single_error = 1.0e4;
+		// The fit's diagnostics (set by samodel_optimise_one_bottom_combination) of the best type.
+		bool best_deep = false;
+		double best_deep_chi2 = -1.0, best_ident_chi2 = 0.0, best_h0 = -1.0, best_depth_sigma = 0.0;
+		double *resid = malloc(sizeof(double));
+
+		lowest_single_error = 1.0e300;
 		for (i = 0; i < max_bottom_types; i++) {
-			// printf("\nTrying %s...", md->B_type_name[i]);
+			double fit_error;
 
 			md->n_bottoms = 1;
 			md->bottom_type_indexes[0] = i;
@@ -3482,22 +3343,45 @@ void samodel_optimise(model_data *md) {
 			md->n_params = samodel_n_params(md);
 
 			samodel_optimise_one_bottom_combination(md, min);
-			// printf("\n... error is %.4f", md->model_error);
 
-			if (md->model_error < lowest_single_error) {
-				lowest_single_error = md->model_error;
+			if (SELECT_BY_FIT) {
+				int k, m = samodel_n_residuals(md);
+				resid = realloc(resid, m*sizeof(double));
+				(void) samodel_residuals(min, md, resid);
+				fit_error = 0.0;
+				for (k = 0; k < m; k++) fit_error += resid[k]*resid[k];
+			} else {
+				fit_error = md->model_error;
+			}
+
+			if (fit_error < lowest_single_error) {
+				lowest_single_error = fit_error;
 				best_single_bottom = i;
 				copy_double_vec(min, best_single, md->n_params);
 
 				best_single_iterations = md->n_iterations;
 				best_single_convergence = md->converged;
+				best_deep = md->optically_deep;
+				best_deep_chi2 = md->deep_chi2;
+				best_ident_chi2 = md->ident_chi2;
+				best_h0 = md->h0;
+				best_depth_sigma = md->depth_sigma;
 			}
 		}
+		free(resid);
+
+		// Restore the best type's diagnostics (the loop leaves the last type's).
+
+		md->optically_deep = best_deep;
+		md->deep_chi2 = best_deep_chi2;
+		md->ident_chi2 = best_ident_chi2;
+		md->h0 = best_h0;
+		md->depth_sigma = best_depth_sigma;
 
 		// All pairs of bottom types. 
 
-		lowest_double_error = 1.0e4;
-		for (i = 0; i < max_bottom_types - 1; i++) {
+		lowest_double_error = 1.0e300; // Pairs (BOTTOM_PAIRS) are compared by model_error.
+		for (i = 0; i < (BOTTOM_PAIRS ? max_bottom_types - 1 : 0); i++) {
 			for (j = i + 1; j < max_bottom_types; j++) {
 				// printf("\nTrying %s and %s...", md->B_type_name[i], md->B_type_name[j]);
 
@@ -3676,7 +3560,7 @@ static double median_small(double *v, int n) {
 double samodel_h0(model_data *md, int k_region) {
 
 	int k_scene, k_band, nb, k_type, n_types, k_h, red, n_est = 0;
-	double rd[64], rr[64], u[64], kap[64], M[64], est[MAX_SCENES], g0 = 0.084, g1 = 0.170,
+	double rd[64], rr[64], u[64], kap[64], M[64], est[MAX_SCENES], g0 = LEE_G0, g1 = LEE_G1,
 		bbp_red, Y, r443, r560, bb, a, H, T, x, y, sxx, sxy, b, err, best_err, best_H, sec_sun, sec_view;
 
 	if (md->R_inf == NULL) return -1.0;
@@ -3721,8 +3605,8 @@ double samodel_h0(model_data *md, int k_region) {
 					sxy += x*y;
 				}
 				b = sxx > 0.0 ? sxy/sxx : 0.0;
-				b = b < bright_lo[md->bottom_type_indexes[k_type]] ? bright_lo[md->bottom_type_indexes[k_type]] :
-					(b > bright_hi[md->bottom_type_indexes[k_type]] ? bright_hi[md->bottom_type_indexes[k_type]] : b);
+				b = clamp(b, spectra_bottom_min(md->bottom_type_indexes[k_type]),
+					spectra_bottom_max(md->bottom_type_indexes[k_type]));
 				err = 0.0;
 				for (k_band = 0; k_band < nb; k_band++) {
 					T = exp(-M[k_band]*kap[k_band]*(H + md->H_tide[k_scene]));
@@ -3755,7 +3639,25 @@ double samodel_h0(model_data *md, int k_region) {
 // With an empirical depth, only stage 2 is run, from that depth. After a good fit at the
 // previous pixel, the water parameters start from its optimum.
 
+#ifndef N_REFINE
 #define N_REFINE 2
+#endif
+
+// Depth grid of the profile (EXPERIMENTS.md, "Inversion and correction variants"): 0, ten depths from
+// 0.5 to 30 m; 1, dense, H_(k+1) = H_k + PROFILE_STEP + PROFILE_STEP_REL H_k from PROFILE_STEP
+// to 30 m, so that neighbouring depths are about a hit tolerance (0.5 + 0.1 H) apart and the
+// global minimum of the profile is not missed between them.
+
+#ifndef PROFILE_GRID
+#define PROFILE_GRID 0
+#endif
+#ifndef PROFILE_STEP
+#define PROFILE_STEP 0.25
+#endif
+#ifndef PROFILE_STEP_REL
+#define PROFILE_STEP_REL 0.05
+#endif
+#define MAX_PROFILE_GRID 256
 
 // With an empirical depth, fit the water and bottom at that depth (held) before refining all
 // parameters (1), or refine all from photic's default start (0, as before). Off for now: it
@@ -3786,10 +3688,18 @@ double samodel_h0(model_data *md, int k_region) {
 void samodel_optimise_one_bottom_combination(model_data *md, double *params) { 
 
 	int i, k, k_h, n_h, offset, n_eval, total_count;
-	double error, lowest_error, *start, *is_free, *best, *profile, profile_error[N_REFINE], grid_error[16];
+	double error, lowest_error, *start, *is_free, *best, *profile, profile_error[N_REFINE], grid_error[MAX_PROFILE_GRID];
 
-	double H_grid[16] = {0.5, 1.0, 2.0, 3.5, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0};
+	double H_grid[MAX_PROFILE_GRID] = {0.5, 1.0, 2.0, 3.5, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0};
 	int n_grid = 10;
+
+	if (PROFILE_GRID == 1) {
+		double h = PROFILE_STEP;
+		for (n_grid = 0; h <= 30.0 && n_grid < MAX_PROFILE_GRID - 1; n_grid++) {
+			H_grid[n_grid] = h;
+			h += PROFILE_STEP + PROFILE_STEP_REL*h;
+		}
+	}
 	double H0 = SEED_MODE ? samodel_h0(md, md->origin) : -1.0;
 
 	md->h0 = H0;
@@ -3935,7 +3845,10 @@ void samodel_optimise_one_bottom_combination(model_data *md, double *params) {
 		md->deep_chi2 = n_resid*(deep_error*deep_error - lowest_error*lowest_error)/pow(100.0*sigma_rel, 2.0);
 		// k counts the bottom's degrees of freedom (depth and one amount per bottom type per
 		// region), whatever the parameterisation.
-		md->optically_deep = md->deep_chi2 < DEEP_PENALTY*md->n_regions*(1 + md->n_bottoms)*log((double) n_resid);
+		// With one bottom type per fit (ALL_BOTTOMS 0), the choice among the configured types is a
+		// degree of freedom too: k counts every type, as with all types at once.
+		int k_bottoms = ALL_BOTTOMS ? md->n_bottoms : MAX(md->n_bottoms, MIN(samodel_n_bottoms, spectra_n_bottoms()));
+		md->optically_deep = md->deep_chi2 < DEEP_PENALTY*md->n_regions*(1 + k_bottoms)*log((double) n_resid);
 	}
 #endif
 
@@ -4084,7 +3997,7 @@ double samodel_error(double *params, model_data *md) {
 
 					// RMS relative error.
 
-					error_Rrs += pow(Rrs_modelled - Rrs_measured, 2.0);
+					error_Rrs += pow(band_weight(md, k_scene, k_band)*(Rrs_modelled - Rrs_measured), 2.0);
 					total_Rrs += Rrs_measured;
 
 					// error_Rrs += pow((Rrs_modelled - Rrs_measured)/Rrs_measured, 2.0);
@@ -4379,19 +4292,19 @@ static double deep_rrs(int k, double lambda, double P, double G, double X, doubl
 
 	// Deep-water rrs at one of two cached wavelengths (k = 0, 1).
 
-	const double S = 0.015;
+	const double S = CDOM_SLOPE;
 	static double cached_lambda[2] = {-1.0, -1.0}, a_0[2], a_1[2], a_w[2], b_bw[2];
 	double a, bb, u;
 
 	if (cached_lambda[k] != lambda) {
-		a_0[k]  = interp_1d(ref_wlens, a0_Lee, n_ref_wlens, lambda);
-		a_1[k]  = interp_1d(ref_wlens, a1_Lee, n_ref_wlens, lambda);
-		a_w[k]  = interp_1d(ref_wlens, aw_Pope_Fry1997, n_ref_wlens, lambda);
-		b_bw[k] = interp_1d(ref_wlens, bbw_Morel_1974, n_ref_wlens, lambda);
+		a_0[k]  = spectra_water(WATER_A0, lambda);
+		a_1[k]  = spectra_water(WATER_A1, lambda);
+		a_w[k]  = spectra_water(WATER_AW, lambda);
+		b_bw[k] = spectra_water(WATER_BBW, lambda);
 		cached_lambda[k] = lambda;
 	}
 
-	a  = a_w[k] + (a_0[k] + a_1[k]*log(P))*P + G*exp(-S*(lambda - 440.0));
+	a  = a_w[k] + aphi_shape(a_0[k], a_1[k], P)*P + G*exp(-S*(lambda - 440.0));
 	bb = b_bw[k] + X*pow(440.0/lambda, Y);
 	u  = bb/(a + bb);
 	return (LEE_G0 + LEE_G1*u)*u;
@@ -4480,7 +4393,7 @@ void samodel_Rrs(
 	printf("\nENTER samodel_Rrs\n");
 #endif
 
-	const double S = 0.015;
+	const double S = CDOM_SLOPE;
 	int i;
 	double rho, a_phi, a_g, a, Y, b_p, bb, u, K, DuC, DuB, M_C, M_B, *cache,
 	  f, kd, kup_water, kup_bottom, rrs_dp, rrs_C, rrs_B, rrs;
@@ -4529,7 +4442,7 @@ void samodel_Rrs(
 	} else {
 		// Compute a - total absorption coefficient. 
 
-		a_phi = (a_0 + a_1*log(fabs(P)))*fabs(P); // Phytoplankton pigment absorption coefficient.
+		a_phi = aphi_shape(a_0, a_1, fabs(P))*fabs(P); // Phytoplankton pigment absorption coefficient.
 
 		a_g = fabs(G)*exp(-S*(lambda - 440.0)); // Gelbstoff absorption coefficient. 
 

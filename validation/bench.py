@@ -84,7 +84,9 @@ def cmd_run(args):
             old = json.load(open(path))
             old.setdefault("scenarios", {}).update(result.get("scenarios", {}))
             result = old
+        import spectra_inputs
         result["_meta"] = dict(commit=cid, quick=args.quick, photic=args.photic, only=args.only,
+                               spectra=spectra_inputs.describe(),
                                date=datetime.datetime.now().isoformat(timespec="seconds"))
         with open(path, "w") as f:
             json.dump(result, f, indent=1, sort_keys=True)

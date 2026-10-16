@@ -999,6 +999,76 @@ Six Landsat 8 OLI L1TP scenes (Collection 1, path 115 row 75, 2018–2021, tides
 - The Landsat scenes are from different dates to the Sentinel-2 ones, so sensor and scene conditions are confounded. A pair of same-day scenes (L8 and S2 within an hour) would separate them.
 - Tier 4 (`PHOTIC_TIER4_SITES=sites_l8`) runs in about 5 minutes.
 
+### Inversion and correction variants (2026-10-15, switches in samodel.c, all off)
+
+Four variants of the inversion and the atmospheric correction were tested one at a time against `fast3` (= `s2-e551b97`): a dense depth profile, fixed band weights, a single bottom type per fit, and adjacency-aware or tiled atmospheric correction. The table gives tier 4 Sentinel-2 hits % / RMSE, and tier 3 hits / RMSE for clear, moderate and turbid water (no-prior scenarios).
+
+| Run | Change | Bundegi | Tantabiddi | Marina | Gulf | Tier 3 clear / moderate / turbid |
+|---|---|---|---|---|---|---|
+| fast3 | baseline | 8.6 / 2.68 | 22.9 / 2.51 | 6.0 / 2.44 | 0.5 / 4.42 | 48.5 / 1.80, 25.6 / 2.29, 12.7 / 1.37 |
+| grid1 | `PROFILE_GRID=1`: dense depth profile, 39 depths 0.25–30 m | 8.4 / 2.43 | **24.0 / 2.50** | ≈ | 4.26 m | **49.0 / 1.55, 26.3 / 1.90**, 12.5 / 1.33 |
+| grid2 | coarser profile (step 0.5 m, 10%; 20 depths) | smaller gain than grid1, about 2× slower | | | | |
+| bw1 | `BAND_WEIGHTS=1`: red band weight 0.5 | 6.0 | 19.5 | RMSE 2.11 | RMSE 3.69 | 43.1 / 1.92, 22.6 / 3.40, 12.1 / 1.17 |
+| tiled | ACOLITE `dsf_aot_estimate=tiled` | 9.1 / 2.20 | 18.4 / 2.71 | 6.1 / 2.19 | RMSE 3.90 | n/a |
+| radcor | ACOLITE `atmospheric_correction_method=radcor` | | 19.1 / 2.90 | 3.7 / 2.38 | coverage ~16% | n/a |
+| ab0p0 | single bottom type, legacy selection | 13.6 / 3.08 | 38.0 / 2.37 | | RMSE 6.12 | 39.0 / 2.11 (clear) |
+| single | `ALL_BOTTOMS=0 BOTTOM_PAIRS=0`, selected by the fit's RSS (`SELECT_BY_FIT`) | 12.0 / 3.47 | 33.2 / 3.00 | 5.8 / 2.78 | 0.5 / **10.84** (bias −6.8) | 49.5 / 1.82, 31.6 / 1.40, 15.4 / 0.84 |
+| single-grid1 | single + `PROFILE_GRID=1` | ≈ single | | | | moderate RMSE 1.23 |
+| single-ident | single + `IDENTIFY=1` | | 20.6 | | RMSE 8.73 | hits 30.6 / 19.4 / 9.4: rejected |
+| single-k3 | single + strict optically deep test | | 23.7 / 2.90 | | RMSE 7.51 | 43.9 / 1.78, 28.5 / 1.10, 14.6 / 0.81: rejected |
+
+- **grid1 passes** tier 3 and tier 4, is neutral on Landsat 8, and is about 3.5× slower. It is the one candidate for adoption.
+- **bw1, tiled and radcor fail**: each lowers bias at some sites but loses hits at Tantabiddi.
+  - The ACOLITE variants needed `output_geometry=True` and the Sentinel-2 detector footprints (QI_DATA, now fetched by `tier4_fetch_s2.py`).
+  - radcor needs the crop widened by 0.1°, because `radcor_edge_extend` fails on a non-square crop. It still covers only about 16% of the Gulf entrance.
+  - `tier4_prepare.py acolite_tiled`/`sites_tiled` and `acolite_radcor`/`sites_radcor` reproduce them.
+- **Single bottom type**, the user's choice, is the largest tier 4 change: Tantabiddi 22.9 → 33.2–38.0% hits, about 3× slower. It fails at the Gulf entrance, where deep water gets false shallow depths (bias −6.8 m) that fit the data as well as the right ones. More types, `IDENTIFY` and a stricter deep test do not fix it. This is a problem of spectra and bands, which motivated the data audit below.
+- Landsat 8, single: Tantabiddi 47.4 / 1.94, Bundegi 0.4 / 5.97, Marina 3.7 / 3.55, Gulf 1.3 / 3.89.
+
+### Spectral data as files; band averaging, new water tables and a measured bottom library (2026-10-16, `data-inputs`)
+
+**Data audit.** The SA model's data were checked against their sources (REVIEW.md §2d). All of it now lives in `model/data/*.csv`, read by `spectra.c`:
+- `READ WATER`, `READ BOTTOM` (CSV, or the NetCDF of individual spectra), `SCENE ... SRF` and `PRINT SPECTRA`;
+- without `READ BOTTOM`, a built-in bright sand.
+
+The benchmark names its data explicitly (`spectra_inputs.py`), so these results compare like with like. `make test` is unchanged to the last bit.
+
+**Measured bottom library.** 520 in situ spectra from five PANGAEA libraries are packed into `model/data/bottom_spectra_insitu.nc`. 350 of them fall in 7 classes; half of each class builds `bottom_measured.csv` and the other half is held out (`bottom_library.py`).
+- With the larger sample, sand's shape (443/550 ≈ 0.70) is close to HydroLight's 0.75. The audit's sand finding came from 6 spectra that included dark sediment.
+- Seagrass, coral and the algae do differ from HydroLight.
+
+**Tier 3, `_insitu` scenarios** (new): bottoms drawn from the held-out spectra, SRF-averaged; water truth still monochromatic. Hits % / RMSE m, 2 scenes with noise 5e-4:
+
+| Run | clear | moderate | turbid |
+|---|---|---|---|
+| HydroLight, default (mixtures) | 34.8 / 2.26 | 21.3 / 1.65 | 8.8 / 0.95 |
+| measured, default | 33.9 / 2.12 | 20.8 / 1.68 | 9.0 / 1.25 |
+| HydroLight, single type (3) | 21.7 / 5.86 | 17.1 / 3.80 | 9.7 / 1.94 |
+| measured, single type (3) | 25.0 / 6.02 | 14.2 / 4.05 | 10.1 / 1.28 |
+| measured, single type (7) | 17.8 / 6.26 | 14.6 / 3.46 | 9.4 / 0.70 |
+
+- Against measured, heterogeneous bottoms, a single type per fit is far worse than mixtures in clear and moderate water (RMSE about 6 m against about 2 m). Seven types are worse than three except in turbid water.
+- The two libraries are about equal in mixture mode.
+
+**Tier 4** (Sentinel-2 hits % / RMSE m; Landsat 8 in brackets):
+
+| Run | Bundegi | Tantabiddi | Marina | Gulf entrance |
+|---|---|---|---|---|
+| `fast3` / `l8-head` | 8.6 / 2.68 (0.5 / 4.48) | 22.9 / 2.51 (40.3 / 1.65) | 6.0 / 2.44 (4.1 / 3.03) | 0.5 / 4.42 (1.4 / 2.68) |
+| `srf-hl`: SRF averaging | 8.7 / 2.69 (0.5 / 4.20) | **18.7** / 2.65 (**34.6** / 1.55) | 6.5 / **2.24** (4.7 / **2.11**) | 0.6 / **3.25** (2.0 / 2.20) |
+| `w-hl`: full Pope & Fry, Zhang b_bw | 8.3 / 2.53 (0.5 / 4.56) | 24.2 / 2.42 (38.8 / 1.58) | 5.8 / 2.46 (4.0 / 3.05) | 0.5 / 4.26 (1.7 / 2.55) |
+| `srfw-hl`: both | 9.0 / 2.63 (0.5 / 4.27) | 19.1 / 2.65 (34.4 / 1.54) | 6.4 / 2.30 (4.6 / 2.15) | 0.5 / 3.67 (2.1 / 2.24) |
+| `meas-default`: measured library | 6.0 / 2.53 (0.3 / 4.57) | 24.4 / 2.45 (41.4 / 1.51) | 4.8 / 2.54 (3.5 / 2.78) | 0.5 / 4.58 (1.5 / 2.48) |
+| `single` (HydroLight, 3 types) | 12.0 / 3.47 (0.4 / 5.97) | 33.2 / 3.00 (47.4 / 1.94) | 5.8 / 2.78 (3.7 / 3.55) | 0.5 / 10.84 (1.3 / 3.89) |
+| `meas-single3` | 7.7 / 3.38 (0.3 / 4.47) | 23.7 / 2.88 (41.1 / 1.85) | 5.8 / 2.69 (5.3 / 2.78) | 0.5 / 9.24, bias +0.37 (1.4 / 3.53) |
+| `meas-single7` | 4.1 / 2.82 (0.3 / 4.05) | 13.0 / 2.82 (30.2 / 1.69) | 5.6 / 2.51 (5.0 / 2.08) | 0.5 / 8.90 (1.6 / 2.25) |
+
+- **SRF averaging is the physically correct band model but fails the acceptance rule.** It lowers bias and RMSE at Marina, the Gulf entrance and Bundegi (L8), but costs Tantabiddi 4–6 points on both sensors. The rest of the model (Lee's coefficients, the bottom library, ACOLITE's Rrs) may be tuned, implicitly, to band-centre tables. `SRF` stays optional.
+- **The new water tables are within the noise floor.** They are available (`aw_pope_fry_1997_full.csv`, `bbw_zhang_2009.csv`) but not the default.
+- **The measured library is mixed in mixture mode:** Tantabiddi +1.5, Bundegi −2.6, Marina −1.2. With a single type it loses the hits HydroLight single-type gains, but it removes most of the Gulf entrance's false-depth bias (−6.8 → +0.4 m). Not the default.
+- **Seven measured types, single:** coverage roughly halves (Tantabiddi 48 → 24%), because the optically deep test counts every type's degrees of freedom, so hits fall. RMSE is lower where depths are given. More types is not a route to more hits.
+- **Decision:** no default changes. All of it ships as data and options. Note for the RT forward model spec (`BATHY_PDE_APPROACH.tex`): band averaging must come with a forward model that is itself exact, or its gains are offset elsewhere.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

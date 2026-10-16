@@ -113,8 +113,6 @@ float sounding_error = 0.0;
 float constraint_error = 0.0;
 float local_constraint_error = 0.0;
 
-float **bottom_spectra;
-int n_bottom_spectra = 0;
 
 float noise_threshold = 0.025;
 float min_radiance_threshold = 0.0;

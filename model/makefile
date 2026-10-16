@@ -72,6 +72,8 @@ test-baseline: tests/run
 %.o: %.c
 	$(CC) $(ALL_CFLAGS) -c $< -o $@
 
+spectra.o: ALL_CFLAGS += -DPHOTIC_DATA_DIR='"$(PHOTIC_DATA_DIR)"'
+
 clean:
 	rm -f *.o *.d tests/*.o tests/*.d photic xyz2nc $(UTILS) tests/synth_gen tests/synth_check
 	rm -rf tests/run

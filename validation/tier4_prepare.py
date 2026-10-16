@@ -34,7 +34,7 @@ SITES = {  # west, east, south, north, cell size (deg; 0.0002 ~ 21 m)
 LIMIT = [-21.99, 113.95, -21.62, 114.45]  # S, W, N, E for ACOLITE
 
 
-def run_acolite(inputfile, out, limit=LIMIT):
+def run_acolite(inputfile, out, limit=LIMIT, **extra):
     sys.path.insert(0, os.path.join(DATA, "tools", "acolite"))
     import acolite as ac
     settings = dict(inputfile=inputfile, output=out, limit=limit, s2_target_res=20,
@@ -42,14 +42,15 @@ def run_acolite(inputfile, out, limit=LIMIT):
                     dsf_residual_glint_correction=True, l2w_parameters=["Rrs_*"],
                     rgb_rhot=False, rgb_rhos=False, map_l2w=False,
                     l1r_delete_netcdf=True, l2r_delete_netcdf=True)
+    settings.update(extra)
     ac.acolite.acolite_run(settings=settings)
 
 
-def acolite_all(raw="s2", derived="acolite", limit=LIMIT):
-    """ACOLITE on every scene in raw/<raw> (Sentinel-2 .SAFE or Landsat scene directories), written
-    to derived/tier4/<derived>/<scene>."""
+def acolite_all(raw="s2", derived="acolite", limit=LIMIT, scenes=None, **extra):
+    """ACOLITE on every scene in raw/<raw> (Sentinel-2 .SAFE or Landsat scene directories; those
+    named in scenes, or all), written to derived/tier4/<derived>/<scene>; extra: ACOLITE settings."""
     for scene in sorted(glob.glob(os.path.join(DATA, "raw", raw, "*"))):
-        if not os.path.isdir(scene):
+        if not os.path.isdir(scene) or (scenes is not None and os.path.basename(scene) not in scenes):
             continue
         name = os.path.basename(scene).replace(".SAFE", "")
         out = os.path.join(DATA, "derived", "tier4", derived, name)
@@ -57,7 +58,7 @@ def acolite_all(raw="s2", derived="acolite", limit=LIMIT):
             print("done:", name)
             continue
         print("ACOLITE:", name, flush=True)
-        run_acolite(scene, out, limit)
+        run_acolite(scene, out, limit, **extra)
 
 
 def site_grid(site, sites=SITES, min_cell=0.0):
@@ -255,6 +256,21 @@ if __name__ == "__main__":
         prepare_sites(sites_name="sites16")
     elif sys.argv[1:] == ["sites16_5"]:
         prepare_sites(RED_EDGE_BANDS, "sites16_5")
+    elif sys.argv[1:] == ["acolite_tiled"]:
+        # Aerosol estimated per tile (ACOLITE's own default) rather than one value for the scene.
+        acolite_all(derived="acolite_tiled", scenes=tier4_fetch_s2.SCENES, dsf_aot_estimate="tiled",
+                    output_geometry=True)  # tiled needs the per-pixel geometry
+    elif sys.argv[1:] == ["sites_tiled"]:
+        prepare_sites(sites_name="sites_tiled", scenes_only=tier4_fetch_s2.SCENES, acolite="acolite_tiled")
+    elif sys.argv[1:] == ["acolite_radcor"]:
+        # Adjacency (land) correction: RAdCor, which replaces the dark spectrum fitting (its
+        # edge extension fails on a non-square crop).
+        # The crop is widened by ~10 km, beyond the 5 km kernel (at the crop's edges RAdCor masks).
+        acolite_all(derived="acolite_radcor", scenes=tier4_fetch_s2.SCENES,
+                    limit=[LIMIT[0] - 0.1, LIMIT[1] - 0.1, LIMIT[2] + 0.1, LIMIT[3] + 0.1],
+                    atmospheric_correction_method="radcor")
+    elif sys.argv[1:] == ["sites_radcor"]:
+        prepare_sites(sites_name="sites_radcor", scenes_only=tier4_fetch_s2.SCENES, acolite="acolite_radcor")
     elif sys.argv[1:] == ["acolite_l8"]:
         acolite_all("l8", "acolite_l8")
     elif sys.argv[1:] == ["sites_l8"]:

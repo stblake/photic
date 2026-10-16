@@ -302,7 +302,8 @@ def run_case(photic, case, pts, rundir, fresh=False, start=None, scenes=None, ri
             bam = rinf.add_rinf(bam, rinf.image_rinf_for_dir(case["dir"]))
         if "rsigma" in parts and case["tier"] == 4:
             bam = rinf.add_rsigma(bam, rinf.image_rinf_for_dir(case["dir"], fn=rinf.image_rsigma))
-    open(os.path.join(rundir, "run.bam"), "w").write(bam)
+    import spectra_inputs
+    open(os.path.join(rundir, "run.bam"), "w").write(spectra_inputs.with_spectra(bam, case.get("meta"), case.get("site")))
     t0 = time.time()
     with open(os.path.join(rundir, "photic.log"), "w") as log:
         subprocess.run([photic, "run.bam"], cwd=rundir, stdin=subprocess.DEVNULL, stdout=log,

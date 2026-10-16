@@ -67,6 +67,8 @@ def wanted(name):
         return False
     if "/IMG_DATA/" in name and base.endswith(".jp2"):
         return True
+    if "/QI_DATA/" in name and "DETFOO" in base:
+        return True  # detector footprints, for ACOLITE's per-pixel geometry (output_geometry)
     return base in ("MTD_MSIL1C.xml", "MTD_TL.xml", "manifest.safe")
 
 

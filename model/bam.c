@@ -149,6 +149,7 @@
 */
 
 #include "bam.h"
+#include "spectra.h"
 
 #define BAM_VERSION "1.95"
 
@@ -166,6 +167,7 @@ void run_read_grid();
 void run_read_soundings();
 void run_read_commands();
 void run_read_bottom();
+void run_read_water();
 void run_read();
 void interpreter();
 void run_help();
@@ -572,6 +574,9 @@ void run_combine() {
   }
 
   scene_data[ps_output_scene].n_bands = scene_data[ps_in[0]].n_bands;
+  scene_data[ps_output_scene].srf_present = scene_data[ps_in[0]].srf_present;
+  scene_data[ps_output_scene].srf = scene_data[ps_in[0]].srf;
+  memcpy(scene_data[ps_output_scene].srf_band, scene_data[ps_in[0]].srf_band, sizeof(scene_data[ps_in[0]].srf_band));
   nbands = scene_data[ps_output_scene].n_bands;
   printf("\nn_bands = %d\n", nbands);
 
@@ -1322,7 +1327,7 @@ CHARTDATUM /chart datum for file/ DEPTHRANGE /depth min/ /depth max/ SPVAL /soun
 //    THETAVIEW /subsurface viewing angle from nadir/ THETASUN /subsurface solar zenith angle/ ...
 //    RINF /R_inf band 1/ /R_inf band 2/ ... HTIDE /tidal offset to MSL/ K /K band 1/ 
 //    /K band 2/ ... RSIGMA /R sigma band 1/ /R sigma band 2/ ... KSIGMA /K sigma band 1/ 
-//    /K sigma band 2/ ... [optional] P /P grid/ G /G grid/ X /X grid/
+//    /K sigma band 2/ ... [optional] P /P grid/ G /G grid/ X /X grid/ SRF /spectral response .csv/
 
 void run_scene() {
 
@@ -1381,6 +1386,7 @@ RINF /R_inf band 1/ /R_inf band 2/ ... HTIDE /tidal offset to MSL/ K /K band 1/ 
   // Set number of spectral bands. 
 
   scene_data[ps_scene].n_bands = nbands;
+  scene_data[ps_scene].srf_present = false;
 
   // Read wavelengths. 
 
@@ -1542,6 +1548,28 @@ RINF /R_inf band 1/ /R_inf band 2/ ... HTIDE /tidal offset to MSL/ K /K band 1/ 
     x_present = true;
     success = parse_old_grid(&ps_x, ++k);
     if (! success) return ;
+    k++;
+  }
+
+// [optional] Read SRF /spectral response file/: the model's tables are averaged over each band's
+// response (model/data/srf), and the band's wavelength becomes the response's centroid.
+
+  if (strcmp(parsed[k], "SRF") == 0) {
+    int srf = spectra_read_srf(parsed[++k]);
+    if (srf < 0) return ;
+    printf("\nSRF = %s\n", parsed[k]);
+    for (n = 0; n < nbands; n++) {
+      scene_data[ps_scene].srf_band[n] = spectra_srf_band(srf, scene_data[ps_scene].wavelengths[n]);
+      if (scene_data[ps_scene].srf_band[n] < 0) {
+        printf("\nERROR: no band of %s within 20 nm of %d nm.\n", parsed[k], scene_data[ps_scene].wavelengths[n]);
+        return ;
+      }
+      printf("    %d nm: %s, centroid %.1f nm\n", scene_data[ps_scene].wavelengths[n],
+        spectra_srf_band_name(srf, scene_data[ps_scene].srf_band[n]),
+        spectra_srf_centroid(srf, scene_data[ps_scene].srf_band[n]));
+    }
+    scene_data[ps_scene].srf = srf;
+    scene_data[ps_scene].srf_present = true;
     k++;
   }
 
@@ -3004,7 +3032,7 @@ void run_model_lee_semi_analytical() {
 
   int k, n, m, nrows, ncols, nscenes, nbands, ps_in[MAX_GRIDS], ps_bathy, ps_model_error, ps_empirical_depths,
     ps_bottom_albedo, ps_bottom_sand, ps_bottom_seagrass, ps_bottom_coral, ps_kd_min, ps_bottom_type, 
-    ps_index_optical_depth, ps_bathy_sigma, ps_points = 0;
+    ps_index_optical_depth, ps_bathy_sigma, ps_points = 0, n_bottoms;
   bool success, empirical_depth_present, points_present = false, bottom_only = false;
 
   // Can we allocate the 8 new grids? 
@@ -3013,6 +3041,17 @@ void run_model_lee_semi_analytical() {
     printf("\nERROR: unable to store grids.\n");
     return ;
   }    
+
+  // Spectral data: the default files for any tables not read with READ WATER or READ BOTTOM.
+
+  if (spectra_load_defaults() != 0) {
+    return ;
+  }
+  n_bottoms = MIN(samodel_n_bottoms, spectra_n_bottoms());
+  if (n_bottoms < samodel_n_bottoms) {
+    printf("\nNOTE: NBOTTOMS is %d, but the bottom library has %d type%s (READ BOTTOM); using %d.\n",
+      samodel_n_bottoms, spectra_n_bottoms(), spectra_n_bottoms() == 1 ? "" : "s", n_bottoms);
+  }
 
   // Input scenes. 
 
@@ -3272,7 +3311,7 @@ DEPTHS /depth estimates/ POINTS /cells to model/ BOTTOMONLY \n");
   samodel(scene_data, gridded_data, ps_in, nscenes, // inputs
     empirical_depth_present, gridded_data[ps_empirical_depths],
     points_present, gridded_data[ps_points],
-    samodel_n_smoothing_radius, samodel_n_spatial, samodel_n_bottoms,
+    samodel_n_smoothing_radius, samodel_n_spatial, n_bottoms,
     bathy, bathy_sigma, model_error, bottom_albedo, bottom_sand, bottom_seagrass, bottom_coral, kd_min, bottom_type, index_optical_depth, // outputs
     pagesize, background, line_width // graphics 
   );
@@ -5977,6 +6016,15 @@ void run_print() {
   int n, ps;
   bool present = false;
 
+// SPECTRA: the water tables and bottom library MODEL Lee_Semi_Analytical will use.
+
+  if (strcmp(parsed[1], "SPECTRA") == 0) {
+    if (spectra_load_defaults() == 0) {
+      spectra_print();
+    }
+    return ;
+  }
+
 // REGRESSIONWEIGHT
 
   if (strcmp(parsed[1], "REGRESSIONWEIGHT") == 0) {
@@ -6246,42 +6294,71 @@ void run_read() {
     run_read_soundings();
   } else if (strcmp(parsed[1], "BOTTOM") == 0) {
     run_read_bottom();
+  } else if (strcmp(parsed[1], "WATER") == 0) {
+    run_read_water();
   } else {
     printf("\nERROR: unknown command '%s'\n", parsed[1]);
   }
 }
 
 
-// READ BOTTOM /bottom spectra file/
+// READ BOTTOM /bottom library .csv/ replaces the bottom reflectance library. A NetCDF file of
+// individual spectra (model/data/bottom_spectra_insitu.nc) gives one type per class, built from
+// the library half of each class's spectra (ALL: every spectrum), in the file's order or that of
+// CLASSES /class 1/ /class 2/ ...:
+//   READ BOTTOM /spectra .nc/ [optional] CLASSES /class 1/ /class 2/ ... ALL
+// READ WATER /water tables .csv/ replaces the water tables the file holds (aw, bbw, a0, a1).
+// The formats are in model/data/README.md. Without READ WATER, MODEL Lee_Semi_Analytical uses
+// the default water files in model/data (or $PHOTIC_DATA); without READ BOTTOM, a built-in
+// bright sand.
 
 void run_read_bottom() {
 
-  int nrows, ncols; 
+  char *classes[MAX_ARGS];
+  int k = 3, n_classes = 0, all_halves = 0, status;
 
-// Check bottom spectra has not been read in already. 
-
-  if (n_bottom_spectra > 0) {
-    printf("\n\nERROR: bottom spectra already specified.\n\n");
+  if (parsed[2][0] == '\0') {
+    printf("\nERROR: READ BOTTOM /bottom library .csv/\n"
+      "       READ BOTTOM /spectra .nc/ [optional] CLASSES /class 1/ /class 2/ ... ALL\n");
     return ;
   }
 
-// Read file name. 
+  if (strstr(parsed[2], ".nc") != NULL) {
+    if (strcmp(parsed[k], "CLASSES") == 0) {
+      for (k++; k < MAX_ARGS && parsed[k][0] != '\0' && strcmp(parsed[k], "ALL") != 0; k++) {
+        classes[n_classes++] = parsed[k];
+      }
+      if (n_classes == 0) {
+        printf("\nERROR: READ BOTTOM /spectra .nc/ CLASSES needs at least one class.\n");
+        return ;
+      }
+    }
+    if (strcmp(parsed[k], "ALL") == 0) {
+      all_halves = 1;
+      k++;
+    }
+    if (parsed[k][0] != '\0') {
+      printf("\nERROR: READ BOTTOM: unexpected '%s'\n", parsed[k]);
+      return ;
+    }
+    status = spectra_read_bottom_nc(parsed[2], classes, n_classes, all_halves);
+  } else {
+    status = spectra_read_bottom(parsed[2]);
+  }
+  if (status == 0) {
+    spectra_print();
+  }
+}
 
-  if (! file_exists(parsed[2])) {
-    printf("\nERROR: missing file '%s'\n", parsed[2]);
+void run_read_water() {
+
+  if (parsed[2][0] == '\0') {
+    printf("\nERROR: READ WATER /water tables .csv/\n");
     return ;
   }
-
-// Check csv file. 
-
-  if (strstr(parsed[2], ".csv") == NULL) { // Crude check.
-    printf("\nERROR: output file should have the extension .csv\n");
-    return ;
+  if (spectra_read_water(parsed[2]) == 0) {
+    spectra_print();
   }
-
-  read_csv(parsed[2], &bottom_spectra, &nrows, &ncols);
-
-  n_bottom_spectra = nrows; 
 }
 
 

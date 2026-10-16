@@ -12,14 +12,16 @@
 
 #include "common.h"
 #include "samodel.h"
+#include "spectra.h"
 
 #define NROWS 16
 #define NCOLS 16
 #define NSCENES 2
 #define NBANDS 4
 
-extern int n_ref_wlens;
-extern double ref_wlens[], aw_Pope_Fry1997[], bbw_Morel_1974[], a0_Lee[], a1_Lee[], bottom_type_sand[];
+// The spectral data, read from model/data as synth.bam does (bottom type 1, sand).
+static const char *data_files[] = {"aw_pope_fry_1997.csv", "bbw_morel_1974.csv", "aphi_lee_1994.csv",
+  "bottom_hydrolight.csv"};
 
 static const double wlon = 115.0, slat = -21.0, cellsize = 0.0003;
 static const double wavelengths[NBANDS] = {443.0, 482.0, 561.0, 655.0};
@@ -78,10 +80,16 @@ int main(int argc, char **argv) {
   float ***bands, **truth;
   char name[64];
   int i, j, s, b, it;
+  char path[1024];
 
   if (argc != 2) {
     printf("\nUsage: synth_gen /output directory/\n\n");
     return 1;
+  }
+
+  for (i = 0; i < 4; i++) {
+    snprintf(path, sizeof(path), "%s/%s", spectra_data_dir(), data_files[i]);
+    if ((i < 3 ? spectra_read_water(path) : spectra_read_bottom(path)) != 0) return 1;
   }
 
   // Model data for one region.
@@ -116,11 +124,11 @@ int main(int argc, char **argv) {
     Rrs750[0][s] = 0.0;
     for (b = 0; b < NBANDS; b++) {
       wl[s][b] = wavelengths[b];
-      a_0[s][b] = interp_1d(ref_wlens, a0_Lee, n_ref_wlens, wavelengths[b]);
-      a_1[s][b] = interp_1d(ref_wlens, a1_Lee, n_ref_wlens, wavelengths[b]);
-      a_w[s][b] = interp_1d(ref_wlens, aw_Pope_Fry1997, n_ref_wlens, wavelengths[b]);
-      b_bw[s][b] = interp_1d(ref_wlens, bbw_Morel_1974, n_ref_wlens, wavelengths[b]);
-      bottom_reflectance[0][s][b] = interp_1d(ref_wlens, bottom_type_sand, n_ref_wlens, wavelengths[b]);
+      a_0[s][b] = spectra_water(WATER_A0, wavelengths[b]);
+      a_1[s][b] = spectra_water(WATER_A1, wavelengths[b]);
+      a_w[s][b] = spectra_water(WATER_AW, wavelengths[b]);
+      b_bw[s][b] = spectra_water(WATER_BBW, wavelengths[b]);
+      bottom_reflectance[0][s][b] = spectra_bottom(0, wavelengths[b]);
     }
   }
 
