@@ -236,6 +236,7 @@ def pack():
         nc.license = "CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/); cite the sources below"
         nc.sources = "\n".join(c for _, _, c in SOURCES)
         nc.history = "validation/bottom_library.py pack"
+        nc.classes = " ".join(c for c, _ in CLASSES)  # photic's type order (READ BOTTOM)
         nc.createDimension("wavelength", len(GRID))
         nc.createDimension("spectrum", len(spectra))
         nc.createDimension("source", len(SOURCES))
