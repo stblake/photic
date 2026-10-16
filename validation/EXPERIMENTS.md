@@ -1067,6 +1067,7 @@ The benchmark names its data explicitly (`spectra_inputs.py`), so these results 
 - **The new water tables are within the noise floor.** They are available (`aw_pope_fry_1997_full.csv`, `bbw_zhang_2009.csv`) but not the default.
 - **The measured library is mixed in mixture mode:** Tantabiddi +1.5, Bundegi −2.6, Marina −1.2. With a single type it loses the hits HydroLight single-type gains, but it removes most of the Gulf entrance's false-depth bias (−6.8 → +0.4 m). Not the default.
 - **Seven measured types, single:** coverage roughly halves (Tantabiddi 48 → 24%), because the optically deep test counts every type's degrees of freedom, so hits fall. RMSE is lower where depths are given. More types is not a route to more hits.
+- **Bottom: mixtures stay.** Given the tier 3 `_insitu` result, photic keeps fitting a mixture of bottom types (`ALL_BOTTOMS 1`, the default), not one type at a time. `ALL_BOTTOMS 0` stays as an option.
 - **Decision:** no default changes. All of it ships as data and options. Note for the RT forward model spec (`BATHY_PDE_APPROACH.tex`): band averaging must come with a forward model that is itself exact, or its gains are offset elsewhere.
 
 ### Phase B order (from Phase A)

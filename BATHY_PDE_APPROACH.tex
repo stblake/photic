@@ -141,8 +141,14 @@ the volume scattering function. The boundary conditions are:
 \end{align}
 The surface operators are Fresnel reflection and transmission, averaged over the Cox--Munk
 distribution of wave slopes \cite{coxmunk1954} for a rough surface. The bottom is Lambertian,
-with $\rho_b(\bx,\lambda) = B(\bx)\,\hat\rho_{k(\bx)}(\lambda)$: one shape $\hat\rho_k$ from the
-bottom library per pixel (\textit{photic}'s single-type rule) and a brightness $B$.
+with a mixture of the library's types:
+\begin{equation}\label{eq:bottom-mix}
+\rho_b(\bx,\lambda) = \sum_k q_k(\bx)\,B_k(\bx)\,\hat\rho_k(\lambda), \qquad q_k \ge 0,\ \sum_k q_k = 1.
+\end{equation}
+Here $\hat\rho_k$ are the library's shapes, $q_k$ the cover fractions, and $B_k$ each type's
+brightness within the library's bounds. This is \textit{photic}'s existing \code{BOTTOM\_BOUNDS}
+parameterisation. Real seabeds are mixed within a pixel, so fitting a single type per pixel is
+much worse against measured bottoms (\S\ref{sec:risks}).
 
 \subsection{Water IOPs}
 
@@ -246,7 +252,7 @@ measured in test T6 (\S\ref{sec:tests}).
 Symbol & Meaning & Shared across scenes? & Stage\\
 \midrule
 $H$ & depth below datum, per region of the window & yes & M1\\
-$k$, $B$ & bottom type (discrete), brightness per region & yes & M1\\
+$q_k$, $B_k$ & cover fractions and brightnesses per region & yes & M1\\
 $\ln P, \ln G, \ln X$ & water IOPs per scene (window-constant) & no & M1\\
 $\Delta_t$ & glint offset per scene (\code{GLINT\_OFFSET}) & no & M1\\
 $\tau_{a,t}$ & aerosol optical depth at 550\,nm per scene & no & M3\\
@@ -275,15 +281,16 @@ adjoint RTE becomes necessary only for the optional global solve (M6), in which 
 atmosphere and adjacency couple all pixels. The design for that is in
 Appendix~\ref{app:adjoint}.
 
-\subsection{Discrete choices}
+\subsection{The bottom mixture and discrete choices}
 
-The bottom type and aerosol model are chosen by block-coordinate descent:
-\begin{enumerate}
-\item fit the continuous parameters for each candidate;
-\item keep the candidate with the lowest $\chi^2$ (\code{SELECT\_BY\_FIT}).
-\end{enumerate}
-The optically deep alternative is the existing test, with $R_0(\tau\to\infty)$ from the
-table.
+The bottom is a mixture \eqref{eq:bottom-mix}, fitted with the other continuous parameters as
+\textit{photic} does now (\code{ALL\_BOTTOMS 1}). A mixture is still a Lambertian bottom, so the
+closed form \eqref{eq:bottom-closed} holds with $\rho_b(\lambda)$ the mixture's reflectance in
+each sub-sample, and the table needs no change.
+
+The aerosol model is a discrete choice. It is made by fitting each candidate and keeping the
+lowest $\chi^2$. The optically deep alternative is the existing test, with
+$R_0(\tau\to\infty)$ from the table.
 
 %============================================================================================
 \part{Implementation specification}
@@ -523,9 +530,10 @@ The partial derivatives of the similarity variables with respect to the IOPs are
 The IOP derivatives with respect to $\ln P$, $\ln G$, $\ln X$ and $Y$ are those of
 \code{water\_iops}, with $b_p = b_{bp}/B_p$. For the bottom,
 \begin{equation}
-\frac{\partial R_{rs}}{\partial\rho_b} = \frac{A}{(1-C\rho_b)^2}, \qquad
-\frac{\partial\rho_b}{\partial B} = \hat\rho_k.
+\frac{\partial R_{rs}}{\partial\rho_b} = \frac{A}{(1-C\rho_b)^2},
 \end{equation}
+with $\partial\rho_b/\partial B_k$ and $\partial\rho_b/\partial w_k$ as in the existing
+\code{region\_jacobian}, for cover weights $w_k$ with $q_k = w_k/\sum w$.
 Band averaging \eqref{eq:obs} is linear, so the Jacobian rows are the same weighted sums of
 the sub-sample derivatives. All derivatives are those of the interpolant, so the
 Gauss--Newton model and the depth $\sigma$ (\code{DEPTH\_SIGMA}) are consistent with the
@@ -557,7 +565,7 @@ from \S\ref{sec:jacobian}. Until they exist, RT mode uses the existing finite-di
 \code{INTERREFLECTION} (now exact in \eqref{eq:bottom-closed}) and the conversion
 $0.5\,r_{rs}/(1-1.5\,r_{rs})$ are all subsumed by the table.
 \item \textbf{Kept.} The parameter vector, bounds, prior rows, \code{GLINT\_OFFSET},
-\code{Y\_MODEL}, single-type selection, profile search, LUT warm starts, depth $\sigma$ and
+\code{Y\_MODEL}, the bottom mixture, profile search, LUT warm starts, depth $\sigma$ and
 outputs.
 \item \textbf{The cache of IOPs.} \code{iop\_cache} is extended with the sub-sample $(\omega, \tau/D,
 f_w)$ per scene, so that only $\tau$ is recomputed when $H$ changes.
@@ -709,11 +717,11 @@ scene's table is cached.
 \section{Risks and open questions}\label{sec:risks}
 
 \begin{itemize}
-\item \textbf{The bottom library.} An exact forward model cannot correct a bottom shape that does
+\item \textbf{The bottom library.} An exact forward model cannot correct bottom shapes that do
 not match the seabed. In the \code{\_insitu} tier 3 scenarios, fitting a single type per pixel
-against heterogeneous measured bottoms is much worse than fitting mixtures (RMSE 5--6\,m
-against about 2\,m in clear water). The bottom parameterisation needs its own decision,
-independent of the RT work.
+against heterogeneous measured bottoms was much worse than fitting mixtures (RMSE 5--6\,m
+against about 2\,m in clear water), which is why the bottom is a mixture. The library's
+classes and their number remain open.
 \item \textbf{Aerosol--water trade-off.} With four visible bands, $\tau_a$ and $X$ can trade off.
 The defences are the SWIR bands, the shared seabed across scenes and the prior from the dark
 spectrum.
