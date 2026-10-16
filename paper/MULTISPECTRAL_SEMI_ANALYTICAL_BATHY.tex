@@ -34,9 +34,9 @@ $^{1}$ \quad The University of Melbourne, Melbourne, Australia}
 
 \corres{Correspondence: samuel.thomas.blake@gmail.com}
 
-\abstract{Physics-based (semi-analytical) inversion of shallow-water reflectance was designed for hyperspectral data. Applied to four-band multispectral imagery such as Sentinel-2, the joint fit of water, bottom and depth is poorly posed: on real scenes its misfit is nearly flat in depth, so the result depends on the start and the optimiser rather than on the data. We derive a semi-analytical model for multispectral imagery from Lee's shallow-water reflectance model with three changes. First, the water is observed rather than fitted: each scene's deep-water reflectance is taken from its own optically deep pixels, which are found without soundings, and the attenuation follows by a quasi-analytical algorithm. Second, the bottom brightness and a per-scene offset enter linearly, so for every depth on a fixed grid they are solved exactly; the misfit profile in depth is then exact and its global minimum is found by construction. Third, a depth is reported only when the profile excludes both optically deep water and a clearly different depth. We validate the model against radiative-transfer simulations and, without soundings or a depth prior, against singlebeam surveys at four sites in Exmouth Gulf, Western Australia, using six Sentinel-2 scenes. Settings were tuned on training sites and tested once on held-out sites. Compared with the previous semi-analytical model, depths within tolerance rose from 6--23\% to 21--54\% of the surveyed cells at three sites, at about 500 times the speed, with better-calibrated uncertainties. The gains are confined to depths of 0--5\,m: deeper bottoms are reported too shallow or abstained from, and a product calibrated with soundings remains more accurate in deeper water.}
+\abstract{Physics-based (semi-analytical) inversion of shallow-water reflectance was designed for hyperspectral data. Applied to four-band multispectral imagery such as Sentinel-2, the joint fit of water, bottom and depth is poorly posed: on real scenes its misfit is nearly flat in depth, so the result depends on the start and the optimiser rather than on the data. We derive a semi-analytical model for multispectral imagery from Lee's shallow-water reflectance model with three changes. First, the water is observed rather than fitted: each scene's deep-water reflectance is taken from its own optically deep pixels, which are found without soundings, and the attenuation follows by a quasi-analytical algorithm. Second, the bottom brightness and a per-scene offset enter linearly, so for every depth on a fixed grid they are solved exactly; the misfit profile in depth is then exact and its global minimum is found by construction. Third, a depth is reported only when the profile excludes both optically deep water and a clearly different depth. We validate the model against radiative-transfer simulations and, without soundings or a depth prior, against singlebeam surveys at four sites in Exmouth Gulf, Western Australia, using six Sentinel-2 scenes. Settings were tuned on training sites and tested once on held-out sites. Compared with the previous semi-analytical model, depths within tolerance rose from 6--23\% to 21--54\% of the surveyed cells at three sites, at about 500 times the speed, with better-calibrated uncertainties. With settings frozen, the gains held on six Landsat~8 scenes. The gains are confined to depths of 0--5\,m: deeper bottoms are reported too shallow or abstained from, and a product calibrated with soundings remains more accurate in deeper water.}
 
-\keyword{satellite-derived bathymetry; semi-analytical model; Sentinel-2; multispectral; inverse problem; identifiability; optically deep water; uncertainty}
+\keyword{satellite-derived bathymetry; semi-analytical model; Sentinel-2; Landsat 8; multispectral; inverse problem; identifiability; optically deep water; uncertainty}
 
 \begin{document}
 
@@ -126,7 +126,7 @@ For a pixel observed in $S$ scenes, the depth below a common datum is $H$, and t
 \begin{equation}
 \hat r_{s\lambda}(H, b, \mathbf{d}) = r^\infty_{s\lambda}\left[1 - e^{-\kappa_{s\lambda} M^C_{s\lambda} Z_s}\right] + b\,\frac{\rho_c(\lambda)}{\pi}\,e^{-\kappa_{s\lambda} M^B_{s\lambda} Z_s} + d_s. \label{eq:model}
 \end{equation}
-The bottom is one class $c$ (sand, seagrass or coral), with photic's spectral shapes~\cite{blake2020} normalised to 1 at 550\,nm. Its brightness $b$ is shared by all scenes and bounded to the class range $[b_c^-, b_c^+]$ (Table~\ref{tab:settings}). The ranges are the 10th to 90th percentiles at 560\,nm of in situ reflectances of each class from Heron Reef and Moreton Bay~\cite{roelfsema2012,roelfsema2016}, widened. The offset $d_s$ is a spectrally flat residual of each scene's atmospheric and glint correction, with a Gaussian prior of standard deviation $\sigma_g$.
+The bottom is one class $c$ (sand, seagrass or coral), with photic's spectral shapes~\cite{blake2020} normalised to 1 at 550\,nm. Its brightness $b$ is shared by all scenes and bounded to the class range $[b_c^-, b_c^+]$ (Table~\ref{tab:settings}). The ranges are the 10th to 90th percentiles at 560\,nm of in situ reflectances of each class from Heron Reef and Moreton Bay~\cite{roelfsema2012,roelfsema2016}, widened. Section~\ref{sec:sens} tests a library measured at five reefs instead. The offset $d_s$ is a spectrally flat residual of each scene's atmospheric and glint correction, with a Gaussian prior of standard deviation $\sigma_g$.
 
 We weight each residual by $w_{s\lambda} = 1/\sigma_{s\lambda}^2$, with
 \begin{equation}
@@ -191,7 +191,7 @@ The model makes the following assumptions. Each is a possible cause of failure, 
 \item \textbf{Locally uniform water.} Within a scene, the water at a pixel has the same inherent optical properties as the optically deep water within $R = 1.5$\,km, and is vertically homogeneous.
 \item \textbf{Deep water is present and identifiable.} The window contains optically deep pixels, and they are the darkest in smoothed red and then green. Where a window has too few valid pixels (under 400), the scene-wide reference is used instead.
 \item \textbf{QAA.} At 665\,nm absorption is that of pure water. The particle backscatter slope $Y$ follows QAA's empirical relation, and $\kappa = a + b_b$.
-\item \textbf{Bottom.} The bottom is one of three spectral shapes with brightness in its class range. Mixtures and other bottom types are represented only to the extent that one of the three shapes fits them.
+\item \textbf{Bottom.} The bottom is one of three spectral shapes with brightness in its class range. Mixtures and other bottom types are represented only to the extent that one of the three shapes fits them. The tables are taken at the band centres (Section~\ref{sec:sens} tests averaging them over each band).
 \item \textbf{Residual correction errors.} Errors left by the atmospheric and glint correction are spectrally flat within a scene, with a standard deviation of $5 \times 10^{-4}$ in $R_\mathrm{rs}$.
 \item \textbf{Errors.} Residuals are independent and Gaussian, with variance~(\ref{eq:sigma}).
 \item \textbf{Geometry.} Sun and view angles are constant over a site in each scene. Depth lies between 0.05 and 30\,m.
@@ -507,6 +507,48 @@ Figure~\ref{fig:reference} shows the deep pixels chosen at Marina and every scen
 \caption{(\textbf{a})~Marina, 2019-06-12: red $R_\mathrm{rs}$ (grey), the 20\% of cells darkest in smoothed red (yellow), and the deep cells chosen from them by green (magenta). (\textbf{b})~Site-wide deep-water reflectance of every scene at each site.\label{fig:reference}}
 \end{figure}
 
+\subsection{Sensitivity to Spectral Data and Sensor}\label{sec:sens}
+
+After the held-out test, we changed the model's spectral data and its sensor, one at a time, with every setting in Table~\ref{tab:settings} frozen. These are sensitivity tests, each run once on all four sites. None was used to choose a setting, and the results above are unchanged by them. Four inputs were varied:
+\begin{itemize}
+\item \textbf{Measured bottom library.} Sand, seagrass and coral shapes and ranges built from in situ spectra of five reef libraries: Heron Reef, Moreton Bay, Fiji, Aitutaki and Glovers Reef~\cite{roelfsema2012,roelfsema2016,roelfsema2017fiji,roelfsema2017cook,roelfsema2013}. Each shape is the median, normalised at 550\,nm, of half of its class's spectra. Each range is the 5th to 95th percentile of the class's reflectance at 550\,nm: sand 0.16--0.80, seagrass 0.04--0.16 and coral 0.03--0.29.
+\item \textbf{Band averaging.} The water and bottom tables are averaged over each band's relative spectral response~\cite{esa2024srf,barsi2014}, and the band's wavelength becomes the response centroid. By default they are taken at the nominal band centres.
+\item \textbf{Water tables.} Pure-water absorption from the full Pope and Fry table~\cite{pope1997}, at 2.5\,nm rather than 10\,nm, and seawater backscatter from Zhang et al.~\cite{zhang2009}, 12--15\% below Morel's, together with band averaging.
+\item \textbf{Landsat 8.} Six Landsat 8 OLI scenes (path 115, row 75; 2018--2021; tides $-0.67$ to $+0.87$\,m; sun elevations 41--51$^\circ$), chosen by the same rules as the Sentinel-2 scenes, through the same ACOLITE processing. They are on cells of 0.0003$^\circ$ (about 31\,m), with bands at 443, 483, 561 and 655\,nm, and the reference depths are regridded to those cells. The Landsat dates differ from the Sentinel-2 dates, so sensor and scene conditions are confounded.
+\end{itemize}
+
+Table~\ref{tab:sens} gives the results. Changes of under about 0.5 points in hits and 0.1\,m in RMSE are within run-to-run differences seen elsewhere in the benchmark.
+
+\begin{table}[H]
+\caption{Sensitivity of the profile model to spectral data and sensor, all settings frozen: hits (\%) / RMSE (m) over every reference cell. ``As tested'' repeats Table~\ref{tab:t4} for Sentinel-2. The Landsat~8 SA row is photic's semi-analytical model at a later revision, whose Sentinel-2 hits are within 0.6 points of Table~\ref{tab:t4}.\label{tab:sens}}
+\begin{adjustwidth}{-\extralength}{0cm}
+\begin{tabularx}{\fulllength}{llCCCC}
+\toprule
+\textbf{Sensor} & \textbf{Input} & \textbf{Bundegi} & \textbf{Tantabiddi} & \textbf{Marina} & \textbf{Gulf entrance}\\
+\midrule
+\multirow{5}{*}{Sentinel-2} & As tested & 21.6 / 1.68 & 54.3 / 2.17 & 20.9 / 3.01 & 1.5 / 3.85\\
+ & Measured bottom library & 21.7 / 1.60 & 54.4 / 2.11 & 21.4 / 2.64 & 1.9 / 3.25\\
+ & Band averaging & 21.7 / 1.72 & 51.9 / 2.15 & 22.7 / 2.99 & 1.7 / 3.80\\
+ & Band averaging, measured library & 21.7 / 1.68 & 51.0 / 2.11 & 23.2 / 2.67 & 1.6 / 3.21\\
+ & Band averaging, water tables & 21.7 / 1.77 & 52.4 / 2.19 & 22.6 / 3.00 & 1.7 / 3.83\\
+\midrule
+\multirow{6}{*}{Landsat 8} & SA & 0.5 / 4.48 & 40.3 / 1.65 & 4.1 / 3.03 & 1.4 / 2.68\\
+ & Profile, as tested & 17.3 / 2.19 & 58.4 / 1.84 & 17.2 / 0.85 & 2.7 / 4.74\\
+ & Measured bottom library & 16.7 / 2.20 & 55.8 / 1.78 & 18.2 / 0.60 & 3.3 / 4.45\\
+ & Band averaging & 17.6 / 2.20 & 58.7 / 1.82 & 17.8 / 0.82 & 2.7 / 4.74\\
+ & Band averaging, measured library & 15.8 / 2.24 & 56.7 / 1.76 & 18.5 / 0.58 & 3.1 / 4.45\\
+ & Band averaging, water tables & 17.4 / 2.20 & 58.9 / 1.83 & 17.7 / 0.82 & 2.7 / 4.79\\
+\bottomrule
+\end{tabularx}
+\end{adjustwidth}
+\end{table}
+
+\paragraph{Bottom library.} The measured library changed hits little, but it reduced the shallow bias where the depth ceiling acts. On Sentinel-2 the bias fell from $-1.81$ to $-1.46$\,m at Marina and from $-2.77$ to $-2.09$\,m at the gulf entrance, and RMSE fell by 0.37 and 0.60\,m. On Landsat~8 the Marina bias fell from $-0.65$ to $-0.06$\,m. At Tantabiddi, Sentinel-2 was unchanged and Landsat~8 lost 2.6 points. The measured library differs from the tested one in shape, and its ranges reach brighter sand and coral. A brighter bottom at a given depth moves the profile minimum deeper, so this is consistent with A6 contributing to the ceiling. It does not remove the ceiling: depths beyond 5\,m are still reported too shallow.
+
+\paragraph{Band averaging and water tables.} Because the water is observed from the image, the tables enter the profile model only through pure-water absorption at the reference band, pure-water backscatter and the bottom shapes. The model is correspondingly less sensitive to them than the semi-analytical model, which fits the water with these tables. Band averaging moved the profile model's Sentinel-2 hits by $-2.4$ points at Tantabiddi and $+1.8$ at Marina, and its Landsat~8 hits by under 0.6 points. The same change cost the semi-analytical model 4.2 points at Tantabiddi on Sentinel-2 and 5.7 on Landsat~8. The new water tables changed nothing beyond the noise. Tables at the band centres are therefore adequate for this model.
+
+\paragraph{Landsat 8.} The model transferred to a second sensor without change. On Landsat~8 it gave more correct depths than the semi-analytical model at every site: 17.3\% against 0.5\% at Bundegi, 58.4\% against 40.3\% at Tantabiddi and 17.2\% against 4.1\% at Marina. At Bundegi the semi-analytical model stayed 3--4\,m too shallow in every leave-one-scene-out run, and one of the scenes (2018-08-22) is turbid there. The profile model observes each scene's water separately, which may be why that scene did not defeat it. Results on Landsat~8 and Sentinel-2 are on different cells and different dates, so they should not be compared site by site. The depth ceiling is the same on both. On Landsat~8 the bias is $-1.9$ to $-3.7$\,m in the 5--10\,m bin and $-6.1$ to $-7.4$\,m in the 10--20\,m bin, and at Marina the low RMSE (0.60--0.85\,m) comes from cells almost all at 0--5\,m.
+
 \section{Discussion}\label{sec:discussion}
 
 \subsection{What Changed and Why It Converges}
@@ -521,10 +563,10 @@ Gate G1 established the central point: on these Sentinel-2 scenes, depth becomes
 \begin{itemize}
 \item \textbf{A3 (uniform water).} The water over the shallows and lagoons may be more turbid, or differently coloured, than the deep reference water.
 \item \textbf{A5 (QAA).} QAA's pure-water assumption at 665\,nm, or its backscatter slope, may set the spectral shape of $\kappa$ wrongly.
-\item \textbf{A6 (bottom).} Bottoms may darken with depth (sand giving way to seagrass and rubble), and the three class shapes may not span real mixtures.
+\item \textbf{A6 (bottom).} Bottoms may darken with depth (sand giving way to seagrass and rubble), and the three class shapes may not span real mixtures. A measured bottom library reduced the shallow bias at Marina and the gulf entrance, but did not remove the ceiling (Section~\ref{sec:sens}).
 \item \textbf{A1 (forward model).} The forward model's error grows in the regime where the bottom signal is small.
 \end{itemize}
-Uniformly scaling $\kappa$ did not separate the depths, so a single calibration factor is not enough. Distinguishing between these causes needs field measurements of attenuation and bottom reflectance, or hyperspectral data, at the sites. Meanwhile the flags, and depths reported only up to about 5\,m, are the honest product of this model on these scenes.
+Uniformly scaling $\kappa$ did not separate the depths, so a single calibration factor is not enough. The ceiling also appears on Landsat~8, so it is not specific to one sensor. Distinguishing between these causes needs field measurements of attenuation and bottom reflectance, or hyperspectral data, at the sites. Meanwhile the flags, and depths reported only up to about 5\,m, are the honest product of this model on these scenes.
 
 \paragraph{Abstention in clean data.} The thresholds were tuned for real imagery, where $\varepsilon = 0.05$ is realistic. On noise-free synthetic scenes they withhold depths the data support, and hits fall in clear and moderate water. Scaling the thresholds by a noise estimate per scene, which the deep pixels already provide, is the natural remedy. Any such re-tuning needs a fresh held-out sample, because the test split has now been used.
 
@@ -549,14 +591,15 @@ Future work, in order of expected gain:
 \item a per-scene turbidity factor for shallows that are more turbid than the deep reference;
 \item robust per-scene weights;
 \item a two-class bottom mixture, which remains linear in the brightnesses and so preserves the exact profile;
-\item validation at a second region.
+\item bottom libraries measured in the region, which the sensitivity tests suggest matter more than the water tables;
+\item validation at a second region, and with Sentinel-2 and Landsat~8 scenes of the same day.
 \end{enumerate}
 
 \section{Conclusions}
 
 We derived a semi-analytical bathymetry model for multispectral imagery that observes the water from each scene's optically deep pixels, solves the bottom brightness and scene offsets exactly, and searches depth exhaustively. Its minimum is global by construction. It reports a depth only when the profile excludes both optically deep water and a clearly different depth.
 
-On six Sentinel-2 scenes of Exmouth Gulf it was validated without soundings or a prior, with tuning confined to training sites and a single held-out test. Compared with the previous semi-analytical model, it raised the share of surveyed cells given a correct depth from 9\% to 22\%, from 23\% to 54\% and from 6\% to 21\% at three sites. It also ran about 500 times faster and gave better-calibrated uncertainties. Its gains are confined to 0--5\,m. Deeper bottoms are flagged or reported too shallow, and there a sounding-calibrated product remains more accurate. On synthetic scenes it is more accurate where it reports a depth, but it abstains more than the joint inversion. The model, the benchmark and every result in this paper are reproducible from the photic repository.
+On six Sentinel-2 scenes of Exmouth Gulf it was validated without soundings or a prior, with tuning confined to training sites and a single held-out test. Compared with the previous semi-analytical model, it raised the share of surveyed cells given a correct depth from 9\% to 22\%, from 23\% to 54\% and from 6\% to 21\% at three sites. It also ran about 500 times faster and gave better-calibrated uncertainties. With every setting frozen, it transferred to six Landsat~8 scenes, where it again gave more correct depths than the semi-analytical model at every site, and it was largely insensitive to band averaging and to the water tables. Its gains are confined to 0--5\,m. Deeper bottoms are flagged or reported too shallow, and there a sounding-calibrated product remains more accurate. On synthetic scenes it is more accurate where it reports a depth, but it abstains more than the joint inversion. The model, the benchmark and every result in this paper are reproducible from the photic repository.
 
 \vspace{6pt}
 
@@ -568,7 +611,7 @@ On six Sentinel-2 scenes of Exmouth Gulf it was validated without soundings or a
 
 \informedconsent{Not applicable.}
 
-\dataavailability{Sentinel-2 Level-1C data are available from the Copernicus programme, and were obtained from the public Google Cloud Sentinel-2 bucket. Singlebeam surveys and tide-gauge records are published by the Western Australian Department of Transport under CC BY 4.0. The model (\texttt{model/profile.c}), the prototype, the benchmark and the scripts that produce every table and figure (\texttt{validation/paper\_profile.py}) are available at \url{https://github.com/stblake/photic}. Lee's HOPE spreadsheet, used in tier 1, is not redistributed.}
+\dataavailability{Sentinel-2 Level-1C data are available from the Copernicus programme, and were obtained from the public Google Cloud Sentinel-2 bucket. Landsat~8 Collection~1 Level-1 data are courtesy of the U.S. Geological Survey, and were obtained from the public Google Cloud Landsat bucket. Singlebeam surveys and tide-gauge records are published by the Western Australian Department of Transport under CC BY 4.0. The model (\texttt{model/profile.c}), the prototype, the benchmark and the scripts that produce every table and figure (\texttt{validation/paper\_profile.py}) are available at \url{https://github.com/stblake/photic}. The in situ bottom spectra of Section~\ref{sec:sens} are redistributed under CC BY 3.0 as \texttt{model/data/bottom\_spectra\_insitu.nc}, with the sensor spectral responses and water tables in \texttt{model/data}. Lee's HOPE spreadsheet, used in tier 1, is not redistributed.}
 
 \acknowledgments{During the preparation of this study and manuscript the author used Claude (Anthropic, Claude Opus 5.5) to implement the model and the benchmark, to run the experiments and to draft the text. The author has reviewed and edited the output and takes full responsibility for the content of this publication.}
 
@@ -666,6 +709,24 @@ Roelfsema, C.M.; Phinn, S.R. Spectral reflectance library of benthic cover types
 
 \bibitem[Roelfsema et~al.(2016)]{roelfsema2016}
 Roelfsema, C.M.; Phinn, S.R.; Joyce, K.E. Spectral reflectance of seagrass and sediment, Moreton Bay, Australia. PANGAEA, 2016. Available online: \url{https://doi.org/10.1594/PANGAEA.864310} (accessed on 13 October 2026).
+
+\bibitem[Roelfsema and Phinn(2017a)]{roelfsema2017fiji}
+Roelfsema, C.M.; Phinn, S.R. Spectral reflectance library of healthy corals, bleached corals and other benthic features in Fiji. PANGAEA, 2017. Available online: \url{https://doi.org/10.1594/PANGAEA.872506} (accessed on 15 October 2026).
+
+\bibitem[Roelfsema and Phinn(2017b)]{roelfsema2017cook}
+Roelfsema, C.M.; Phinn, S.R. Spectral reflectance library of corals and benthic features in Aitutaki, Cook Islands. PANGAEA, 2017. Available online: \url{https://doi.org/10.1594/PANGAEA.872505} (accessed on 15 October 2026).
+
+\bibitem[Roelfsema and Phinn(2013)]{roelfsema2013}
+Roelfsema, C.M.; Phinn, S.R. Spectral reflectance library of selected biotic and abiotic coral reef features in Glovers Reef, Belize. PANGAEA, 2013. Available online: \url{https://doi.org/10.1594/PANGAEA.824861} (accessed on 15 October 2026).
+
+\bibitem[Zhang et~al.(2009)]{zhang2009}
+Zhang, X.; Hu, L.; He, M.-X. Scattering by pure seawater: Effect of salinity. {\em Opt. Express} {\bf 2009}, {\em 17}, 5698--5710.
+
+\bibitem[European Space Agency(2024)]{esa2024srf}
+European Space Agency. {\em Sentinel-2 Spectral Response Functions (S2-SRF)}, version 4.0; COPE-GSEG-EOPG-TN-15-0007; ESA: Paris, France, 2024.
+
+\bibitem[Barsi et~al.(2014)]{barsi2014}
+Barsi, J.A.; Lee, K.; Kvaran, G.; Markham, B.L.; Pedelty, J.A. The spectral response of the Landsat-8 Operational Land Imager. {\em Remote Sens.} {\bf 2014}, {\em 6}, 10232--10251.
 
 \bibitem[Wilks(1938)]{wilks1938}
 Wilks, S.S. The large-sample distribution of the likelihood ratio for testing composite hypotheses. {\em Ann. Math. Stat.} {\bf 1938}, {\em 9}, 60--62.
