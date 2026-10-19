@@ -101,6 +101,63 @@ Invert the confident pixels, calibrate a band-ratio depth model on them, and use
 - **Gate G2:** the tuned model on the test split, run once, beats photic in net score with no material RMSE regression in either tier.
 - **F2, port to C** as `MODEL Lee_Profile` (same inputs and outputs as `Lee_Semi_Analytical`, reusing its tables and the `POINTS` mode), only after G2. Check the C port against the prototype on the same points, then run the full benchmark under the README's acceptance rule.
 
+## Phase G: towards a state-of-the-art sounding-free model (planned 2026-10-19)
+
+**Where we are.**
+- **The profile model is the base.** It is the best sounding-free model here. Its tier 4 hits are 22 / 54 / 21% at Bundegi / Tantabiddi / Marina, against 9 / 23 / 6% for the SA model, and it runs in seconds. It transfers to Landsat 8 unchanged. The SA joint inversion is not developed further.
+- **Its limit is depth beyond about 5 m.** Biases are −2 to −4 m at 5–10 m and −6 to −8 m at 10–20 m, on both sensors.
+- **The evidence points at absolute attenuation.**
+  - κ from the soundings breaks the ceiling at Tantabiddi, and Jerlov's κ breaks it at Marina.
+  - QAA's κ is 3–6× the soundings' envelope, plausibly because the deep references have rrs∞(665) ≈ 3–7 × 10⁻³, about ten times what clear water allows. That is an atmospheric-correction residual.
+  - Neither the per-pixel misfit, the pooled misfit nor the tides can set κ's absolute scale on these scenes.
+- **Secondary limits:**
+  - A1: Lee's model has a 2.4% systematic error, largest where the bottom signal is small.
+  - A6: the bottom. The measured library lowers the bias but leaves the ceiling.
+  - Fixed thresholds abstain too much in clean data (tier 3).
+- **The bar.** The published, sounding-calibrated product reaches 86% hits at Marina at 5–10 m.
+
+**Target.** With no soundings and no depth prior at run time:
+- match the sounding-calibrated product's hits at 0–10 m at the Exmouth sites;
+- calibrated σ_H, with 60–75% of covered cells within ±σ_H;
+- hold on two sensors and at a second region, scored once as a held-out test.
+
+**Steps, in order.** Each step is A/B tested on the training sites, benchmarked under the acceptance rule, and recorded here.
+1. **G0, validation footing (prerequisite).**
+   - A second region as the new held-out test, because the Exmouth test split has been used. The Arabian Gulf site (`tier4_fetch_s2.py`, ICESat-2 reference) waits on an Earthdata login.
+   - A same-day Sentinel-2 and Landsat 8 pair at Exmouth, to separate sensor from conditions.
+   - Tier 3 scenes with a red offset of 1–5 × 10⁻³ in rrs, the failure tier 4 shows and tier 3 cannot (its δ is 0).
+   - Tier 3 `_insitu` for `Lee_Profile`.
+   - Score against the profile model (`profile-wt`); keep SA runs to its existing results, since they take hours.
+2. **G1a, confirm the attenuation diagnosis (cheap).**
+   - Compare each scene's deep-water rrs∞ and QAA κ with an independent ocean-colour retrieval over the same deep water on the same day (Sentinel-3 OLCI, or MODIS/VIIRS: Rrs, Kd(490), IOPs).
+   - If the independent rrs(665) is several times lower, the ceiling is atmospheric-correction error, and G1c is the principled fix.
+3. **G1b, sounding-free attenuation anchors.** Each sets κ per scene from deep water, not per pixel:
+   - (i) QAA with the red offset estimated and removed, using ACOLITE's NIR/SWIR residual or a clear-water bound on rrs(665);
+   - (ii) the independent ocean-colour κ of G1a;
+   - (iii) ICESat-2 depths as a κ-scale anchor only (a decision to make: this is a measured depth, used to calibrate the water, never as a per-pixel prior).
+4. **G2, noise-scaled decisions (cheap).**
+   - Scale T_deep and T_amb by each scene's noise from the deep pixels, not a fixed ε.
+   - Expected: recovers tier 3 clear-water coverage without losing tier 4 precision.
+5. **G3, bottom mixtures in the profile.**
+   - Two classes per pixel with both brightnesses linear. At each depth they are solved by bounded least squares, so the profile stays exact.
+   - Choose the library and the number of classes on tier 3 `_insitu` and the training sites.
+6. **G4, spatial inference on the exact profiles.**
+   - Every pixel already has χ²(H) on a depth grid. An edge-preserving seabed smoothness prior over neighbours can then be solved on that grid as a discrete Markov random field, by dynamic programming along rows and columns, or TRW-S.
+   - Expected: fewer ambiguous pixels, depths where single-pixel minima are weak, and a posterior σ_H.
+   - The same machinery takes an optional sounding-calibrated prior term for a fusion product.
+7. **G5, exact forward model (BATHY_PDE_APPROACH M1–M2), retargeted to `profile.c`.**
+   - The depth scan becomes table lookups per depth, and the deep-water inversion becomes a table inversion consistent with the forward model, replacing QAA.
+   - Gate: tier 2 error under 1%. Then tiers 3 and 4.
+   - Update the specification, which targets `samodel.c`, to target the profile model.
+8. **G6, joint atmosphere (M3).**
+   - Fit each scene's aerosol with the water and the seabed from L1 TOA reflectance, if G1a shows the correction residual is the cause.
+   - This is the largest build, so it comes last.
+9. **Held-out test.**
+   - Freeze all settings and run the second region once, on both sensors.
+   - Then a paper.
+
+**Rationale for the order.** Cheap diagnostics and decisions (G0–G2) come before builds. G1 targets the measured cause of the ceiling. G3 and G4 are self-contained extensions of the exact profile. G5 and G6 are large and pay off only if the cheaper steps confirm that forward-model and atmospheric errors are what is left.
+
 ## Log
 
 | ID | Date | Hypothesis | Prediction | Result | Decision |
