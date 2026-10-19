@@ -1442,6 +1442,52 @@ Tier 3 is unchanged by either switch (the synthetic scenes give δ = 0 and their
 - **Not run:** `sa-d9d-l8` (d9d14d6 on Landsat 8) and tier 3 `--only insitu` for both models. They were stopped because the SA model takes hours per run.
 - **Decision:** no defaults change. Neither the measured library nor SRF meets the acceptance rule for `Lee_Profile` (Tantabiddi loses on L8 or S2).
 
+### Phase G, first steps (2026-10-19)
+
+**G0: tier 3 `_insitu` with the profile model** (`prof-ins-hl`, `prof-ins-meas`; 5 s per run). Hits over all cells / RMSE where a depth is given, against the SA model (`ins-hl-default`):
+- Clear, 2 scenes, noise-free: 24% / 1.1 m against 59% / 2.6 m.
+- Clear, 4 scenes, noisy: 31% / 2.4 m against 30% / 1.8 m.
+- Turbid: 5–11% / 0.7–0.8 m against 9–14% / 1.0–3.1 m.
+- The profile model is about as accurate where it reports a depth, but abstains far more in noise-free scenes (the thresholds; G2). The two libraries are again about equal.
+
+**G1a: the red offset is real (in-image check, no external data).** Median ACOLITE Rrs over open water west of the reef (lon < 113.955) and north of the cape (lat > −21.70), in each of the four usable scenes:
+- Rrs(865) is 4–7 × 10⁻⁴, where water is black.
+- Rrs(665) is 1.1–1.8 × 10⁻³, where blue oceanic water with Rrs(443) ≈ 0.009 should have about 2 × 10⁻⁴.
+- So the red carries an atmospheric-correction residual of about 10⁻³ in Rrs. QAA anchors b_bp on rrs∞(665) with a = a_w, so the residual inflates κ at every band. This confirms the diagnosis of "The depth ceiling is the attenuation".
+
+**G1b(i): QAA anchored at 560 nm** (`PROFILE_QAA` in profile.c; mode 0 is unchanged and reproduces `profile-wt` and `prof-repro-l8` exactly).
+- **Mode 1: QAA v6's empirical a(560).** Mode 2: as mode 1 without its red term.
+  - At Tantabiddi it gives κ ≈ 0.07–0.09 m⁻¹ at 443–560 nm, the range of the soundings' envelope, against 0.18–0.24 m⁻¹ from the 665 nm anchor.
+  - The bias flips from too shallow to too deep: +2 to +4 m at 2–10 m at Bundegi, Tantabiddi and the gulf entrance, and hits collapse (Tantabiddi 54 → 8%). Marina alone improves (RMSE 3.01 → 1.05 m).
+  - **The offset is the second error.** The model treats rrs∞'s offset as water-column light that grows with depth, so a shallow cell, whose red carries the full offset, fits better deeper. A correct κ alone is not enough.
+- **Mode 3: QAA at 560 nm on rrs∞ − δ, with δ unattenuated in the forward model.** δ is the flat offset that makes rrs∞(665) − δ equal to what the water found at 560 nm predicts at 665 nm (a = a_w), by fixed-point iteration. δ comes out at 1.6–3.7 × 10⁻³ in rrs (0.8–1.9 × 10⁻³ in Rrs), matching G1a's offshore estimate.
+  - With the Phase F thresholds, RMSE falls at every site: S2 Tantabiddi 2.17 → 0.84 m, Marina 3.01 → 0.87, gulf entrance 3.85 → 1.98; L8 Bundegi 2.19 → 0.94, gulf entrance 4.74 → 1.06. Biases at 5–10 m are within ±1.2 m, except L8 Tantabiddi (+1.3 m).
+  - Coverage falls, because the profiles are flatter and the ambiguity test (tuned for the old κ) withholds more: ambiguous cells at Tantabiddi 1,033 → 6,819. Tantabiddi hits fall 54 → 46% (S2) and 58 → 46% (L8).
+- **Thresholds re-chosen on the training sites only** (mode 3; hits / RMSE, S2 and L8):
+
+  | T_deep, T_amb | Marina S2 | Gulf S2 | Marina L8 | Gulf L8 |
+  |---|---|---|---|---|
+  | mode 0: 25, 1 | 20.9 / 3.01 | 1.5 / 3.85 | 17.2 / 0.85 | 2.7 / 4.74 |
+  | 25, 1 | 21.3 / 0.87 | 1.3 / 1.98 | 17.5 / 0.85 | 5.0 / 1.06 |
+  | 25, 0.5 | 27.0 / 1.16 | 1.8 / 2.36 | 18.1 / 0.86 | 6.8 / 1.25 |
+  | 25, 0 | 32.3 / 1.42 | 2.4 / 2.66 | 18.5 / 0.87 | 9.3 / 1.79 |
+  | **9, 0.5** | **32.3 / 1.17** | **2.0 / 2.38** | **24.1 / 0.99** | **7.7 / 1.25** |
+
+- **Held-out sites with 9, 0.5:**
+
+  | | Bundegi S2 | Tantabiddi S2 | Bundegi L8 | Tantabiddi L8 |
+  |---|---|---|---|---|
+  | mode 0 | 21.6 / 1.68 | 54.3 / 2.17 | 17.3 / 2.19 | 58.4 / 1.84 |
+  | mode 3, 9, 0.5 | **28.9** / **3.36** | 52.4 / **1.09** | **21.2** / **1.44** | **51.7** / **1.36** |
+
+  - **The depth ceiling is broken at every site.** S2 Tantabiddi 10–20 m bias −7.7 → −1.0 m and 5–10 m −3.0 → −1.1 m. Bundegi reports 76 cells at 10–20 m (4 before) with bias −0.9 m.
+  - **Two held-out regressions.** Bundegi S2 at 2–5 m goes too deep (bias −0.5 → +1.7 m, RMSE 0.7 → 3.6 m). L8 Tantabiddi loses 6.7 points and is about 2 m too deep beyond 5 m.
+- **Decision:** `PROFILE_QAA` stays 0 (off); mode 3 fails the no-regression rule. It is the first change that removes the depth bias rather than moving it, so it is the base for the next steps.
+- **Next:**
+  - the offset's spectral shape: δ is assumed flat, but offshore it is about 10⁻³ at 665 nm and 5 × 10⁻⁴ at 865 nm, and its value at 443–560 nm is unknown;
+  - why Bundegi's 2–5 m S2 cells go deep (δ is already per local window; candidates are the turbid inner-gulf scenes and the flat-δ assumption);
+  - noise-scaled thresholds (G2) on top of mode 3, in place of the re-chosen fixed ones.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

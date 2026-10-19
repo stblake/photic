@@ -84,6 +84,12 @@
 #define PROFILE_KAPPA 0            // attenuation: 0 QAA, 1 QAA after an offset matched to the image's
 #endif                             // brightest pixels line, 2 Jerlov's Kd for the type matching it
 
+#ifndef PROFILE_QAA
+#define PROFILE_QAA 0              // QAA's reference band: 0 665 nm with a = a_w; 1 560 nm with QAA v6's
+#endif                             // empirical a(560) (Lee et al. 2014); 2 as 1 without its red term;
+                                   // 3 as 1 after removing a flat offset that makes rrs_inf(665)
+                                   // consistent with the water, kept unattenuated in the forward model
+
 #define N_CLASSES 3
 #define MAX_BANDS 16
 #define N_H 220
@@ -194,17 +200,25 @@ static void smooth_fields(profile_data *pd, int s) {
   free_double_array_2d(sg, nr + 1);
 }
 
-// QAA: u from rrs = (g0 + g1 u) u; at 665 nm a ~ a_w fixes b_b; Y from QAA's 443/560 ratio;
-// then kappa = a + b_b with a = (1 - u) b_b/u.
+// QAA: u from rrs = (g0 + g1 u) u; at the reference band a fixes b_b; Y from QAA's 443/560 ratio;
+// then kappa = a + b_b with a = (1 - u) b_b/u. The reference is 665 nm with a ~ a_w, or
+// (PROFILE_QAA) 560 nm with QAA v6's a(560) from the blue-green ratio, which an offset in the red
+// (an atmospheric-correction residual) does not inflate.
 
 static void qaa_spectrum(profile_data *pd, int s, const double *rrs_inf, double *kappa, double *u) {
-  int b, i_ref = nearest_band(pd, s, 665.0), i443 = nearest_band(pd, s, 443.0), i560 = nearest_band(pd, s, 560.0);
-  double bbp_ref, Y, bb, a;
+  int b, i_ref = nearest_band(pd, s, PROFILE_QAA ? 560.0 : 665.0), i443 = nearest_band(pd, s, 443.0),
+    i492 = nearest_band(pd, s, 490.0), i560 = nearest_band(pd, s, 560.0), i665 = nearest_band(pd, s, 665.0);
+  double bbp_ref, Y, bb, a, a_ref = pd->aw[s][i_ref], chi, red;
 
   for (b = 0; b < pd->n_bands[s]; b++) {
     u[b] = (-QAA_G0 + sqrt(QAA_G0*QAA_G0 + 4.0*QAA_G1*rrs_inf[b]))/(2.0*QAA_G1);
   }
-  bbp_ref = MAX(u[i_ref]*pd->aw[s][i_ref]/(1.0 - u[i_ref]) - pd->bbw[s][i_ref], 1.0e-6);
+  if (PROFILE_QAA) {
+    red = PROFILE_QAA == 1 ? 5.0*rrs_inf[i665]*rrs_inf[i665]/rrs_inf[i492] : 0.0;
+    chi = log10((rrs_inf[i443] + rrs_inf[i492])/(rrs_inf[i560] + red));
+    a_ref += pow(10.0, -1.146 - 1.366*chi - 0.469*chi*chi);
+  }
+  bbp_ref = MAX(u[i_ref]*a_ref/(1.0 - u[i_ref]) - pd->bbw[s][i_ref], 1.0e-6);
   Y = 2.0*(1.0 - 1.2*exp(-0.9*rrs_inf[i443]/rrs_inf[i560]));
   Y = MIN(MAX(Y, 0.0), 2.5);
   for (b = 0; b < pd->n_bands[s]; b++) {
@@ -258,11 +272,36 @@ static double jerlov_kd(double lam, double t) {
 
 // kappa and u of a reference, with the scene's attenuation calibration if any.
 
+// PROFILE_QAA 3: the flat offset delta of rrs_inf (an atmospheric-correction residual) for which
+// rrs_inf(665) - delta equals the rrs that the water found by QAA at 560 nm from rrs_inf - delta
+// predicts at 665 nm, with a(665) = a_w; by fixed-point iteration.
+
+static double red_offset(profile_data *pd, int s, const double *rrs_inf) {
+  int b, it, i665 = nearest_band(pd, s, 665.0), i560 = nearest_band(pd, s, 560.0), i443 = nearest_band(pd, s, 443.0),
+    i492 = nearest_band(pd, s, 490.0);
+  double delta = 0.0, r[MAX_BANDS], u, chi, a560, bbp, Y, bb, pred;
+
+  for (it = 0; it < 20; it++) {
+    for (b = 0; b < pd->n_bands[s]; b++) r[b] = MAX(rrs_inf[b] - delta, 1.0e-6);
+    chi = log10((r[i443] + r[i492])/(r[i560] + 5.0*r[i665]*r[i665]/r[i492]));
+    a560 = pd->aw[s][i560] + pow(10.0, -1.146 - 1.366*chi - 0.469*chi*chi);
+    u = (-QAA_G0 + sqrt(QAA_G0*QAA_G0 + 4.0*QAA_G1*r[i560]))/(2.0*QAA_G1);
+    bbp = MAX(u*a560/(1.0 - u) - pd->bbw[s][i560], 1.0e-6);
+    Y = MIN(MAX(2.0*(1.0 - 1.2*exp(-0.9*r[i443]/r[i560])), 0.0), 2.5);
+    bb = pd->bbw[s][i665] + bbp*pow(pd->lam[s][i560]/pd->lam[s][i665], Y);
+    u = bb/(pd->aw[s][i665] + bb);
+    pred = (QAA_G0 + QAA_G1*u)*u;
+    delta = MIN(MAX(rrs_inf[i665] - pred, 0.0), 0.9*rrs_inf[i665]);
+  }
+  return delta;
+}
+
 static void qaa(profile_data *pd, int s, reference *r) {
   int b;
   double u[MAX_BANDS] = {0.0}, shifted[MAX_BANDS] = {0.0};
 
-  if (r->cal_mode == 1) {
+  if (PROFILE_QAA == 3 && r->cal_mode == 0) r->cal_delta = red_offset(pd, s, r->rrs_inf);
+  if (r->cal_mode == 1 || (PROFILE_QAA == 3 && r->cal_mode == 0)) {
     for (b = 0; b < pd->n_bands[s]; b++) shifted[b] = MAX(r->rrs_inf[b] - r->cal_delta, 1.0e-6);
     qaa_spectrum(pd, s, shifted, r->kappa, u);
   } else {
@@ -491,7 +530,8 @@ static int profile_cell(profile_data *pd, reference **ref, double rrs[][MAX_BAND
       for (b = 0; b < pd->n_bands[s]; b++) {
         // With PROFILE_OFFSET_MODEL the calibration's offset is not water-column light and is not
         // attenuated: rrs = delta + (rrs_inf - delta)(1 - exp(-kappa M_C Z)) + bottom.
-        dl = PROFILE_OFFSET_MODEL && ref[s]->cal_mode ? ref[s]->cal_delta : 0.0;
+        dl = (PROFILE_OFFSET_MODEL && ref[s]->cal_mode) || (PROFILE_QAA == 3 && ! ref[s]->cal_mode) ?
+          ref[s]->cal_delta : 0.0;
         y[s][b] = rrs[s][b] - dl - (ref[s]->rrs_inf[b] - dl)*(1.0 - exp(-ref[s]->kappa[b]*ref[s]->MC[b]*Z));
         T[s][b] = exp(-ref[s]->kappa[b]*ref[s]->MB[b]*Z);
       }
@@ -707,9 +747,9 @@ void profile_model(
       h < 120 ? 2.05 + (h - 40)*(10.0 - 2.05)/79.0 : 10.2 + (h - 120)*(30.0 - 10.2)/99.0;
   }
 
-  printf("\nLee_Profile: radius %g km, tile %d, eps %g, t_deep %g, t_amb %g, glint %d, kappa %d (local %d)\n",
+  printf("\nLee_Profile: radius %g km, tile %d, eps %g, t_deep %g, t_amb %g, glint %d, kappa %d (local %d), qaa %d\n",
     (double) PROFILE_RADIUS, PROFILE_TILE, (double) PROFILE_EPS, (double) PROFILE_T_DEEP,
-    (double) PROFILE_T_AMB, PROFILE_GLINT, PROFILE_KAPPA, PROFILE_KAPPA_LOCAL);
+    (double) PROFILE_T_AMB, PROFILE_GLINT, PROFILE_KAPPA, PROFILE_KAPPA_LOCAL, PROFILE_QAA);
 
   for (s = 0; s < nscenes; s++) {
     scene *sc = &scene_data[scene_indexes[s]];
@@ -745,6 +785,7 @@ void profile_model(
     if (global[s].ok) {
       calibrate(pd, s, 0, nr - 1, 0, nc - 1, &global[s], true);
       qaa(pd, s, &global[s]);
+      if (PROFILE_QAA == 3) printf("  red offset %.5f\n", global[s].cal_delta);
     }
   }
 
