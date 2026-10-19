@@ -1533,6 +1533,46 @@ All runs use mode 3 with T_deep 9 and T_amb 0.5 (`q3d9a05`) unless stated. Hits 
 - **The held-out sites have now been looked at many times.** The Exmouth split no longer gives an unbiased test; the second region does.
 - **The next step is G6, moved forward: fit the aerosol with the water and the seabed from TOA reflectance.** That fixes the offset's shape physically at every band, which is the missing piece.
 
+### G6, step 1: each scene's AOT fitted to the water (2026-10-19, `aot_fit.py`)
+
+ACOLITE's DSF chose the maritime model (MOD2) at τ = 0.02–0.04. `aot_fit.py` reruns ACOLITE with a fixed AOT and model (`dsf_fixed_aot`, `dsf_fixed_lut`):
+- on a dark target per scene: clear ocean west of the reef, else north of the cape, else the gulf entrance deep water (the 2021-07-23 and 2022-07-08 scenes);
+- over τ = 0.02–0.20, for MOD1 (continental) and MOD2;
+- minimising, over the target's deep cells (DROP's rule), δ₆₆₅² + rrs₈₆₅². δ₆₆₅ is the red offset of mode 3; rrs₈₆₅ should be about 0 over water.
+- ACOLITE's fixed-AOT path appends a (1,1) shape twice, and the residual glint correction then fails. `tier4_prepare.patch_acolite_fixed_aot` fixes this in-process; the installed source is not modified.
+- The final runs keep ACOLITE's negative-reflectance mask off (`l2w_mask_negative_rhow=False`). Otherwise the ~half of pixels now slightly negative at 865 nm are dropped, and Marina and Bundegi lose scenes. photic still rejects non-positive values in its own four bands.
+- Outputs: `acolite_aot`, `acolite_l8_aot`, `sites_aot`, `sites_l8_aot`, and the fits in `aot_fit_s2.json` and `aot_fit_l8.json`.
+
+**The fit is physically consistent.**
+- MOD1 wins in every scene, on both sensors, by a cost factor of 2–7.
+- Under MOD1 the red offset and rrs(865) cross zero at almost the same τ (within ~0.01). One continental aerosol explains both residuals.
+- Fitted τ: S2 0.08–0.19, L8 0.11–0.20, against ACOLITE's 0.02–0.04.
+- With the masks matched, the same pixels give at the first scene: τ 0.037 MOD2 (ACOLITE) δ₆₆₅ 2.6 × 10⁻³, rrs₈₆₅ 1.1 × 10⁻³; MOD1 τ 0.10 δ₆₆₅ 2 × 10⁻⁴, rrs₈₆₅ −3 × 10⁻⁴.
+
+**DROP, unchanged (paper settings), on the re-corrected scenes** (hits % / RMSE m):
+
+| | Bundegi | Tantabiddi | Marina | Gulf entrance |
+|---|---|---|---|---|
+| S2, ACOLITE DSF (`profile-wt`) | 21.6 / 1.68 | 54.3 / 2.17 | 20.9 / 3.01 | 1.5 / 3.85 |
+| S2, AOT fitted (`aot-def`) | **22.6 / 1.31** | **57.0 / 1.06** | 14.6 / **1.49** | **2.1 / 0.88** |
+| L8, ACOLITE DSF | 17.3 / 2.19 | 58.4 / 1.84 | 17.2 / 0.85 | 2.7 / 4.74 |
+| L8, AOT fitted | 14.8 / **1.57** | 48.0 / **0.67** | 9.8 / 1.00 | 2.2 / **0.93** |
+
+- **S2 held-out sites improve on both counts.** Tantabiddi's within-tolerance share is 82%, against 69%. The gulf entrance's false shallow depths are gone (RMSE 3.85 → 0.88 m).
+- **The depth ceiling is partly lifted.** S2 Tantabiddi 5–10 m bias −3.0 → −2.1 m; L8 Tantabiddi 5–10 m −2.1 → −0.9 m and 10–20 m −6.7 → −1.0 m.
+- **L8 loses coverage**: Tantabiddi 81 → 53%, mostly to the ambiguity test (545 → 2,651 cells). Its depths are the best yet (RMSE 0.67 m, 90% within tolerance).
+- **Marina (a training site) regresses on both sensors.** Its depths are too shallow at every depth (2–5 m bias −1.3 m), so this is an accuracy problem, not abstention.
+- **Re-chosen thresholds on the training sites do not rescue Marina** (at most 18.6% S2 hits, bias −1.6 to −1.8 m). The default thresholds stay.
+- **One AOT per scene does not hold across the image.**
+  - After the fit, mode 3's red offset is near zero at Tantabiddi, which is next to the ocean target.
+  - In the inner gulf it is uneven: Marina 2021-09-14 still has 1.7 × 10⁻³ (its τ, 0.187, came from the western target), and several Marina and Bundegi scenes sit at the zero floor (over-corrected).
+  - Likely causes: aerosol that varies over 20–40 km, and adjacency from the land around the gulf.
+- **Decision:** the default inputs stay ACOLITE's DSF. The AOT fit does not pass the acceptance rule (Marina; L8 Tantabiddi coverage). It is the strongest single step so far for depth accuracy, and it confirms the atmospheric diagnosis.
+- **Next (G6 step 2):** the aerosol where the water is.
+  - Fit τ per site or per tile from DROP's own local deep references, rather than one ocean target per scene.
+  - Then fit the aerosol inside DROP from TOA reflectance (the specification's M3), so it varies with the water it explains.
+  - Marina's deep reference (survey edge, 9.8 m) and turbid water at 865 nm need care there.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

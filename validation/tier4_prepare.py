@@ -34,9 +34,26 @@ SITES = {  # west, east, south, north, cell size (deg; 0.0002 ~ 21 m)
 LIMIT = [-21.99, 113.95, -21.62, 114.45]  # S, W, N, E for ACOLITE
 
 
+def patch_acolite_fixed_aot(ac):
+    """ACOLITE (checkout of 2026-10-07) appends (1,1) to a user-fixed AOT's shape twice, making it
+    4-D, and the residual glint correction then fails. Re-define acolite_l2r with the second
+    append removed, in this process only (the installed source is not modified)."""
+    import inspect
+    mod = inspect.getmodule(ac.acolite.acolite_l2r)
+    src = inspect.getsource(mod)
+    bad = "                aot_sel.shape += (1,1)\n                print(aot_sel, aot_sel_lut)\n"
+    if bad not in src or getattr(mod, "_photic_patched", False):
+        return
+    exec(compile(src.replace(bad, "                print(aot_sel, aot_sel_lut)\n"), mod.__file__, "exec"), mod.__dict__)
+    mod._photic_patched = True
+    ac.acolite.acolite_l2r = mod.acolite_l2r
+
+
 def run_acolite(inputfile, out, limit=LIMIT, **extra):
     sys.path.insert(0, os.path.join(DATA, "tools", "acolite"))
     import acolite as ac
+    if extra.get("dsf_fixed_aot") is not None:
+        patch_acolite_fixed_aot(ac)
     settings = dict(inputfile=inputfile, output=out, limit=limit, s2_target_res=20,
                     output_geometry=False, ancillary_data=False, dsf_aot_estimate="fixed",
                     dsf_residual_glint_correction=True, l2w_parameters=["Rrs_*"],
