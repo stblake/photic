@@ -162,7 +162,7 @@ def main():
     r.add_argument("--photic", help="photic binary to score (default ../model/photic)")
     r.add_argument("--cid", help="name for the results (default: the commit)")
     r.add_argument("--model", default="Lee_Semi_Analytical",
-                   help="the MODEL photic runs in tiers 3 and 4 (Lee_Semi_Analytical or Lee_Profile)")
+                   help="the MODEL photic runs in tiers 3 and 4 (Lee_Semi_Analytical or DROP)")
     sc = sub.add_parser("score")
     sc.add_argument("--cid", help="results to score (default: the commit)")
     c = sub.add_parser("compare")

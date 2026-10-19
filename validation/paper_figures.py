@@ -1,4 +1,4 @@
-"""Figures and numbers for the profile-model paper (run as paper_profile.py figures)."""
+"""Figures and numbers for the DROP paper (run as paper_profile.py figures)."""
 
 import glob
 import json
@@ -301,7 +301,7 @@ def fig_maps(a):
         H_pm = depth_of("profile-wt", site)
         iod = np.rint(site_outputs("profile-wt", site, "index_optical_depth"))
         cols = [("Soundings", ref["depth"]), ("Semi-analytical", np.where(H_sa > 0, H_sa, np.nan)),
-                ("Profile model", np.where(H_pm > 0, H_pm, np.nan)), ("Profile: why not", iod)]
+                ("DROP", np.where(H_pm > 0, H_pm, np.nan)), ("DROP: why not", iod)]
         for c, (title, X) in enumerate(cols):
             ax = axs[r, c]
             if c < 3:
@@ -334,7 +334,7 @@ def fig_scatter(a):
         ref = np.load(os.path.join(SITES_DIR, site, "reference.npz"))
         D = ref["depth"]
         for r, (label, H) in enumerate((("Semi-analytical", depth_of(sa_run(a, site), site)),
-                                        ("Profile model", depth_of("profile-wt", site)))):
+                                        ("DROP", depth_of("profile-wt", site)))):
             ax = axs[r, c]
             v = np.isfinite(D) & np.isfinite(H) & (H > 0)
             x = np.linspace(0, 25, 50)
@@ -366,7 +366,7 @@ def fig_depth_bins(rows):
             y = [bd.get(b, {}).get("bias", np.nan) for b in bins]
             e = [bd.get(b, {}).get("rmse", np.nan) for b in bins]
             ax.errorbar(x + (k - 1)*0.22, y, yerr=e, fmt="o", ms=3, color=col, lw=0.8, capsize=1.5,
-                        label=["semi-analytical", "profile", "published"][k])
+                        label=["semi-analytical", "DROP", "published"][k])
         ax.axhline(0, color="k", lw=0.5)
         ax.set_xticks(x)
         ax.set_xticklabels(bins)
@@ -397,7 +397,7 @@ def fig_tier3(rows):
     x = np.arange(len(labels))
     for ax, (A, B, yl) in zip(axs, ((sa_h, pm_h, "Hits, all cells (%)"), (sa_r, pm_r, "RMSE, covered (m)"))):
         ax.bar(x - 0.2, A, 0.4, color=C_SA, label="semi-analytical")
-        ax.bar(x + 0.2, B, 0.4, color=C_PM, label="profile")
+        ax.bar(x + 0.2, B, 0.4, color=C_PM, label="DROP")
         ax.set_ylabel(yl)
         for k in (4, 8):
             ax.axvline(k - 0.5, color="k", lw=0.4)

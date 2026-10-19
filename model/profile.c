@@ -1,9 +1,9 @@
 //
-//  MODEL Lee_Profile
+//  MODEL DROP (formerly Lee_Profile)
 //
 
-// A profile model for multispectral imagery (validation/EXPERIMENTS.md, Phase F; the
-// prototype is validation/profile_model.py). It is Lee's shallow-water model with the water
+// DROP, Deep-water Referenced Optical Profiling: a semi-analytical model for multispectral
+// imagery (validation/EXPERIMENTS.md, Phase F; the prototype is validation/profile_model.py). It is Lee's shallow-water model with the water
 // observed rather than fitted, and a global search over the one non-linear unknown, depth.
 //
 // 1. Water, per scene. The deep-water reflectance rrs_inf is the median spectrum of the
@@ -747,7 +747,7 @@ void profile_model(
       h < 120 ? 2.05 + (h - 40)*(10.0 - 2.05)/79.0 : 10.2 + (h - 120)*(30.0 - 10.2)/99.0;
   }
 
-  printf("\nLee_Profile: radius %g km, tile %d, eps %g, t_deep %g, t_amb %g, glint %d, kappa %d (local %d), qaa %d\n",
+  printf("\nDROP: radius %g km, tile %d, eps %g, t_deep %g, t_amb %g, glint %d, kappa %d (local %d), qaa %d\n",
     (double) PROFILE_RADIUS, PROFILE_TILE, (double) PROFILE_EPS, (double) PROFILE_T_DEEP,
     (double) PROFILE_T_AMB, PROFILE_GLINT, PROFILE_KAPPA, PROFILE_KAPPA_LOCAL, PROFILE_QAA);
 
@@ -877,7 +877,7 @@ void profile_model(
     }
   }
 
-  printf("Lee_Profile: %d cells with a depth, %d optically deep, %d ambiguous, %d without data (%.1f s)\n",
+  printf("DROP: %d cells with a depth, %d optically deep, %d ambiguous, %d without data (%.1f s)\n",
     counts[1], counts[2], counts[3], counts[0], (double) (clock() - t0)/CLOCKS_PER_SEC);
 
   // Write the outputs as MODEL Lee_Semi_Analytical does.

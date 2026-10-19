@@ -1,4 +1,4 @@
-%  A profile model for semi-analytical bathymetry from multispectral imagery.
+%  DROP, Deep-water Referenced Optical Profiling: semi-analytical bathymetry from multispectral imagery.
 %  MDPI Remote Sensing template (Definitions/mdpi.cls). Build: pdflatex twice.
 %  Figures: validation/paper_profile.py figures (writes paper/msab_figures/).
 
@@ -34,9 +34,9 @@ $^{1}$ \quad The University of Melbourne, Melbourne, Australia}
 
 \corres{Correspondence: samuel.thomas.blake@gmail.com}
 
-\abstract{Physics-based (semi-analytical) inversion of shallow-water reflectance was designed for hyperspectral data. Applied to four-band multispectral imagery such as Sentinel-2, the joint fit of water, bottom and depth is poorly posed: on real scenes its misfit is nearly flat in depth, so the result depends on the start and the optimiser rather than on the data. We derive a semi-analytical model for multispectral imagery from Lee's shallow-water reflectance model with three changes. First, the water is observed rather than fitted: each scene's deep-water reflectance is taken from its own optically deep pixels, which are found without soundings, and the attenuation follows by a quasi-analytical algorithm. Second, the bottom brightness and a per-scene offset enter linearly, so for every depth on a fixed grid they are solved exactly; the misfit profile in depth is then exact and its global minimum is found by construction. Third, a depth is reported only when the profile excludes both optically deep water and a clearly different depth. We validate the model against radiative-transfer simulations and, without soundings or a depth prior, against singlebeam surveys at four sites in Exmouth Gulf, Western Australia, using six Sentinel-2 scenes. Settings were tuned on training sites and tested once on held-out sites. Compared with the previous semi-analytical model, depths within tolerance rose from 6--23\% to 21--54\% of the surveyed cells at three sites, at about 500 times the speed, with better-calibrated uncertainties. With settings frozen, the gains held on six Landsat~8 scenes. The gains are confined to depths of 0--5\,m: deeper bottoms are reported too shallow or abstained from, and a product calibrated with soundings remains more accurate in deeper water.}
+\abstract{Physics-based (semi-analytical) inversion of shallow-water reflectance was designed for hyperspectral data. Applied to four-band multispectral imagery such as Sentinel-2, the joint fit of water, bottom and depth is poorly posed: on real scenes its misfit is nearly flat in depth, so the result depends on the start and the optimiser rather than on the data. We derive DROP (Deep-water Referenced Optical Profiling), a semi-analytical model for multispectral imagery, from Lee's shallow-water reflectance model with three changes. First, the water is observed rather than fitted: each scene's deep-water reflectance is taken from its own optically deep pixels, which are found without soundings, and the attenuation follows by a quasi-analytical algorithm. Second, the bottom brightness and a per-scene offset enter linearly, so for every depth on a fixed grid they are solved exactly; the misfit profile in depth is then exact and its global minimum is found by construction. Third, a depth is reported only when the profile excludes both optically deep water and a clearly different depth. We validate the model against radiative-transfer simulations and, without soundings or a depth prior, against singlebeam surveys at four sites in Exmouth Gulf, Western Australia, using six Sentinel-2 scenes. Settings were tuned on training sites and tested once on held-out sites. Compared with the previous semi-analytical model, depths within tolerance rose from 6--23\% to 21--54\% of the surveyed cells at three sites, at about 500 times the speed, with better-calibrated uncertainties. With settings frozen, the gains held on six Landsat~8 scenes. The gains are confined to depths of 0--5\,m: deeper bottoms are reported too shallow or abstained from, and a product calibrated with soundings remains more accurate in deeper water.}
 
-\keyword{satellite-derived bathymetry; semi-analytical model; Sentinel-2; Landsat 8; multispectral; inverse problem; identifiability; optically deep water; uncertainty}
+\keyword{satellite-derived bathymetry; semi-analytical model; DROP; Sentinel-2; Landsat 8; multispectral; inverse problem; identifiability; optically deep water; uncertainty}
 
 \begin{document}
 
@@ -48,9 +48,9 @@ HOPE was designed for hyperspectral data. Lee and Carder~\cite{lee2002bands} fou
 
 We built a four-tier benchmark to test that model (Section~\ref{sec:validation}). It showed two things. First, Lee's forward model is a good approximation of exact radiative transfer, with a median error of 2.4\%. Second, the inversion does not recover depth on real Sentinel-2 scenes without a depth prior. At Exmouth Gulf, with the true depth given as the starting point, the misfit at the true depth was no lower than at a wrong shallow depth (5.2\% against 5.1\% relative error). The misfit is nearly flat in depth because the scene water parameters, the bottom brightness and depth can trade against one another, and because the fit absorbs the forward model's own few-per-cent error into whichever parameter is freest. Once the misfit is flat in depth, no search strategy can recover depth, so the problem lies in how the model is posed.
 
-In this paper we derive a semi-analytical model for multispectral imagery, the profile model, which keeps Lee's physics but changes what is fitted. The water is observed from each scene's optically deep pixels and not fitted to the pixel. The two remaining per-pixel unknowns other than depth, the bottom brightness and a per-scene offset, enter the model linearly and are solved exactly at every candidate depth. Depth, the only non-linear unknown, is searched exhaustively on a fixed grid, so the minimum of the misfit is global by construction. Finally, the profile of the misfit in depth decides whether a depth is reported at all. Section~\ref{sec:model} derives the model and lists every assumption it makes. Section~\ref{sec:data} describes the Exmouth Gulf case study and the validation design. The design separates tuning data from test data, and reports a held-out test run once. Section~\ref{sec:results} gives the results, including where the model fails, and Section~\ref{sec:discussion} discusses them.
+In this paper we derive a semi-analytical model for multispectral imagery, DROP (Deep-water Referenced Optical Profiling), which keeps Lee's physics but changes what is fitted. The water is observed from each scene's optically deep pixels and not fitted to the pixel. The two remaining per-pixel unknowns other than depth, the bottom brightness and a per-scene offset, enter the model linearly and are solved exactly at every candidate depth. Depth, the only non-linear unknown, is searched exhaustively on a fixed grid, so the minimum of the misfit is global by construction. Finally, the profile of the misfit in depth decides whether a depth is reported at all. Section~\ref{sec:model} derives the model and lists every assumption it makes. Section~\ref{sec:data} describes the Exmouth Gulf case study and the validation design. The design separates tuning data from test data, and reports a held-out test run once. Section~\ref{sec:results} gives the results, including where the model fails, and Section~\ref{sec:discussion} discusses them.
 
-\section{The Profile Model}\label{sec:model}
+\section{Deep-Water Referenced Optical Profiling}\label{sec:model}
 
 \subsection{Shallow-Water Reflectance}\label{sec:rt}
 
@@ -91,7 +91,7 @@ The forward model is also approximate: on 1,098 radiative-transfer cases its med
 \item scanning depth with the bottom brightness solved linearly;
 \item bounding the bottom brightness by class.
 \end{itemize}
-Two changes made it worse because they let the water bend towards the shallow pixels: sharing the water over a tile, and tying it between scenes. The profile model takes the first three changes to their conclusion.
+Two changes made it worse because they let the water bend towards the shallow pixels: sharing the water over a tile, and tying it between scenes. DROP takes the first three changes to their conclusion.
 
 \subsection{Water Observed from the Image}\label{sec:water}
 
@@ -199,10 +199,10 @@ The model makes the following assumptions. Each is a possible cause of failure, 
 
 \subsection{Implementation}\label{sec:impl}
 
-The model is implemented in C as \texttt{MODEL Lee\_Profile} in photic~\cite{blake2020}, with the same inputs and outputs as photic's existing semi-analytical model. Each cell gets a depth, its uncertainty, the bottom class and brightness, the misfit, and a flag: depth, optically deep, ambiguous or no data. Smoothed red and green are computed with summed-area tables. Local references are computed once per $8 \times 8$-cell tile, from the deep pixels within $R$ of the tile centre. Per cell, the cost is $O(N_H N_c S L)$ for $N_H = 220$ depths and $N_c = 3$ classes, with no iteration. A Python prototype (\texttt{validation/profile\_model.py}) implements the same model with one reference per cell. On 300 training points, the C port with one reference per cell reproduced the prototype exactly, and the tiled default changed 1 of the 300. Table~\ref{tab:settings} lists the settings.
+The model is implemented in C as \texttt{MODEL DROP} in photic~\cite{blake2020}, with the same inputs and outputs as photic's existing semi-analytical model. Each cell gets a depth, its uncertainty, the bottom class and brightness, the misfit, and a flag: depth, optically deep, ambiguous or no data. Smoothed red and green are computed with summed-area tables. Local references are computed once per $8 \times 8$-cell tile, from the deep pixels within $R$ of the tile centre. Per cell, the cost is $O(N_H N_c S L)$ for $N_H = 220$ depths and $N_c = 3$ classes, with no iteration. A Python prototype (\texttt{validation/profile\_model.py}) implements the same model with one reference per cell. On 300 training points, the C port with one reference per cell reproduced the prototype exactly, and the tiled default changed 1 of the 300. Table~\ref{tab:settings} lists the settings.
 
 \begin{table}[H]
-\caption{Settings of the profile model. ``Tuned'' settings were chosen on the training split only (Section~\ref{sec:design}).\label{tab:settings}}
+\caption{Settings of DROP. ``Tuned'' settings were chosen on the training split only (Section~\ref{sec:design}).\label{tab:settings}}
 \begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{4.2cm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{3.2cm}}
 \toprule
 \textbf{Setting} & \textbf{Value} & \textbf{Source}\\
@@ -301,7 +301,7 @@ Hits is the headline metric. It rewards a model for giving correct depths, and n
 
 The model was developed in stages, with a decision rule for each stage written down before it ran:
 \begin{itemize}
-\item \textbf{Screen.} Design choices were screened on a fixed, depth-stratified sample of 300 points, drawn from the training split: tier 3 clear and moderate water, and the Marina and gulf entrance sites. The profile model and photic's semi-analytical model at the same commit were scored on the same points. The net score is hits minus misses (depths outside tolerance) over all points. Its 95\% interval comes from a paired bootstrap~\cite{efron1993}.
+\item \textbf{Screen.} Design choices were screened on a fixed, depth-stratified sample of 300 points, drawn from the training split: tier 3 clear and moderate water, and the Marina and gulf entrance sites. DROP and photic's semi-analytical model at the same commit were scored on the same points. The net score is hits minus misses (depths outside tolerance) over all points. Its 95\% interval comes from a paired bootstrap~\cite{efron1993}.
 \item \textbf{Gate G1 (identifiability).} The model with the water taken from the soundings had to beat the semi-analytical model on the training split. If it could not, the data could not support depth on these scenes.
 \item \textbf{Tuning and confirmation.} The deep-pixel rule, $\varepsilon$, $T_\mathrm{deep}$, $T_\mathrm{amb}$, the window radius and the optional components were tuned on the training split. The chosen setting was then confirmed with a second random sample.
 \item \textbf{Gate G2 (held-out test).} The frozen model was run once on the test split: tier 3 turbid water, Bundegi and Tantabiddi. It had to give a better net score with no material RMSE regression.
@@ -331,7 +331,7 @@ None changed the net score by more than about ten points with an interval exclud
 
 \subsection{Identifiability and Development}\label{sec:dev}
 
-\paragraph{Gate G1.} With the deep-water reference taken from the sounded cells deeper than the bottom's visibility, the profile model beat the semi-analytical model on the training split's tier 4 points. The net score was $+18.7$ points (95\% interval $+8.0$ to $+30.7$), hits rose from 9\% to 21\%, and RMSE on the commonly covered points fell from 2.88 to 1.29\,m. Depth is therefore identifiable on these scenes once the water is right. The flat misfit came from letting the water bend, not from the data. On tier 3 the oracle model's net score was $-3$ points (interval spanning zero), with 43\% lower RMSE.
+\paragraph{Gate G1.} With the deep-water reference taken from the sounded cells deeper than the bottom's visibility, DROP beat the semi-analytical model on the training split's tier 4 points. The net score was $+18.7$ points (95\% interval $+8.0$ to $+30.7$), hits rose from 9\% to 21\%, and RMSE on the commonly covered points fell from 2.88 to 1.29\,m. Depth is therefore identifiable on these scenes once the water is right. The flat misfit came from letting the water bend, not from the data. On tier 3 the oracle model's net score was $-3$ points (interval spanning zero), with 43\% lower RMSE.
 
 \paragraph{Water from the image.} The first sounding-free rule, which took the lowest raw red, failed (tier 3 net $-65$ points). In clear water the red reflectance ($\approx 2\times10^{-4}$) is below the noise ($5\times10^{-4}$), so the rule picked noise extremes. Smoothing, the two-stage red-then-green ranking and the local 1.5\,km window fixed this. Table~\ref{tab:tuning} shows the main steps of tuning.
 
@@ -367,46 +367,46 @@ On a second training sample (seed 2), the chosen setting gave a tier 4 net score
 Table~\ref{tab:t4} and Figures~\ref{fig:maps}--\ref{fig:bins} give the full tier 4 results. Neither model used soundings or a depth prior.
 
 \begin{table}[H]
-\caption{Tier 4, every reference cell. SA: photic's semi-analytical model; Profile: this paper; Published: the published photic product, calibrated with soundings. Coverage, within tolerance (Tol.) and hits are in \%; RMSE and bias are in m.\label{tab:t4}}
+\caption{Tier 4, every reference cell. SA: photic's semi-analytical model; DROP: this paper; Published: the published photic product, calibrated with soundings. Coverage, within tolerance (Tol.) and hits are in \%; RMSE and bias are in m.\label{tab:t4}}
 \begin{adjustwidth}{-\extralength}{0cm}
 \begin{tabularx}{\fulllength}{llCCCCCCC}
 \toprule
 \textbf{Site} & \textbf{Model} & \textbf{Coverage} & \textbf{Tol.} & \textbf{Hits} & \textbf{Hits 0--5\,m} & \textbf{RMSE} & \textbf{Bias} & \textbf{Run time (s)}\\
 \midrule
 \multirow{3}{*}{Bundegi} & SA & 22.0 & 41.8 & 9.2 & 12 & 2.39 & $-0.48$ & 2404\\
- & Profile & 30.1 & 71.6 & \textbf{21.6} & 30 & 1.68 & $-0.86$ & 7\\
+ & DROP & 30.1 & 71.6 & \textbf{21.6} & 30 & 1.68 & $-0.86$ & 7\\
  & Published & 83.3 & 41.9 & 34.9 & 34 & 3.67 & $+0.64$ & --\\
 \midrule
 \multirow{3}{*}{Tantabiddi} & SA & 48.9 & 47.5 & 23.2 & 29 & 2.51 & $+0.42$ & 4650\\
- & Profile & 78.8 & 68.8 & \textbf{54.3} & 71 & 2.17 & $-0.54$ & 6\\
+ & DROP & 78.8 & 68.8 & \textbf{54.3} & 71 & 2.17 & $-0.54$ & 6\\
  & Published & \multicolumn{7}{c}{outside the published product}\\
 \midrule
 \multirow{3}{*}{Marina} & SA & 37.3 & 15.9 & 5.9 & 9 & 2.41 & $-2.00$ & 5242\\
- & Profile & 34.6 & 60.4 & \textbf{20.9} & 33 & 3.01 & $-1.81$ & 14\\
+ & DROP & 34.6 & 60.4 & \textbf{20.9} & 33 & 3.01 & $-1.81$ & 14\\
  & Published & 90.4 & 67.7 & 61.2 & 43 & 0.97 & $-0.11$ & --\\
 \midrule
 \multirow{3}{*}{Gulf entrance} & SA & 2.0 & 30.6 & 0.6 & 13 & 4.26 & $-0.92$ & 1232\\
- & Profile & 3.6 & 40.8 & \textbf{1.5} & 33 & 3.85 & $-2.77$ & 3\\
+ & DROP & 3.6 & 40.8 & \textbf{1.5} & 33 & 3.85 & $-2.77$ & 3\\
  & Published & 100.0 & 49.6 & 49.6 & 62 & 2.18 & $+1.94$ & --\\
 \bottomrule
 \end{tabularx}
 \end{adjustwidth}
 \end{table}
 
-\paragraph{Against the semi-analytical model.} The profile model gives more correct depths at every site, with no soundings and no prior. Hits rose from 9.2\% to 21.6\% at Bundegi, from 23.2\% to 54.3\% at Tantabiddi and from 5.9\% to 20.9\% at Marina. RMSE fell at the two held-out sites, and the profile model runs in 3--14\,s per site against 20--90 minutes. At Marina, coverage was similar but the share within tolerance rose from 16\% to 60\%. RMSE rose there, from 2.41 to 3.01\,m, because cells at 10--13\,m were placed at 4--5\,m. The semi-analytical model instead put almost every Marina depth at 0.8--2.3\,m (Figure~\ref{fig:scatter}). At the gulf entrance, 93\% of the cells are deeper than 10\,m in turbid water. The profile model flags 63\% of them optically deep and 33\% have no valid data, so it gives few depths, as the physics requires (Figure~\ref{fig:maps}).
+\paragraph{Against the semi-analytical model.} DROP gives more correct depths at every site, with no soundings and no prior. Hits rose from 9.2\% to 21.6\% at Bundegi, from 23.2\% to 54.3\% at Tantabiddi and from 5.9\% to 20.9\% at Marina. RMSE fell at the two held-out sites, and DROP runs in 3--14\,s per site against 20--90 minutes. At Marina, coverage was similar but the share within tolerance rose from 16\% to 60\%. RMSE rose there, from 2.41 to 3.01\,m, because cells at 10--13\,m were placed at 4--5\,m. The semi-analytical model instead put almost every Marina depth at 0.8--2.3\,m (Figure~\ref{fig:scatter}). At the gulf entrance, 93\% of the cells are deeper than 10\,m in turbid water. DROP flags 63\% of them optically deep and 33\% have no valid data, so it gives few depths, as the physics requires (Figure~\ref{fig:maps}).
 
-\paragraph{The depth ceiling.} Almost all the gains are at 0--5\,m. Between 5 and 10\,m the profile model's hits are 0--4\% at every site, and below 10\,m they are 0\%. Fewer than 5\% of its depths exceed 5\,m (Figures~\ref{fig:scatter} and~\ref{fig:bins}). Deeper cells are either flagged optically deep or reported at 3--5\,m, with biases of $-3.0$ to $-4.2$\,m in the 5--10\,m bin and $-6.5$ to $-8.4$\,m in the 10--20\,m bin. The ambiguity test does not catch these cases because their profiles have a clear minimum, but in the wrong place.
+\paragraph{The depth ceiling.} Almost all the gains are at 0--5\,m. Between 5 and 10\,m DROP's hits are 0--4\% at every site, and below 10\,m they are 0\%. Fewer than 5\% of its depths exceed 5\,m (Figures~\ref{fig:scatter} and~\ref{fig:bins}). Deeper cells are either flagged optically deep or reported at 3--5\,m, with biases of $-3.0$ to $-4.2$\,m in the 5--10\,m bin and $-6.5$ to $-8.4$\,m in the 10--20\,m bin. The ambiguity test does not catch these cases because their profiles have a clear minimum, but in the wrong place.
 
 At Tantabiddi, cells sounded at 3--5, 5--8 and 8--12\,m all had their profile minimum at 3.9--4.2\,m. Scaling $\kappa$ by 0.7 or 0.5 moved all three groups deeper together, to about 5.5 and 7.5\,m, without separating them and without changing the misfit. Within this model's error, these four-band spectra therefore do not distinguish a deeper, brighter bottom from a shallower, darker one beyond about 5\,m. On synthetic scenes with realistic bottoms and correct water, the same model recovers 10--20\,m with 89\% of depths within tolerance (Section~\ref{sec:t3}). The ceiling therefore comes from the real scenes and the model's assumptions about them, not from the method itself.
 
-\paragraph{Against the published product.} The published product, made with a sounding-calibrated depth prior, gives far more correct depths: 34.9\% against 21.6\% at Bundegi, and 61.2\% against 20.9\% at Marina. Most of its advantage is in deeper water. At Marina it has 86\% hits in the 5--10\,m bin against 1\% for the profile model. At 0--5\,m the two are comparable: 30\% against 34\% at Bundegi and 33\% against 43\% at Marina. On the cells it covers, the profile model's share within tolerance is higher at Bundegi (72\% against 42\%) but lower at Marina (60\% against 68\%). The cells each model covers differ, so the share within tolerance alone does not compare the two models.
+\paragraph{Against the published product.} The published product, made with a sounding-calibrated depth prior, gives far more correct depths: 34.9\% against 21.6\% at Bundegi, and 61.2\% against 20.9\% at Marina. Most of its advantage is in deeper water. At Marina it has 86\% hits in the 5--10\,m bin against 1\% for DROP. At 0--5\,m the two are comparable: 30\% against 34\% at Bundegi and 33\% against 43\% at Marina. On the cells it covers, DROP's share within tolerance is higher at Bundegi (72\% against 42\%) but lower at Marina (60\% against 68\%). The cells each model covers differ, so the share within tolerance alone does not compare the two models.
 
 \begin{figure}[H]
 \begin{adjustwidth}{-\extralength}{0cm}
 \centering
 \includegraphics[width=\fulllength]{msab_figures/maps.png}
 \end{adjustwidth}
-\caption{Reference depths and modelled depths at the four sites: soundings gridded to the image, photic's semi-analytical model, the profile model, and the profile model's flag for each cell (depth, optically deep, ambiguous, or no valid data in enough scenes). Grey: no depth.\label{fig:maps}}
+\caption{Reference depths and modelled depths at the four sites: soundings gridded to the image, photic's semi-analytical model, DROP, and DROP's flag for each cell (depth, optically deep, ambiguous, or no valid data in enough scenes). Grey: no depth.\label{fig:maps}}
 \end{figure}
 
 \begin{figure}[H]
@@ -414,7 +414,7 @@ At Tantabiddi, cells sounded at 3--5, 5--8 and 8--12\,m all had their profile mi
 \centering
 \includegraphics[width=\fulllength]{msab_figures/scatter.png}
 \end{adjustwidth}
-\caption{Modelled against sounded depth on every covered reference cell. Top: semi-analytical model; bottom: profile model. The green band is the tolerance $0.5 + 0.1H$. Hits are over all reference cells.\label{fig:scatter}}
+\caption{Modelled against sounded depth on every covered reference cell. Top: semi-analytical model; bottom: DROP. The green band is the tolerance $0.5 + 0.1H$. Hits are over all reference cells.\label{fig:scatter}}
 \end{figure}
 
 \begin{figure}[H]
@@ -422,21 +422,21 @@ At Tantabiddi, cells sounded at 3--5, 5--8 and 8--12\,m all had their profile mi
 \centering
 \includegraphics[width=\fulllength]{msab_figures/depth_bins.png}
 \end{adjustwidth}
-\caption{Bias (points) and RMSE (bars) by sounded depth, for the semi-analytical model, the profile model and the published, sounding-calibrated product.\label{fig:bins}}
+\caption{Bias (points) and RMSE (bars) by sounded depth, for the semi-analytical model, DROP and the published, sounding-calibrated product.\label{fig:bins}}
 \end{figure}
 
 \subsection{Synthetic Scenes}\label{sec:t3}
 
-Table~\ref{tab:t3} and Figure~\ref{fig:t3} summarise tier 3. Where the profile model reports a depth it is usually more accurate. In turbid water the median RMSE is 0.37--0.72\,m against 0.72--2.13\,m, with 84--96\% of depths within tolerance. It abstains more, however, so its hits over all cells are lower on average: 31\% against 46\% in clear water, 16\% against 24\% in moderate water, and 10\% against 13\% in turbid water.
+Table~\ref{tab:t3} and Figure~\ref{fig:t3} summarise tier 3. Where DROP reports a depth it is usually more accurate. In turbid water the median RMSE is 0.37--0.72\,m against 0.72--2.13\,m, with 84--96\% of depths within tolerance. It abstains more, however, so its hits over all cells are lower on average: 31\% against 46\% in clear water, 16\% against 24\% in moderate water, and 10\% against 13\% in turbid water.
 
-The losses are largest in noise-free scenes. There, the error model ($\varepsilon = 0.05$, tuned for real imagery) is conservative, and the semi-analytical model can bend its water to fit the scenes' own structure. In clear water with noise and realistic bottoms, the profile model doubles the hits (51\% against 24\%) and recovers 10--20\,m with 89\% of depths within tolerance. The profile model ignores the depth prior, so the prior scenarios score as the ones without. In those scenarios the semi-analytical model, drawn away from its prior, has RMSE of 8--14\,m.
+The losses are largest in noise-free scenes. There, the error model ($\varepsilon = 0.05$, tuned for real imagery) is conservative, and the semi-analytical model can bend its water to fit the scenes' own structure. In clear water with noise and realistic bottoms, DROP doubles the hits (51\% against 24\%) and recovers 10--20\,m with 89\% of depths within tolerance. DROP ignores the depth prior, so the prior scenarios score as the ones without. In those scenarios the semi-analytical model, drawn away from its prior, has RMSE of 8--14\,m.
 
 \begin{table}[H]
 \small
 \caption{Tier 3, means over scenarios without a prior (1, 2 and 4 scenes; uniform and realistic bottoms; with and without noise; controls). Hits and coverage in \%, RMSE the median over scenarios in m.\label{tab:t3}}
 \begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{2.7cm}CCCCCC}
 \toprule
- & \multicolumn{3}{c}{\textbf{Semi-analytical}} & \multicolumn{3}{c}{\textbf{Profile}}\\
+ & \multicolumn{3}{c}{\textbf{Semi-analytical}} & \multicolumn{3}{c}{\textbf{DROP}}\\
 \textbf{Water} & \textbf{Coverage} & \textbf{Hits} & \textbf{RMSE} & \textbf{Coverage} & \textbf{Hits} & \textbf{RMSE}\\
 \midrule
 Clear & 59 & 45.6 & 1.87 & 42 & 31.4 & 1.67\\
@@ -458,7 +458,7 @@ Clear, noise, realistic bottoms & 25 & 23.9 & 0.78 & 59 & 50.6 & 1.38\\
 
 \subsection{Ablation}\label{sec:ablation}
 
-Because the profile model runs in seconds, every component could be switched off in turn and run on all cells of both tiers (Table~\ref{tab:ablation}). Only the optically deep threshold changes the result substantially. At $T_\mathrm{deep} = 64$ hits fall by half or more at every Exmouth site. At $T_\mathrm{deep} = 9$ coverage rises (Marina 35\% to 64\%), and hits rise by 1--3 points at the cost of higher RMSE.
+Because DROP runs in seconds, every component could be switched off in turn and run on all cells of both tiers (Table~\ref{tab:ablation}). Only the optically deep threshold changes the result substantially. At $T_\mathrm{deep} = 64$ hits fall by half or more at every Exmouth site. At $T_\mathrm{deep} = 9$ coverage rises (Marina 35\% to 64\%), and hits rise by 1--3 points at the cost of higher RMSE.
 
 The other components matter little on the full sites. The scene-wide reference is as good as the 1.5\,km window, slightly better at Tantabiddi and Marina and slightly worse at Bundegi and the gulf entrance. Without the offset, Bundegi loses 2 points and its coverage falls from 30\% to 21\%, while tier 3's clear-water hits rise by 7 points. Without the ambiguity test, hits change by under 2 points while RMSE rises at the held-out sites. The red-only selection loses 8 points at Tantabiddi. Several choices that the 300-point screen favoured are therefore not supported by the full benchmark. A simpler model, with scene-wide water and no offset, would do about as well.
 
@@ -470,7 +470,7 @@ The other components matter little on the full sites. The scene-wide reference i
 \toprule
 \textbf{Variant} & \textbf{Bundegi} & \textbf{Tantabiddi} & \textbf{Marina} & \textbf{Gulf ent.} & \textbf{T3 clear} & \textbf{T3 moderate} & \textbf{T3 turbid}\\
 \midrule
-Profile model as tuned & 21.6 & 54.3 & 20.9 & 1.5 & 31.4 & 15.9 & 10.1\\
+DROP as tuned & 21.6 & 54.3 & 20.9 & 1.5 & 31.4 & 15.9 & 10.1\\
 No offset $d_s$ & 19.3 & 56.2 & 20.0 & 1.7 & 38.2 & 20.9 & 7.9\\
 Scene-wide water ($R = \infty$) & 20.2 & 56.3 & 23.0 & 1.2 & 31.4 & 15.9 & 10.1\\
 No ambiguity test & 22.1 & 55.0 & 22.9 & 1.6 & 43.8 & 19.9 & 11.6\\
@@ -496,7 +496,7 @@ We ran the model at each site with every subset of its scenes (Figure~\ref{fig:s
 
 \subsection{Uncertainty}\label{sec:sigma}
 
-The profile model's $\sigma_H$ is too small, but far better calibrated than the semi-analytical model's. The share of covered cells within $\pm\sigma_H$ of the sounding is 46\%, 35\%, 18\% and 14\% at Bundegi, Tantabiddi, Marina and the gulf entrance, against the nominal 68\%. For the semi-analytical model it is 4\%, 11\%, 0\% and 8\%. The median $\sigma_H$ is 0.25--0.35\,m, against median errors of 0.37--1.6\,m. The underestimate is largest where the depth ceiling acts, as expected: a profile with a clear but displaced minimum gives a narrow $\sigma_H$ around the wrong depth.
+DROP's $\sigma_H$ is too small, but far better calibrated than the semi-analytical model's. The share of covered cells within $\pm\sigma_H$ of the sounding is 46\%, 35\%, 18\% and 14\% at Bundegi, Tantabiddi, Marina and the gulf entrance, against the nominal 68\%. For the semi-analytical model it is 4\%, 11\%, 0\% and 8\%. The median $\sigma_H$ is 0.25--0.35\,m, against median errors of 0.37--1.6\,m. The underestimate is largest where the depth ceiling acts, as expected: a profile with a clear but displaced minimum gives a narrow $\sigma_H$ around the wrong depth.
 
 \subsection{Deep-Water Reference}\label{sec:refres}
 
@@ -520,7 +520,7 @@ After the held-out test, we changed the model's spectral data and its sensor, on
 Table~\ref{tab:sens} gives the results. Changes of under about 0.5 points in hits and 0.1\,m in RMSE are within run-to-run differences seen elsewhere in the benchmark.
 
 \begin{table}[H]
-\caption{Sensitivity of the profile model to spectral data and sensor, all settings frozen: hits (\%) / RMSE (m) over every reference cell. ``As tested'' repeats Table~\ref{tab:t4} for Sentinel-2. The Landsat~8 SA row is photic's semi-analytical model at a later revision, whose Sentinel-2 hits are within 0.6 points of Table~\ref{tab:t4}.\label{tab:sens}}
+\caption{Sensitivity of DROP to spectral data and sensor, all settings frozen: hits (\%) / RMSE (m) over every reference cell. ``As tested'' repeats Table~\ref{tab:t4} for Sentinel-2. The Landsat~8 SA row is photic's semi-analytical model at a later revision, whose Sentinel-2 hits are within 0.6 points of Table~\ref{tab:t4}.\label{tab:sens}}
 \begin{adjustwidth}{-\extralength}{0cm}
 \begin{tabularx}{\fulllength}{llCCCC}
 \toprule
@@ -533,7 +533,7 @@ Table~\ref{tab:sens} gives the results. Changes of under about 0.5 points in hit
  & Band averaging, water tables & 21.7 / 1.77 & 52.4 / 2.19 & 22.6 / 3.00 & 1.7 / 3.83\\
 \midrule
 \multirow{6}{*}{Landsat 8} & SA & 0.5 / 4.48 & 40.3 / 1.65 & 4.1 / 3.03 & 1.4 / 2.68\\
- & Profile, as tested & 17.3 / 2.19 & 58.4 / 1.84 & 17.2 / 0.85 & 2.7 / 4.74\\
+ & DROP, as tested & 17.3 / 2.19 & 58.4 / 1.84 & 17.2 / 0.85 & 2.7 / 4.74\\
  & Measured bottom library & 16.7 / 2.20 & 55.8 / 1.78 & 18.2 / 0.60 & 3.3 / 4.45\\
  & Band averaging & 17.6 / 2.20 & 58.7 / 1.82 & 17.8 / 0.82 & 2.7 / 4.74\\
  & Band averaging, measured library & 15.8 / 2.24 & 56.7 / 1.76 & 18.5 / 0.58 & 3.1 / 4.45\\
@@ -545,15 +545,15 @@ Table~\ref{tab:sens} gives the results. Changes of under about 0.5 points in hit
 
 \paragraph{Bottom library.} The measured library changed hits little, but it reduced the shallow bias where the depth ceiling acts. On Sentinel-2 the bias fell from $-1.81$ to $-1.46$\,m at Marina and from $-2.77$ to $-2.09$\,m at the gulf entrance, and RMSE fell by 0.37 and 0.60\,m. On Landsat~8 the Marina bias fell from $-0.65$ to $-0.06$\,m. At Tantabiddi, Sentinel-2 was unchanged and Landsat~8 lost 2.6 points. The measured library differs from the tested one in shape, and its ranges reach brighter sand and coral. A brighter bottom at a given depth moves the profile minimum deeper, so this is consistent with A6 contributing to the ceiling. It does not remove the ceiling: depths beyond 5\,m are still reported too shallow.
 
-\paragraph{Band averaging and water tables.} Because the water is observed from the image, the tables enter the profile model only through pure-water absorption at the reference band, pure-water backscatter and the bottom shapes. The model is correspondingly less sensitive to them than the semi-analytical model, which fits the water with these tables. Band averaging moved the profile model's Sentinel-2 hits by $-2.4$ points at Tantabiddi and $+1.8$ at Marina, and its Landsat~8 hits by under 0.6 points. The same change cost the semi-analytical model 4.2 points at Tantabiddi on Sentinel-2 and 5.7 on Landsat~8. The new water tables changed nothing beyond the noise. Tables at the band centres are therefore adequate for this model.
+\paragraph{Band averaging and water tables.} Because the water is observed from the image, the tables enter DROP only through pure-water absorption at the reference band, pure-water backscatter and the bottom shapes. The model is correspondingly less sensitive to them than the semi-analytical model, which fits the water with these tables. Band averaging moved DROP's Sentinel-2 hits by $-2.4$ points at Tantabiddi and $+1.8$ at Marina, and its Landsat~8 hits by under 0.6 points. The same change cost the semi-analytical model 4.2 points at Tantabiddi on Sentinel-2 and 5.7 on Landsat~8. The new water tables changed nothing beyond the noise. Tables at the band centres are therefore adequate for this model.
 
-\paragraph{Landsat 8.} The model transferred to a second sensor without change. On Landsat~8 it gave more correct depths than the semi-analytical model at every site: 17.3\% against 0.5\% at Bundegi, 58.4\% against 40.3\% at Tantabiddi and 17.2\% against 4.1\% at Marina. At Bundegi the semi-analytical model stayed 3--4\,m too shallow in every leave-one-scene-out run, and one of the scenes (2018-08-22) is turbid there. The profile model observes each scene's water separately, which may be why that scene did not defeat it. Results on Landsat~8 and Sentinel-2 are on different cells and different dates, so they should not be compared site by site. The depth ceiling is the same on both. On Landsat~8 the bias is $-1.9$ to $-3.7$\,m in the 5--10\,m bin and $-6.1$ to $-7.4$\,m in the 10--20\,m bin, and at Marina the low RMSE (0.60--0.85\,m) comes from cells almost all at 0--5\,m.
+\paragraph{Landsat 8.} The model transferred to a second sensor without change. On Landsat~8 it gave more correct depths than the semi-analytical model at every site: 17.3\% against 0.5\% at Bundegi, 58.4\% against 40.3\% at Tantabiddi and 17.2\% against 4.1\% at Marina. At Bundegi the semi-analytical model stayed 3--4\,m too shallow in every leave-one-scene-out run, and one of the scenes (2018-08-22) is turbid there. DROP observes each scene's water separately, which may be why that scene did not defeat it. Results on Landsat~8 and Sentinel-2 are on different cells and different dates, so they should not be compared site by site. The depth ceiling is the same on both. On Landsat~8 the bias is $-1.9$ to $-3.7$\,m in the 5--10\,m bin and $-6.1$ to $-7.4$\,m in the 10--20\,m bin, and at Marina the low RMSE (0.60--0.85\,m) comes from cells almost all at 0--5\,m.
 
 \section{Discussion}\label{sec:discussion}
 
 \subsection{What Changed and Why It Converges}
 
-The profile model does not change the physics of HOPE. It changes which quantities are estimated and how. Water properties are estimated where they are observable, from optically deep pixels, and not where they trade against depth. The bottom brightness and the scene offsets are solved in closed form. Depth, the one non-linear unknown, is searched exhaustively. The result is reproducible, has no starting values, and has an exact misfit profile from which detectability, ambiguity and uncertainty can all be read.
+DROP does not change the physics of HOPE. It changes which quantities are estimated and how. Water properties are estimated where they are observable, from optically deep pixels, and not where they trade against depth. The bottom brightness and the scene offsets are solved in closed form. Depth, the one non-linear unknown, is searched exhaustively. The result is reproducible, has no starting values, and has an exact misfit profile from which detectability, ambiguity and uncertainty can all be read.
 
 Gate G1 established the central point: on these Sentinel-2 scenes, depth becomes identifiable once the water is fixed correctly. The same scenes defeated the joint inversion regardless of its start. Converging to the right answer therefore depends less on the optimiser than on removing the freedom that made the misfit flat.
 
@@ -570,7 +570,7 @@ Uniformly scaling $\kappa$ did not separate the depths, so a single calibration 
 
 \paragraph{Abstention in clean data.} The thresholds were tuned for real imagery, where $\varepsilon = 0.05$ is realistic. On noise-free synthetic scenes they withhold depths the data support, and hits fall in clear and moderate water. Scaling the thresholds by a noise estimate per scene, which the deep pixels already provide, is the natural remedy. Any such re-tuning needs a fresh held-out sample, because the test split has now been used.
 
-\paragraph{Sounding-calibrated products.} The published product, made with a sounding-calibrated empirical prior, remains far more accurate at 5--20\,m. The profile model does not replace soundings where they are available. A depth prior could be added to the profile as one more term, $(H - H_\mathrm{prior})^2/\sigma_\mathrm{prior}^2$, without losing exactness. It would then combine the prior with the image where the image is informative, and defer to the prior where it is not.
+\paragraph{Sounding-calibrated products.} The published product, made with a sounding-calibrated empirical prior, remains far more accurate at 5--20\,m. DROP does not replace soundings where they are available. A depth prior could be added to the profile as one more term, $(H - H_\mathrm{prior})^2/\sigma_\mathrm{prior}^2$, without losing exactness. It would then combine the prior with the image where the image is informative, and defer to the prior where it is not.
 
 \subsection{Lessons for Validation}
 

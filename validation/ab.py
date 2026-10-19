@@ -16,7 +16,7 @@ without editing the code:
     ab.py HEAD HEAD%sites5           tier 4 from another site set (here with 705 nm)
     ab.py HEAD HEAD#-s4              tier 4 without scene s4 (or "#s1,s3", or overpass dates
                                      "#20190428,20210914"); --sites sites16 for all 16 scenes
-    ab.py HEAD .~Lee_Profile         another model: MODEL Lee_Profile (the profile model) in place
+    ab.py HEAD .~DROP                another model: MODEL DROP in place
                                      of Lee_Semi_Analytical, with the same inputs
 
 A variant is ref[:flags][%sites][#scenes][@start][^rinf][~model].
@@ -95,7 +95,7 @@ def parse_variant(spec):
     scenes or None, start or None, rinf or None, model or None). ^image or ^lut passes each scene's
     deep-water Rrs as SCENE RINF (rinf.py), which seeds the depth search with H0; ^rsigma the tier 4
     noise as RSIGMA from the same deep pixels (tier 3 already passes its simulated noise); combine
-    with +. ~model runs another MODEL (Lee_Profile) in place of Lee_Semi_Analytical."""
+    with +. ~model runs another MODEL (DROP) in place of Lee_Semi_Analytical."""
     spec, _, model = spec.partition("~")
     spec, _, rinf_mode = spec.partition("^")
     if rinf_mode and not set(rinf_mode.split("+")) <= {"image", "lut", "rsigma"}:

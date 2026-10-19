@@ -103,8 +103,10 @@ Invert the confident pixels, calibrate a band-ratio depth model on them, and use
 
 ## Phase G: towards a state-of-the-art sounding-free model (planned 2026-10-19)
 
+**Naming.** The profile model of Phase F is now called **DROP**, Deep-water Referenced Optical Profiling (`MODEL DROP`; `Lee_Profile` is still accepted). Entries before 2026-10-19 use the old name.
+
 **Where we are.**
-- **The profile model is the base.** It is the best sounding-free model here. Its tier 4 hits are 22 / 54 / 21% at Bundegi / Tantabiddi / Marina, against 9 / 23 / 6% for the SA model, and it runs in seconds. It transfers to Landsat 8 unchanged. The SA joint inversion is not developed further.
+- **DROP is the base.** It is the best sounding-free model here. Its tier 4 hits are 22 / 54 / 21% at Bundegi / Tantabiddi / Marina, against 9 / 23 / 6% for the SA model, and it runs in seconds. It transfers to Landsat 8 unchanged. The SA joint inversion is not developed further.
 - **Its limit is depth beyond about 5 m.** Biases are −2 to −4 m at 5–10 m and −6 to −8 m at 10–20 m, on both sensors.
 - **The evidence points at absolute attenuation.**
   - κ from the soundings breaks the ceiling at Tantabiddi, and Jerlov's κ breaks it at Marina.
@@ -126,8 +128,8 @@ Invert the confident pixels, calibrate a band-ratio depth model on them, and use
    - A second region as the new held-out test, because the Exmouth test split has been used. The Arabian Gulf site (`tier4_fetch_s2.py`, ICESat-2 reference) waits on an Earthdata login.
    - A same-day Sentinel-2 and Landsat 8 pair at Exmouth, to separate sensor from conditions.
    - Tier 3 scenes with a red offset of 1–5 × 10⁻³ in rrs, the failure tier 4 shows and tier 3 cannot (its δ is 0).
-   - Tier 3 `_insitu` for `Lee_Profile`.
-   - Score against the profile model (`profile-wt`); keep SA runs to its existing results, since they take hours.
+   - Tier 3 `_insitu` for DROP.
+   - Score against DROP (`profile-wt`); keep SA runs to its existing results, since they take hours.
 2. **G1a, confirm the attenuation diagnosis (cheap).**
    - Compare each scene's deep-water rrs∞ and QAA κ with an independent ocean-colour retrieval over the same deep water on the same day (Sentinel-3 OLCI, or MODIS/VIIRS: Rrs, Kd(490), IOPs).
    - If the independent rrs(665) is several times lower, the ceiling is atmospheric-correction error, and G1c is the principled fix.
@@ -145,10 +147,10 @@ Invert the confident pixels, calibrate a band-ratio depth model on them, and use
    - Every pixel already has χ²(H) on a depth grid. An edge-preserving seabed smoothness prior over neighbours can then be solved on that grid as a discrete Markov random field, by dynamic programming along rows and columns, or TRW-S.
    - Expected: fewer ambiguous pixels, depths where single-pixel minima are weak, and a posterior σ_H.
    - The same machinery takes an optional sounding-calibrated prior term for a fusion product.
-7. **G5, exact forward model (BATHY_PDE_APPROACH M1–M2), retargeted to `profile.c`.**
+7. **G5, exact forward model (BATHY_PDE_APPROACH M1–M2), retargeted to DROP (`profile.c`).**
    - The depth scan becomes table lookups per depth, and the deep-water inversion becomes a table inversion consistent with the forward model, replacing QAA.
    - Gate: tier 2 error under 1%. Then tiers 3 and 4.
-   - Update the specification, which targets `samodel.c`, to target the profile model.
+   - Update the specification, which targets `samodel.c`, to target DROP.
 8. **G6, joint atmosphere (M3).**
    - Fit each scene's aerosol with the water and the seabed from L1 TOA reflectance, if G1a shows the correction residual is the cause.
    - This is the largest build, so it comes last.
@@ -1173,7 +1175,7 @@ The benchmark names its data explicitly (`spectra_inputs.py`), so these results 
 - **Bottom: mixtures stay.** Given the tier 3 `_insitu` result, photic keeps fitting a mixture of bottom types (`ALL_BOTTOMS 1`, the default), not one type at a time. `ALL_BOTTOMS 0` stays as an option.
 - **Decision:** no default changes. All of it ships as data and options. Note for the RT forward model spec (`BATHY_PDE_APPROACH.tex`): band averaging must come with a forward model that is itself exact, or its gains are offset elsewhere.
 
-### Phase F: the profile model (2026-10-14, `profile_model.py`, `MODEL Lee_Profile`)
+### Phase F: the profile model, now DROP (2026-10-14, `profile_model.py`, `MODEL Lee_Profile`)
 
 The plan is in Phase F above. A/B results are against photic HEAD (d9d14d6) on `ab.py`'s points: net is hits − misses over all points, and RMSE is on the points both give a depth.
 
@@ -1413,9 +1415,9 @@ Tier 3 is unchanged by either switch (the synthetic scenes give δ = 0 and their
 - The depth dependence of the needed attenuation points to the forward model's assumptions over the shallows (A3 uniform water, A6 bottom, A1 structure), not to a calibration constant.
 - Every switch stays off.
 
-### The profile model with the spectral data files and on Landsat 8 (2026-10-16, `profile-data`, settings frozen)
+### DROP with the spectral data files and on Landsat 8 (2026-10-16, `profile-data`, settings frozen)
 
-`Lee_Profile` on the data files of `data-inputs`: water tables from `spectra.c`, the classes are the library's first three types with their bounds, and `SCENE ... SRF` is supported. Every `PROFILE_*` setting is as tuned in Phase F. These are sensitivity tests, run once after the held-out test, and none chose a setting. They are in the profile paper (Section "Sensitivity to Spectral Data and Sensor").
+DROP (`Lee_Profile`) on the data files of `data-inputs`: water tables from `spectra.c`, the classes are the library's first three types with their bounds, and `SCENE ... SRF` is supported. Every `PROFILE_*` setting is as tuned in Phase F. These are sensitivity tests, run once after the held-out test, and none chose a setting. They are in the profile paper (Section "Sensitivity to Spectral Data and Sensor").
 - **Reproduction:** with the HydroLight library and legacy water tables (`prof-repro`), the new code reproduces `profile-wt` bit for bit at all four sites.
 - Runs: `prof-meas` (`PHOTIC_BENCH_BOTTOM=bottom_measured.csv`), `prof-srf` (`PHOTIC_BENCH_SRF=1`), `prof-srf-meas` (both), `prof-srfw` (SRF with `aw_pope_fry_1997_full.csv`, `bbw_zhang_2009.csv`). Each has an `-l8` twin on `sites_l8`.
 
@@ -1436,19 +1438,19 @@ Tier 3 is unchanged by either switch (the synthetic scenes give δ = 0 and their
 | L8 `prof-srfw-l8` | 17.4 / 2.20 | 58.9 / 1.83 | 17.7 / 0.82 | 2.7 / 4.79 |
 
 - **The measured library reduces the shallow bias where the ceiling acts, not the ceiling.** S2 bias Marina −1.81 → −1.46 m, gulf entrance −2.77 → −2.09 m; L8 Marina −0.65 → −0.06 m. Hits change by under 1 point, except L8 Tantabiddi −2.6. Depths beyond 5 m are still too shallow.
-- **The profile model is less sensitive to the tables than the SA model**, because it observes the water and uses the tables only for a_w at the reference band, b_bw and the bottom shapes. SRF: S2 Tantabiddi −2.4, Marina +1.8, L8 within 0.6 points (SA: −4.2 and −5.7 at Tantabiddi). The new water tables are within the noise.
-- **Landsat 8: the profile model beats the SA model at every site, without re-tuning.** Bundegi 0.5 → 17.3%: the turbid 2018-08-22 scene that defeats the SA model does not defeat a model that observes each scene's water. The `l8-head` SA run is a later revision than d9d14d6 (its S2 hits are within 0.6 points).
+- **DROP is less sensitive to the tables than the SA model**, because it observes the water and uses the tables only for a_w at the reference band, b_bw and the bottom shapes. SRF: S2 Tantabiddi −2.4, Marina +1.8, L8 within 0.6 points (SA: −4.2 and −5.7 at Tantabiddi). The new water tables are within the noise.
+- **Landsat 8: DROP beats the SA model at every site, without re-tuning.** Bundegi 0.5 → 17.3%: the turbid 2018-08-22 scene that defeats the SA model does not defeat a model that observes each scene's water. The `l8-head` SA run is a later revision than d9d14d6 (its S2 hits are within 0.6 points).
 - **The depth ceiling is the same on Landsat 8:** bias −1.9 to −3.7 m at 5–10 m and −6.1 to −7.4 m at 10–20 m. Marina's low L8 RMSE comes from cells almost all at 0–5 m.
 - **Not run:** `sa-d9d-l8` (d9d14d6 on Landsat 8) and tier 3 `--only insitu` for both models. They were stopped because the SA model takes hours per run.
 - **Decision:** no defaults change. Neither the measured library nor SRF meets the acceptance rule for `Lee_Profile` (Tantabiddi loses on L8 or S2).
 
 ### Phase G, first steps (2026-10-19)
 
-**G0: tier 3 `_insitu` with the profile model** (`prof-ins-hl`, `prof-ins-meas`; 5 s per run). Hits over all cells / RMSE where a depth is given, against the SA model (`ins-hl-default`):
+**G0: tier 3 `_insitu` with DROP** (`prof-ins-hl`, `prof-ins-meas`; 5 s per run). Hits over all cells / RMSE where a depth is given, against the SA model (`ins-hl-default`):
 - Clear, 2 scenes, noise-free: 24% / 1.1 m against 59% / 2.6 m.
 - Clear, 4 scenes, noisy: 31% / 2.4 m against 30% / 1.8 m.
 - Turbid: 5–11% / 0.7–0.8 m against 9–14% / 1.0–3.1 m.
-- The profile model is about as accurate where it reports a depth, but abstains far more in noise-free scenes (the thresholds; G2). The two libraries are again about equal.
+- DROP is about as accurate where it reports a depth, but abstains far more in noise-free scenes (the thresholds; G2). The two libraries are again about equal.
 
 **G1a: the red offset is real (in-image check, no external data).** Median ACOLITE Rrs over open water west of the reef (lon < 113.955) and north of the cape (lat > −21.70), in each of the four usable scenes:
 - Rrs(865) is 4–7 × 10⁻⁴, where water is black.

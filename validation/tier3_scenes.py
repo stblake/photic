@@ -99,7 +99,7 @@ FULL = dict(water=["clear", "moderate", "turbid"], n_scenes=[1, 2, 4], noise=[0.
 # Scenes with realistic bottoms (medians of in situ classes at 560 nm, Heron Reef and Moreton
 # Bay; EXPERIMENTS.md B8): the default scenes give every bottom albedo 0.6, which is
 # realistic for sand but 6-10 times too bright for seagrass and coral.
-# The model photic runs (bench.py run --model): Lee_Semi_Analytical, or Lee_Profile.
+# The model photic runs (bench.py run --model): Lee_Semi_Analytical, or DROP.
 MODEL = "Lee_Semi_Analytical"
 REALISTIC_ALBEDO = {"sand": 0.5, "seagrass": 0.07, "coral": 0.10}
 REALISTIC = dict(n_scenes=[2, 4], noise=[0.0, 5e-4])

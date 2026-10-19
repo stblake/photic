@@ -1,10 +1,10 @@
-"""Experiments and figures for the profile-model paper (paper/MULTISPECTRAL_SEMI_ANALYTICAL_BATHY.tex).
+"""Experiments and figures for the DROP paper (paper/MULTISPECTRAL_SEMI_ANALYTICAL_BATHY.tex).
 
     paper_profile.py ablate     # each component switched off in turn: full tiers 3 and 4
     paper_profile.py scenes     # tier 4 with every subset of the scenes at each site
     paper_profile.py figures    # figures and the numbers quoted in the paper
 
-The profile model (MODEL Lee_Profile, EXPERIMENTS.md Phase F) is built from the working tree by
+DROP (MODEL DROP, formerly Lee_Profile; EXPERIMENTS.md Phase F) is built from the working tree by
 ab.py's cached builds, with its PROFILE_* settings overridden by -D flags. The semi-analytical
 reference is photic HEAD's full benchmark run (--sa, default head-d9d14d6).
 """
@@ -70,7 +70,7 @@ def cmd_ablate(a):
         cid = "paper-" + name
         if os.path.exists(os.path.join(RUNS, cid, "tier4.json")) and not a.force:
             return name
-        subprocess.run([PY, "bench.py", "run", "--tier", "3", "--tier", "4", "--model", "Lee_Profile",
+        subprocess.run([PY, "bench.py", "run", "--tier", "3", "--tier", "4", "--model", "DROP",
                         "--photic", photic_for(flags), "--cid", cid], cwd=HERE, check=True,
                        stdout=subprocess.DEVNULL)
         return name
@@ -83,7 +83,7 @@ def cmd_ablate(a):
 
 
 def run_subset(photic, site, names, rundir):
-    """Run Lee_Profile at a site with the scenes in names; returns the depth (positive down)."""
+    """Run DROP at a site with the scenes in names; returns the depth (positive down)."""
     site_dir = os.path.join(SITES_DIR, site)
     shutil.rmtree(rundir, ignore_errors=True)
     os.makedirs(rundir)
@@ -96,7 +96,7 @@ def run_subset(photic, site, names, rundir):
             continue
         if line.startswith("MODEL"):
             i = tok.index("OUT")
-            line = "MODEL Lee_Profile IN %s %s\n" % (" ".join(names), " ".join(tok[i:]))
+            line = "MODEL DROP IN %s %s\n" % (" ".join(names), " ".join(tok[i:]))
         lines.append(line)
     for f in os.listdir(site_dir):
         if f.endswith(".asc") and f.split("_")[0] in names:

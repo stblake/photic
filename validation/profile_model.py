@@ -1,4 +1,4 @@
-"""Phase F prototype: a profile model for multispectral imagery (EXPERIMENTS.md, Phase F).
+"""Phase F prototype of DROP, Deep-water Referenced Optical Profiling (MODEL DROP; EXPERIMENTS.md, Phase F).
 
 Lee's shallow-water model with the water observed rather than fitted. Each scene's deep-water
 reflectance rrs_inf comes from its optically deep pixels, and kappa and u from rrs_inf by QAA.
