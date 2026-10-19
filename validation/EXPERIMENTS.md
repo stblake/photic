@@ -1356,6 +1356,35 @@ Tier 3 is unchanged by either switch (the synthetic scenes give δ = 0 and their
 - The depth dependence of the needed attenuation points to the forward model's assumptions over the shallows (A3 uniform water, A6 bottom, A1 structure), not to a calibration constant.
 - Every switch stays off.
 
+### The profile model with the spectral data files and on Landsat 8 (2026-10-16, `profile-data`, settings frozen)
+
+`Lee_Profile` on the data files of `data-inputs`: water tables from `spectra.c`, the classes are the library's first three types with their bounds, and `SCENE ... SRF` is supported. Every `PROFILE_*` setting is as tuned in Phase F. These are sensitivity tests, run once after the held-out test, and none chose a setting. They are in the profile paper (Section "Sensitivity to Spectral Data and Sensor").
+- **Reproduction:** with the HydroLight library and legacy water tables (`prof-repro`), the new code reproduces `profile-wt` bit for bit at all four sites.
+- Runs: `prof-meas` (`PHOTIC_BENCH_BOTTOM=bottom_measured.csv`), `prof-srf` (`PHOTIC_BENCH_SRF=1`), `prof-srf-meas` (both), `prof-srfw` (SRF with `aw_pope_fry_1997_full.csv`, `bbw_zhang_2009.csv`). Each has an `-l8` twin on `sites_l8`.
+
+**Tier 4, hits % over all reference cells / RMSE m** (bias in the text):
+
+| Run | Bundegi | Tantabiddi | Marina | Gulf entrance |
+|---|---|---|---|---|
+| S2 `prof-repro` (= `profile-wt`) | 21.6 / 1.68 | 54.3 / 2.17 | 20.9 / 3.01 | 1.5 / 3.85 |
+| S2 `prof-meas` | 21.7 / 1.60 | 54.4 / 2.11 | 21.4 / **2.64** | 1.9 / **3.25** |
+| S2 `prof-srf` | 21.7 / 1.72 | **51.9** / 2.15 | 22.7 / 2.99 | 1.7 / 3.80 |
+| S2 `prof-srf-meas` | 21.7 / 1.68 | **51.0** / 2.11 | 23.2 / 2.67 | 1.6 / 3.21 |
+| S2 `prof-srfw` | 21.7 / 1.77 | 52.4 / 2.19 | 22.6 / 3.00 | 1.7 / 3.83 |
+| L8 SA (`l8-head`) | 0.5 / 4.48 | 40.3 / 1.65 | 4.1 / 3.03 | 1.4 / 2.68 |
+| L8 `prof-repro-l8` | **17.3** / 2.19 | **58.4** / 1.84 | **17.2** / 0.85 | 2.7 / 4.74 |
+| L8 `prof-meas-l8` | 16.7 / 2.20 | 55.8 / 1.78 | 18.2 / **0.60** | 3.3 / 4.45 |
+| L8 `prof-srf-l8` | 17.6 / 2.20 | 58.7 / 1.82 | 17.8 / 0.82 | 2.7 / 4.74 |
+| L8 `prof-srf-meas-l8` | 15.8 / 2.24 | 56.7 / 1.76 | 18.5 / 0.58 | 3.1 / 4.45 |
+| L8 `prof-srfw-l8` | 17.4 / 2.20 | 58.9 / 1.83 | 17.7 / 0.82 | 2.7 / 4.79 |
+
+- **The measured library reduces the shallow bias where the ceiling acts, not the ceiling.** S2 bias Marina −1.81 → −1.46 m, gulf entrance −2.77 → −2.09 m; L8 Marina −0.65 → −0.06 m. Hits change by under 1 point, except L8 Tantabiddi −2.6. Depths beyond 5 m are still too shallow.
+- **The profile model is less sensitive to the tables than the SA model**, because it observes the water and uses the tables only for a_w at the reference band, b_bw and the bottom shapes. SRF: S2 Tantabiddi −2.4, Marina +1.8, L8 within 0.6 points (SA: −4.2 and −5.7 at Tantabiddi). The new water tables are within the noise.
+- **Landsat 8: the profile model beats the SA model at every site, without re-tuning.** Bundegi 0.5 → 17.3%: the turbid 2018-08-22 scene that defeats the SA model does not defeat a model that observes each scene's water. The `l8-head` SA run is a later revision than d9d14d6 (its S2 hits are within 0.6 points).
+- **The depth ceiling is the same on Landsat 8:** bias −1.9 to −3.7 m at 5–10 m and −6.1 to −7.4 m at 10–20 m. Marina's low L8 RMSE comes from cells almost all at 0–5 m.
+- **Not run:** `sa-d9d-l8` (d9d14d6 on Landsat 8) and tier 3 `--only insitu` for both models. They were stopped because the SA model takes hours per run.
+- **Decision:** no defaults change. Neither the measured library nor SRF meets the acceptance rule for `Lee_Profile` (Tantabiddi loses on L8 or S2).
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.
