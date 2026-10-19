@@ -76,6 +76,7 @@ The steps are idempotent: anything already present is reused.
 - `raw/bathymetry/exmouth`: WA DoT Exmouth point surveys (`EX.zip`; singlebeam; x/y/z in GDA94 MGA zones 49/50; metres relative to AHD; CC BY 4.0) and the 5 m marina composite.
 - `raw/tides`: WA DoT Exmouth 02 tide gauge, 1997–2025, 5-minute data, cm above LAT, AWST (CC BY 4.0).
 - `raw/published`: the photic Exmouth Gulf 30 m product linked from the README.
+- `raw/atl24`: ICESat-2 ATL24 v002 bathymetric photons (NSIDC, Earthdata login in `~/.netrc`) over the Arabian Gulf site, cropped and kept as seabed and sea-surface photons, one `.npz` per granule (`tier4_fetch_atl24.py`). `tier4_gulf.py reference` makes them depths below MSL; `acolite s2|l8` and `sites s2|l8` build `derived/tier4/sites_gulf` and `sites_gulf_l8` (0.1° tiles); run tier 4 on them with `PHOTIC_TIER4_SITES`.
 - `raw/tides/got`: the GOT4.10c global ocean tide model (NASA GSFC, open), read with pyTMD, for sites without a gauge. At the Exmouth gauge (2019, hourly) it has r = 0.96 but underestimates the range (sd 0.34 against 0.53 m; residual 0.2 m RMS).
 
 ## Acceptance rule for changes to the model core

@@ -1573,6 +1573,36 @@ ACOLITE's DSF chose the maritime model (MOD2) at τ = 0.02–0.04. `aot_fit.py` 
   - Then fit the aerosol inside DROP from TOA reflectance (the specification's M3), so it varies with the water it explains.
   - Marina's deep reference (survey edge, 9.8 m) and turbid water at 865 nm need care there.
 
+### Second region: the Arabian Gulf held-out test (2026-10-20, `tier4_gulf.py`, DROP frozen at 8c92b07)
+
+The Exmouth split has been looked at too often to be an unbiased test, so DROP is scored once at a new site: the Arabian Gulf between Abu Dhabi and Dubai (54.7–55.2 E, 24.75–25.1 N). Nothing here chose any setting. ICESat-2 is the reference only; it calibrates nothing.
+
+- **Reference:** ICESat-2 ATL24 v002 (`tier4_fetch_atl24.py`).
+  - Inputs: 112 granules (2018–2024), 87 passes with seabed. Photons are class 40, excluding low confidence and sensor depth exceeded: 190,549 in all.
+  - Datum: ATL24's `ortho_h` is refraction-corrected and on EGM2008. MSL comes from the passes themselves: sea surface minus the GOT4.10 tide, averaged over the passes (0.25 m above the geoid). GOT4.10 follows the passes' surface with r = 0.86, slope 0.85 and a non-tidal residual of 0.20 m.
+  - Cells: the median of at least 3 photons spreading at most 0.5 m (the Exmouth rule), over water in the imagery.
+- **Sites:** 0.1° tiles holding at least 200 reference cells, chosen from the reference alone before any run. Scene tides are GOT4.10 at each tile's centre. ACOLITE runs as at Exmouth (DSF, fixed AOT, residual glint).
+- **Sentinel-2 cannot be used as selected.** Over open water the scenes' TOA reflectance at 1614 nm is 0.017–0.043 (haze or glint; one scene, 2025-02-04, is 0.0075). ACOLITE's SWIR mask (0.0215) then removes the water: three scenes have no valid pixels and two cover only the west. A sixth scene (2022-10-18) is blackfill over the site. The scenes were chosen by cloud, sun and tide, not by SWIR.
+- **Landsat 8 is usable:** three scenes (2018-11-05, 2019-10-23, 2019-11-08) are valid over the water, and nine tiles hold 12,887 reference cells.
+
+DROP on Landsat 8, pooled over the nine tiles:
+
+| | Reference cells | With a depth | Hits % | RMSE m | Bias m | Within tolerance |
+|---|---|---|---|---|---|---|
+| All | 12,887 | 23% | 14.2 | 1.43 | −0.63 | 61% |
+
+| Depth (m) | Reference cells | With a depth | Bias m | RMSE m |
+|---|---|---|---|---|
+| 0–2 | 684 | 61% | +0.43 | 0.66 |
+| 2–5 | 4,111 | 55% | −0.51 | 0.80 |
+| 5–10 | 4,301 | 7% | −2.53 | 2.92 |
+| 10–20 | 3,747 | 0% | — | — |
+
+- **Shallower than 5 m DROP is good:** RMSE 0.66–0.80 m, close to its Exmouth accuracy.
+- **Beyond 5 m it fails: the depth ceiling.** In clear Gulf water it calls 93% of the 5–10 m cells and every 10–20 m cell optically deep, and the few depths it gives there are 2.5 m too shallow.
+- This is the same failure the Exmouth diagnosis found: the residual red and NIR offset makes κ too strong. It confirms the diagnosis held out.
+- **Next:** G6 step 2 (the aerosol where the water is) is the fix to test here. For Sentinel-2, re-select the gulf scenes with SWIR clarity added to the rules, from STAC, before any model run.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

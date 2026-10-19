@@ -3,8 +3,8 @@
 ATL24 (version 002, NSIDC) gives classified ICESat-2 photons with refraction-corrected
 orthometric heights. The granules crossing the site are found with CMR, downloaded with the
 Earthdata login in ~/.netrc, cropped to the site's box and saved as one .npz per granule in
-raw/atl24/ (every photon field, with the beam name); the full granule (about 100 MB) is then
-deleted. Downloads are idempotent (a granule with an .npz is skipped).
+raw/atl24/ (seabed and sea-surface photons only, every field, with the beam name); the full
+granule (about 100 MB) is then deleted. Downloads are idempotent (a granule with an .npz is skipped).
 
     tier4_fetch_atl24.py
 """
@@ -26,6 +26,7 @@ OUT = os.path.join(DATA, "raw", "atl24")
 BOX = (54.7, 24.75, 55.2, 25.1)  # W, S, E, N: the Sentinel-2 and Landsat 8 gulf scenes' site
 BEAMS = ["gt1l", "gt1r", "gt2l", "gt2r", "gt3l", "gt3r"]
 CMR = "https://cmr.earthdata.nasa.gov/search/granules.json"
+KEEP_CLASSES = (40, 41)  # ATL24 class_ph: 40 seabed, 41 sea surface (0 is unclassified)
 
 
 def granules():
@@ -49,7 +50,7 @@ def crop(h5, out):
                 continue
             g = f[b]
             lat, lon = g["lat_ph"][:], g["lon_ph"][:]
-            m = (lon >= w) & (lon <= e) & (lat >= s) & (lat <= n)
+            m = (lon >= w) & (lon <= e) & (lat >= s) & (lat <= n) & np.isin(g["class_ph"][:], KEEP_CLASSES)
             if not m.any():
                 continue
             for k in g:
@@ -60,10 +61,21 @@ def crop(h5, out):
     return sum(len(v) for v in keep.get("beam", []))
 
 
+def shrink(path):
+    """Drop the unclassified photons from an .npz written before KEEP_CLASSES."""
+    d = dict(np.load(path))
+    m = np.isin(d["class_ph"], KEEP_CLASSES) if "class_ph" in d else None
+    if m is None or m.all():
+        return
+    np.savez_compressed(path[:-4] + ".tmp.npz", **{k: v[m] for k, v in d.items()})
+    os.replace(path[:-4] + ".tmp.npz", path)
+
+
 def fetch_one(url):
     name = os.path.basename(url)[:-3]
     out = os.path.join(OUT, name + ".npz")
     if os.path.exists(out):
+        shrink(out)
         return name, "kept"
     with tempfile.TemporaryDirectory(dir=OUT) as tmp:
         h5, cookies = os.path.join(tmp, "g.h5"), os.path.join(tmp, "cookies")
