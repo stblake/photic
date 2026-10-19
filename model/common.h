@@ -228,6 +228,9 @@ struct scene_struct {
   bool srf_present;          // SRF given: the tables are averaged over each band's response
   int srf;                   // spectra.c handle of the response file
   int srf_band[MAX_GRIDS];   // its band for each scene band
+  bool nir_present;          // NIR given: a near-infrared grid that only DROP's offset estimate uses
+  int nir_index;             // its grid slot
+  int nir_wavelength;        // and wavelength (nm)
 };
 
 typedef struct scene_struct scene;

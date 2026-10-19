@@ -170,12 +170,14 @@ def gauge_reference(site, lon, lat, cell):
 
 
 def prepare_sites(wavelengths=PHOTIC_BANDS, sites_name="sites", scenes_only=None, acolite="acolite",
-                  sites=SITES, min_cell=0.0, tide=None, reference=gauge_reference):
+                  sites=SITES, min_cell=0.0, tide=None, reference=gauge_reference, nir=None):
     """photic inputs and reference grids for every site from the ACOLITE scenes in
     derived/tier4/<acolite>/ (those named in scenes_only, or all), written to
     derived/tier4/<sites_name>/ (tier4_score.py reads $PHOTIC_TIER4_SITES, default "sites").
     tide(isodate) gives the water level above MSL at the overpass (default: the Exmouth gauge);
-    reference(site, lon, lat, cell) the reference depth grid and its fields for reference.npz."""
+    reference(site, lon, lat, cell) the reference depth grid and its fields for reference.npz.
+    nir (nm): also write each scene's near-infrared Rrs and pass it as SCENE ... NIR, which only
+    MODEL DROP's offset estimate uses; it is not a band and does not limit coverage."""
     from scipy.spatial import cKDTree
     tide_at = tide or gauge_tide()
     scenes = []
@@ -214,10 +216,15 @@ def prepare_sites(wavelengths=PHOTIC_BANDS, sites_name="sites", scenes_only=None
                 band[band <= 0] = np.nan
                 bands[wl] = band
             cover = float(np.mean(np.all([np.isfinite(b) for b in bands.values()], axis=0)))
+            if nir:
+                src = min(s["rrs"], key=lambda w: abs(w - nir))
+                band = s["rrs"][src][idx].reshape(LON.shape)
+                band[far] = np.nan
+                bands["nir"] = band
             resampled.append((s, bands, cover))
         best = max(c for _, _, c in resampled)
         kept = [(s, b) for s, b, c in resampled if c >= 0.5*best]
-        for f in glob.glob(os.path.join(out, "s*_b*.asc")):
+        for f in glob.glob(os.path.join(out, "s*_b*.asc")) + glob.glob(os.path.join(out, "s*_nir.asc")):
             os.remove(f)
         lines, scene_lines = [], []
         for k, (s, bands) in enumerate(kept):
@@ -227,10 +234,16 @@ def prepare_sites(wavelengths=PHOTIC_BANDS, sites_name="sites", scenes_only=None
                 write_asc(os.path.join(out, name + ".asc"), bands[wl], lon, lat, cell)
                 lines.append("READ GRID %s %s.asc" % (name, name))
                 names.append(name)
+            nir_words = ""
+            if nir:
+                name = "s%d_nir" % (k + 1)
+                write_asc(os.path.join(out, name + ".asc"), bands["nir"], lon, lat, cell)
+                lines.append("READ GRID %s %s.asc" % (name, name))
+                nir_words = " NIR %s %d" % (name, nir)
             tw = np.degrees(np.arcsin(np.sin(np.radians(s["sza"]))/N_WATER))
             tv = np.degrees(np.arcsin(np.sin(np.radians(s["vza"]))/N_WATER))
-            scene_lines.append("SCENE NAME s%d BANDS %s WAVELENGTHS %s THETAVIEW %.4f THETASUN %.4f HTIDE %.3f" % (
-                k + 1, " ".join(names), " ".join("%d" % w for w in wavelengths), tv, tw, s["tide"]))
+            scene_lines.append("SCENE NAME s%d BANDS %s WAVELENGTHS %s THETAVIEW %.4f THETASUN %.4f HTIDE %.3f%s" % (
+                k + 1, " ".join(names), " ".join("%d" % w for w in wavelengths), tv, tw, s["tide"], nir_words))
         model = "MODEL Lee_Semi_Analytical IN %s OUT H H_sigma H_error albedo sand seagrass coral kmin btype iod" % (
             " ".join("s%d" % (k + 1) for k in range(len(kept))))
         open(os.path.join(out, "run.bam"), "w").write("\n".join(lines + scene_lines + [model, "EXIT"]) + "\n")
@@ -250,6 +263,10 @@ if __name__ == "__main__":
         acolite_all()
     elif sys.argv[1:] == ["sites"]:
         prepare_sites(scenes_only=tier4_fetch_s2.SCENES)
+    elif sys.argv[1:] == ["sites_nir"]:
+        prepare_sites(sites_name="sites_nir", scenes_only=tier4_fetch_s2.SCENES, nir=865.0)
+    elif sys.argv[1:] == ["sites_l8_nir"]:
+        prepare_sites(L8_BANDS, "sites_l8_nir", acolite="acolite_l8", min_cell=L8_CELL, nir=865.0)
     elif sys.argv[1:] == ["sites5"]:
         prepare_sites(RED_EDGE_BANDS, "sites5", scenes_only=tier4_fetch_s2.SCENES)
     elif sys.argv[1:] == ["sites16"]:
@@ -276,6 +293,6 @@ if __name__ == "__main__":
     elif sys.argv[1:] == ["sites_l8"]:
         prepare_sites(L8_BANDS, "sites_l8", acolite="acolite_l8", min_cell=L8_CELL)
     else:
-        raise SystemExit("usage: tier4_prepare.py acolite|sites|sites5|sites16|sites16_5|acolite_l8|sites_l8\n"
+        raise SystemExit("usage: tier4_prepare.py acolite|sites|sites5|sites16|sites16_5|acolite_l8|sites_l8|sites_nir|sites_l8_nir\n"
                          "  sites, sites5: the six original scenes; sites16, sites16_5: all scenes;\n"
                          "  sites_l8: the Landsat 8 scenes (tier4_fetch_l8.py) on ~31 m cells")

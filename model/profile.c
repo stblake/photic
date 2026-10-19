@@ -58,6 +58,9 @@
 #ifndef PROFILE_EPS
 #define PROFILE_EPS 0.05           // relative model error
 #endif
+#ifndef PROFILE_EPS_AUTO
+#define PROFILE_EPS_AUTO 0         // 1: calibrate the relative model error per run so the median reduced
+#endif                             // chi2 of the best fits is 1 (sampled passes before the full one)
 #ifndef PROFILE_T_DEEP
 #define PROFILE_T_DEEP 25.0
 #endif
@@ -87,14 +90,22 @@
 #ifndef PROFILE_QAA
 #define PROFILE_QAA 0              // QAA's reference band: 0 665 nm with a = a_w; 1 560 nm with QAA v6's
 #endif                             // empirical a(560) (Lee et al. 2014); 2 as 1 without its red term;
-                                   // 3 as 1 after removing a flat offset that makes rrs_inf(665)
+                                   // 3 as 1 after removing an offset that makes rrs_inf(665)
                                    // consistent with the water, kept unattenuated in the forward model
+#ifndef PROFILE_OFFSET_N
+#define PROFILE_OFFSET_N 0.0       // PROFILE_QAA 3: the offset's spectral shape, (lambda/665)^-n; 0 flat
+#endif
 
 #define N_CLASSES 3
 #define MAX_BANDS 16
 #define N_H 220
 #define QAA_G0 0.084               // Lee 1999, photic's
 #define QAA_G1 0.170
+
+// The relative model error in use (PROFILE_EPS, or calibrated with PROFILE_EPS_AUTO), and the
+// reduced chi2 of the last cell's best fit.
+
+static double drop_eps = PROFILE_EPS, drop_rchi;
 
 // Brightness ranges of the classes, from the bottom library (set in profile()).
 
@@ -104,6 +115,7 @@ typedef struct {
   double rrs_inf[MAX_BANDS], noise[MAX_BANDS], kappa[MAX_BANDS], MC[MAX_BANDS], MB[MAX_BANDS];
   int n_deep, cal_mode;             // calibration: 0 none (QAA), 1 offset, 2 Jerlov
   double cal_delta, cal_t;
+  double nir_rrs, cal_n;            // deep cells' median rrs in the NIR (-1 without); the offset's exponent
   bool ok;
 } reference;
 
@@ -112,6 +124,8 @@ typedef struct {
   double lam[MAX_SCENES][MAX_BANDS], tide[MAX_SCENES], sec_w[MAX_SCENES], sec_v[MAX_SCENES];
   double aw[MAX_SCENES][MAX_BANDS], bbw[MAX_SCENES][MAX_BANDS], rho[N_CLASSES][MAX_SCENES][MAX_BANDS];
   float **R[MAX_SCENES][MAX_BANDS], nodata[MAX_SCENES][MAX_BANDS];
+  float **nir[MAX_SCENES], nir_nodata[MAX_SCENES];   // SCENE ... NIR, or NULL
+  double nir_lam[MAX_SCENES];
   double **red[MAX_SCENES], **green[MAX_SCENES];
   char **valid[MAX_SCENES];
   double H[N_H], lo[N_CLASSES], hi[N_CLASSES];
@@ -276,13 +290,25 @@ static double jerlov_kd(double lam, double t) {
 // rrs_inf(665) - delta equals the rrs that the water found by QAA at 560 nm from rrs_inf - delta
 // predicts at 665 nm, with a(665) = a_w; by fixed-point iteration.
 
-static double red_offset(profile_data *pd, int s, const double *rrs_inf) {
+// The shape of the offset at band b of scene s, (lambda/665)^-n.
+
+static double offset_shape(profile_data *pd, int s, int b, double n) {
+  return pow(pd->lam[s][b]/665.0, -n);
+}
+
+// With a NIR grid (SCENE ... NIR), the exponent n is set in each iteration so the offset also
+// matches the deep cells' NIR rrs, the water being taken as black there (a_w(865) ~ 4.6/m makes
+// its own rrs ~1e-4). Without one, n is PROFILE_OFFSET_N.
+
+static double red_offset(profile_data *pd, int s, const double *rrs_inf, double nir_rrs, double *n_out) {
   int b, it, i665 = nearest_band(pd, s, 665.0), i560 = nearest_band(pd, s, 560.0), i443 = nearest_band(pd, s, 443.0),
     i492 = nearest_band(pd, s, 490.0);
-  double delta = 0.0, r[MAX_BANDS], u, chi, a560, bbp, Y, bb, pred;
+  double delta = 0.0, r[MAX_BANDS], u, chi, a560, bbp, Y, bb, pred, n = PROFILE_OFFSET_N;
 
-  for (it = 0; it < 20; it++) {
-    for (b = 0; b < pd->n_bands[s]; b++) r[b] = MAX(rrs_inf[b] - delta, 1.0e-6);
+  for (it = 0; it < 30; it++) {
+    if (nir_rrs > 0.0 && delta > nir_rrs) n = MIN(log(delta/nir_rrs)/log(pd->nir_lam[s]/665.0), 4.0);
+    else if (nir_rrs >= 0.0) n = 0.0;
+    for (b = 0; b < pd->n_bands[s]; b++) r[b] = MAX(rrs_inf[b] - delta*offset_shape(pd, s, b, n), 1.0e-6);
     chi = log10((r[i443] + r[i492])/(r[i560] + 5.0*r[i665]*r[i665]/r[i492]));
     a560 = pd->aw[s][i560] + pow(10.0, -1.146 - 1.366*chi - 0.469*chi*chi);
     u = (-QAA_G0 + sqrt(QAA_G0*QAA_G0 + 4.0*QAA_G1*r[i560]))/(2.0*QAA_G1);
@@ -291,8 +317,9 @@ static double red_offset(profile_data *pd, int s, const double *rrs_inf) {
     bb = pd->bbw[s][i665] + bbp*pow(pd->lam[s][i560]/pd->lam[s][i665], Y);
     u = bb/(pd->aw[s][i665] + bb);
     pred = (QAA_G0 + QAA_G1*u)*u;
-    delta = MIN(MAX(rrs_inf[i665] - pred, 0.0), 0.9*rrs_inf[i665]);
+    delta = MIN(MAX((rrs_inf[i665] - pred)/offset_shape(pd, s, i665, n), 0.0), 0.9*rrs_inf[i665]);
   }
+  *n_out = n;
   return delta;
 }
 
@@ -300,9 +327,11 @@ static void qaa(profile_data *pd, int s, reference *r) {
   int b;
   double u[MAX_BANDS] = {0.0}, shifted[MAX_BANDS] = {0.0};
 
-  if (PROFILE_QAA == 3 && r->cal_mode == 0) r->cal_delta = red_offset(pd, s, r->rrs_inf);
+  if (PROFILE_QAA == 3 && r->cal_mode == 0) r->cal_delta = red_offset(pd, s, r->rrs_inf, r->nir_rrs, &r->cal_n);
   if (r->cal_mode == 1 || (PROFILE_QAA == 3 && r->cal_mode == 0)) {
-    for (b = 0; b < pd->n_bands[s]; b++) shifted[b] = MAX(r->rrs_inf[b] - r->cal_delta, 1.0e-6);
+    for (b = 0; b < pd->n_bands[s]; b++) {
+      shifted[b] = MAX(r->rrs_inf[b] - r->cal_delta*(r->cal_mode == 1 ? 1.0 : offset_shape(pd, s, b, r->cal_n)), 1.0e-6);
+    }
     qaa_spectrum(pd, s, shifted, r->kappa, u);
   } else {
     qaa_spectrum(pd, s, r->rrs_inf, r->kappa, u);
@@ -459,6 +488,8 @@ static void deep_reference(profile_data *pd, int s, int i0, int i1, int j0, int 
   r->ok = false;
   r->cal_mode = 0;
   r->cal_delta = r->cal_t = 0.0;
+  r->cal_n = PROFILE_OFFSET_N;
+  r->nir_rrs = -1.0;
   v = (double*) malloc((size_t) (i1 - i0 + 1)*(j1 - j0 + 1)*sizeof(double));
   w = (double*) malloc((size_t) (i1 - i0 + 1)*(j1 - j0 + 1)*sizeof(double));
   for (i = i0; i <= i1; i++) {
@@ -492,6 +523,19 @@ static void deep_reference(profile_data *pd, int s, int i0, int i1, int j0, int 
     r->rrs_inf[b] = med;
     r->noise[b] = MAX(1.4826*percentile(w, n_deep, 0.5), 1.0e-5);
   }
+  if (pd->nir[s] != NULL) {
+    // The deep cells' median NIR rrs (non-positive values kept: noise about a small mean).
+    int n_nir = 0;
+    for (i = i0; i <= i1; i++) {
+      for (j = j0; j <= j1; j++) {
+        if (pd->valid[s][i][j] && pd->red[s][i][j] <= p_red && pd->green[s][i][j] <= p_green &&
+            isfinite(pd->nir[s][i][j]) && ! approx_equal(pd->nir[s][i][j], pd->nir_nodata[s], 1.0e-6)) {
+          v[n_nir++] = pd->nir[s][i][j]/0.5;   // rrs_of() for small R
+        }
+      }
+    }
+    r->nir_rrs = n_nir > 0 ? MAX(percentile(v, n_nir, 0.5), 0.0) : -1.0;
+  }
   r->n_deep = n_deep;
   r->ok = n_deep > 0;
   free(v);
@@ -516,7 +560,7 @@ static int profile_cell(profile_data *pd, reference **ref, double rrs[][MAX_BAND
     for (b = 0; b < pd->n_bands[s]; b++) {
       w[s][b] = 0.0;
       if (ok[s][b] && ref[s]->ok) {
-        sig2 = ref[s]->noise[b]*ref[s]->noise[b] + PROFILE_EPS*PROFILE_EPS*rrs[s][b]*rrs[s][b];
+        sig2 = ref[s]->noise[b]*ref[s]->noise[b] + drop_eps*drop_eps*rrs[s][b]*rrs[s][b];
         w[s][b] = 1.0/sig2;
         n++;
       }
@@ -531,7 +575,7 @@ static int profile_cell(profile_data *pd, reference **ref, double rrs[][MAX_BAND
         // With PROFILE_OFFSET_MODEL the calibration's offset is not water-column light and is not
         // attenuated: rrs = delta + (rrs_inf - delta)(1 - exp(-kappa M_C Z)) + bottom.
         dl = (PROFILE_OFFSET_MODEL && ref[s]->cal_mode) || (PROFILE_QAA == 3 && ! ref[s]->cal_mode) ?
-          ref[s]->cal_delta : 0.0;
+          ref[s]->cal_delta*(ref[s]->cal_mode ? 1.0 : offset_shape(pd, s, b, ref[s]->cal_n)) : 0.0;
         y[s][b] = rrs[s][b] - dl - (ref[s]->rrs_inf[b] - dl)*(1.0 - exp(-ref[s]->kappa[b]*ref[s]->MC[b]*Z));
         T[s][b] = exp(-ref[s]->kappa[b]*ref[s]->MB[b]*Z);
       }
@@ -615,7 +659,8 @@ static int profile_cell(profile_data *pd, reference **ref, double rrs[][MAX_BAND
     B = (x2*x2*(y0 - y1) + x1*x1*(y2 - y0) + x0*x0*(y1 - y2))/den;
     if (A > 0.0) H = MIN(MAX(-B/(2.0*A), x0), x2);
   }
-  scale = MAX(1.0, chi[k]/MAX(n - 2, 1));
+  drop_rchi = chi[k]/MAX(n - 2, 1);
+  scale = MAX(1.0, drop_rchi);
   lo = INFINITY;
   hi = -INFINITY;
   for (h = 0; h < N_H; h++) {
@@ -723,9 +768,9 @@ void profile_model(
   float **bottom_sand, float **bottom_seagrass, float **bottom_coral,
   float **K_min, float **bottom_type, float **index_optical_depth) {
 
-  int i, j, s, b, c, h, nr, nc, rad, n_ti, n_tj, ti, tj, ci, cj, n_valid, k_index, n, cls,
-    counts[4] = {0, 0, 0, 0};
-  double cell_km, H, sigma, misfit, bright, kmin, rrs[MAX_SCENES][MAX_BANDS], v;
+  int i, j, s, b, c, h, k, nr, nc, rad, n_ti, n_tj, ti, tj, ci, cj, n_valid, k_index, n, cls,
+    counts[4] = {0, 0, 0, 0}, pass, n_pass, stride;
+  double *rchis, cell_km, H, sigma, misfit, bright, kmin, rrs[MAX_SCENES][MAX_BANDS], v;
   char ok[MAX_SCENES][MAX_BANDS], file_name[64];
   float *lons, *lats;
   reference global[MAX_SCENES], **tiles, *ref[MAX_SCENES];
@@ -757,6 +802,9 @@ void profile_model(
     pd->tide[s] = sc->H_tide;
     pd->sec_w[s] = 1.0/cos(sc->theta_w*PI/180.0);
     pd->sec_v[s] = 1.0/cos(sc->theta_v*PI/180.0);
+    pd->nir[s] = sc->nir_present ? gridded_data[sc->nir_index].array : NULL;
+    pd->nir_nodata[s] = sc->nir_present ? gridded_data[sc->nir_index].nodata_value : 0.0f;
+    pd->nir_lam[s] = sc->nir_present ? sc->nir_wavelength : 0.0;
     for (b = 0; b < pd->n_bands[s]; b++) {
       pd->lam[s][b] = sc->wavelengths[b];
       pd->R[s][b] = gridded_data[sc->band_indexes[b]].array;
@@ -785,7 +833,9 @@ void profile_model(
     if (global[s].ok) {
       calibrate(pd, s, 0, nr - 1, 0, nc - 1, &global[s], true);
       qaa(pd, s, &global[s]);
-      if (PROFILE_QAA == 3) printf("  red offset %.5f\n", global[s].cal_delta);
+      if (PROFILE_QAA == 3) {
+        printf("  red offset %.5f, n %.2f (NIR rrs %.5f)\n", global[s].cal_delta, global[s].cal_n, global[s].nir_rrs);
+      }
     }
   }
 
@@ -800,85 +850,107 @@ void profile_model(
   n_tj = (nc + PROFILE_TILE - 1)/PROFILE_TILE;
   tiles = (reference**) calloc((size_t) n_ti*n_tj, sizeof(reference*));
 
-  for (i = 0; i < nr; i++) {
-    for (j = 0; j < nc; j++) {
-      depth[i][j] = depth_sigma[i][j] = model_error[i][j] = bottom_albedo[i][j] = 0.0;
-      bottom_sand[i][j] = bottom_seagrass[i][j] = bottom_coral[i][j] = 0.0;
-      K_min[i][j] = bottom_type[i][j] = index_optical_depth[i][j] = 0.0;
+  // With PROFILE_EPS_AUTO, passes over a sample of about 4000 cells first set the relative model
+  // error: chi2 scales as 1/eps^2 where the model error dominates the noise, so eps is multiplied
+  // by the square root of the sample's median reduced chi2, three times. Then the full pass.
 
-      if (points_present && (points.array[i][j] == 0.0 ||
-          approx_equal(points.array[i][j], points.nodata_value, 1.0e-6))) continue ;
+  drop_eps = PROFILE_EPS;
+  n_pass = PROFILE_EPS_AUTO ? 4 : 1;
+  stride = MAX(1, (nr*nc)/4000);
+  rchis = (double*) malloc((size_t) (nr*nc/stride + 1)*sizeof(double));
+  for (pass = 0; pass < n_pass; pass++) {
+    int sample = pass < n_pass - 1, n_rchi = 0;
+    for (k = 0; k < 4; k++) counts[k] = 0;
+    for (i = 0; i < nr; i++) {
+      for (j = 0; j < nc; j++) {
+        if (sample && (i*nc + j) % stride != 0) continue ;
+        depth[i][j] = depth_sigma[i][j] = model_error[i][j] = bottom_albedo[i][j] = 0.0;
+        bottom_sand[i][j] = bottom_seagrass[i][j] = bottom_coral[i][j] = 0.0;
+        K_min[i][j] = bottom_type[i][j] = index_optical_depth[i][j] = 0.0;
 
-      n = 0;
-      for (s = 0; s < nscenes; s++) {
-        for (b = 0; b < pd->n_bands[s]; b++) {
-          v = pd->R[s][b][i][j];
-          ok[s][b] = isfinite(v) && ! approx_equal(v, pd->nodata[s][b], 1.0e-6) && v > 0.0;
-          rrs[s][b] = ok[s][b] ? rrs_of(v) : 0.0;
-          n += ok[s][b];
-        }
-      }
-      if (n < 3) {
-        counts[0]++;
-        continue ;
-      }
+        if (points_present && (points.array[i][j] == 0.0 ||
+            approx_equal(points.array[i][j], points.nodata_value, 1.0e-6))) continue ;
 
-      for (s = 0; s < nscenes; s++) ref[s] = &global[s];
-      if (rad > 0) {
-        ti = i/PROFILE_TILE;
-        tj = j/PROFILE_TILE;
-        if (tiles[ti*n_tj + tj] == NULL) {
-          tiles[ti*n_tj + tj] = (reference*) calloc(nscenes, sizeof(reference));
-          ci = MIN(ti*PROFILE_TILE + PROFILE_TILE/2, nr - 1);
-          cj = MIN(tj*PROFILE_TILE + PROFILE_TILE/2, nc - 1);
-          for (s = 0; s < nscenes; s++) {
-            n_valid = 0;
-            for (int ii = MAX(ci - rad, 0); ii <= MIN(ci + rad, nr - 1); ii++) {
-              for (int jj = MAX(cj - rad, 0); jj <= MIN(cj + rad, nc - 1); jj++) n_valid += pd->valid[s][ii][jj];
-            }
-            if (n_valid >= PROFILE_MIN_LOCAL) {
-              reference *t = &tiles[ti*n_tj + tj][s];
-              deep_reference(pd, s, MAX(ci - rad, 0), MIN(ci + rad, nr - 1), MAX(cj - rad, 0),
-                MIN(cj + rad, nc - 1), t);
-              // The scene's site-wide calibration, or (PROFILE_KAPPA_LOCAL) the window's own.
-              if (t->ok && (! PROFILE_KAPPA_LOCAL || ! calibrate(pd, s, MAX(ci - rad, 0), MIN(ci + rad, nr - 1),
-                  MAX(cj - rad, 0), MIN(cj + rad, nc - 1), t, false))) {
-                t->cal_mode = global[s].cal_mode;
-                t->cal_delta = global[s].cal_delta;
-                t->cal_t = global[s].cal_t;
-              }
-              if (t->ok) qaa(pd, s, t);
-            }
-            if (! tiles[ti*n_tj + tj][s].ok) tiles[ti*n_tj + tj][s] = global[s];
+        n = 0;
+        for (s = 0; s < nscenes; s++) {
+          for (b = 0; b < pd->n_bands[s]; b++) {
+            v = pd->R[s][b][i][j];
+            ok[s][b] = isfinite(v) && ! approx_equal(v, pd->nodata[s][b], 1.0e-6) && v > 0.0;
+            rrs[s][b] = ok[s][b] ? rrs_of(v) : 0.0;
+            n += ok[s][b];
           }
         }
-        for (s = 0; s < nscenes; s++) ref[s] = &tiles[ti*n_tj + tj][s];
-      }
+        if (n < 3) {
+          counts[0]++;
+          continue ;
+        }
 
-      cls = profile_cell(pd, ref, rrs, ok, &H, &sigma, &misfit, &c, &bright);
-      counts[cls]++;
-      index_optical_depth[i][j] = cls;
-      if (cls == 0) continue ;
-      model_error[i][j] = misfit;
-      kmin = INFINITY;
-      for (s = 0; s < nscenes; s++) {
-        for (b = 0; b < pd->n_bands[s]; b++) kmin = MIN(kmin, ref[s]->kappa[b]);
-      }
-      K_min[i][j] = kmin;
-      if (cls == 1) {
-        depth[i][j] = -H;  // negative down
-        depth_sigma[i][j] = sigma;
-        bottom_albedo[i][j] = bright;
-        bottom_type[i][j] = c;
-        bottom_sand[i][j] = c == 0 ? 100.0 : 0.0;
-        bottom_seagrass[i][j] = c == 1 ? 100.0 : 0.0;
-        bottom_coral[i][j] = c == 2 ? 100.0 : 0.0;
+        for (s = 0; s < nscenes; s++) ref[s] = &global[s];
+        if (rad > 0) {
+          ti = i/PROFILE_TILE;
+          tj = j/PROFILE_TILE;
+          if (tiles[ti*n_tj + tj] == NULL) {
+            tiles[ti*n_tj + tj] = (reference*) calloc(nscenes, sizeof(reference));
+            ci = MIN(ti*PROFILE_TILE + PROFILE_TILE/2, nr - 1);
+            cj = MIN(tj*PROFILE_TILE + PROFILE_TILE/2, nc - 1);
+            for (s = 0; s < nscenes; s++) {
+              n_valid = 0;
+              for (int ii = MAX(ci - rad, 0); ii <= MIN(ci + rad, nr - 1); ii++) {
+                for (int jj = MAX(cj - rad, 0); jj <= MIN(cj + rad, nc - 1); jj++) n_valid += pd->valid[s][ii][jj];
+              }
+              if (n_valid >= PROFILE_MIN_LOCAL) {
+                reference *t = &tiles[ti*n_tj + tj][s];
+                deep_reference(pd, s, MAX(ci - rad, 0), MIN(ci + rad, nr - 1), MAX(cj - rad, 0),
+                  MIN(cj + rad, nc - 1), t);
+                // The scene's site-wide calibration, or (PROFILE_KAPPA_LOCAL) the window's own.
+                if (t->ok && (! PROFILE_KAPPA_LOCAL || ! calibrate(pd, s, MAX(ci - rad, 0), MIN(ci + rad, nr - 1),
+                    MAX(cj - rad, 0), MIN(cj + rad, nc - 1), t, false))) {
+                  t->cal_mode = global[s].cal_mode;
+                  t->cal_delta = global[s].cal_delta;
+                  t->cal_t = global[s].cal_t;
+                }
+                if (t->ok) qaa(pd, s, t);
+              }
+              if (! tiles[ti*n_tj + tj][s].ok) tiles[ti*n_tj + tj][s] = global[s];
+            }
+          }
+          for (s = 0; s < nscenes; s++) ref[s] = &tiles[ti*n_tj + tj][s];
+        }
+
+        cls = profile_cell(pd, ref, rrs, ok, &H, &sigma, &misfit, &c, &bright);
+        counts[cls]++;
+        if (sample) {
+          if (cls != 0) rchis[n_rchi++] = drop_rchi;
+          continue ;
+        }
+        index_optical_depth[i][j] = cls;
+        if (cls == 0) continue ;
+        model_error[i][j] = misfit;
+        kmin = INFINITY;
+        for (s = 0; s < nscenes; s++) {
+          for (b = 0; b < pd->n_bands[s]; b++) kmin = MIN(kmin, ref[s]->kappa[b]);
+        }
+        K_min[i][j] = kmin;
+        if (cls == 1) {
+          depth[i][j] = -H;  // negative down
+          depth_sigma[i][j] = sigma;
+          bottom_albedo[i][j] = bright;
+          bottom_type[i][j] = c;
+          bottom_sand[i][j] = c == 0 ? 100.0 : 0.0;
+          bottom_seagrass[i][j] = c == 1 ? 100.0 : 0.0;
+          bottom_coral[i][j] = c == 2 ? 100.0 : 0.0;
+        }
       }
     }
+    if (sample && n_rchi > 0) {
+      drop_eps = MIN(MAX(drop_eps*sqrt(percentile(rchis, n_rchi, 0.5)), 0.005), 0.2);
+      printf("  eps calibration, pass %d: %d cells, eps %.4f\n", pass + 1, n_rchi, drop_eps);
+    }
   }
+  free(rchis);
 
-  printf("DROP: %d cells with a depth, %d optically deep, %d ambiguous, %d without data (%.1f s)\n",
-    counts[1], counts[2], counts[3], counts[0], (double) (clock() - t0)/CLOCKS_PER_SEC);
+  printf("DROP: eps %.4f; %d cells with a depth, %d optically deep, %d ambiguous, %d without data (%.1f s)\n",
+    drop_eps, counts[1], counts[2], counts[3], counts[0], (double) (clock() - t0)/CLOCKS_PER_SEC);
 
   // Write the outputs as MODEL Lee_Semi_Analytical does.
 

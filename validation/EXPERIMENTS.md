@@ -1490,6 +1490,49 @@ DROP (`Lee_Profile`) on the data files of `data-inputs`: water tables from `spec
   - why Bundegi's 2–5 m S2 cells go deep (δ is already per local window; candidates are the turbid inner-gulf scenes and the flat-δ assumption);
   - noise-scaled thresholds (G2) on top of mode 3, in place of the re-chosen fixed ones.
 
+### Phase G, second round: the offset's shape, a self-calibrated error, other corrections (2026-10-19)
+
+All runs use mode 3 with T_deep 9 and T_amb 0.5 (`q3d9a05`) unless stated. Hits % / RMSE m; "default" is DROP as in the paper (`profile-wt`, `prof-repro-l8`).
+
+**A fixed spectral shape for the offset** (`PROFILE_OFFSET_N`: δ(λ) = δ₆₆₅ (λ/665)^−n).
+
+| n | Marina S2 | Gulf S2 | Marina L8 | Gulf L8 | Bundegi S2 | Tantabiddi S2 | Bundegi L8 | Tantabiddi L8 |
+|---|---|---|---|---|---|---|---|---|
+| 0 (flat) | **32.3** / 1.17 | 2.0 / 2.38 | **24.1** / 0.99 | 7.7 / 1.25 | 28.9 / 3.36 | 52.4 / 1.09 | 21.2 / 1.44 | 51.7 / 1.36 |
+| 1 | 27.1 / 1.22 | 2.2 / 2.12 | 20.1 / 1.10 | 8.0 / 1.16 | 29.1 / 3.26 | 53.9 / 1.05 | 19.9 / 1.44 | 51.8 / 1.33 |
+| 2 | 22.9 / 1.23 | 2.3 / 1.67 | 15.9 / 1.24 | 7.4 / 1.24 | 29.8 / 3.04 | 55.5 / 1.02 | 15.7 / 1.43 | 52.8 / 1.28 |
+| 3 | 21.3 / 1.23 | 1.8 / 1.52 | 13.9 / 1.37 | 6.2 / 1.15 | 31.0 / 2.22 | 55.8 / 1.01 | 11.7 / 1.32 | 57.3 / 1.07 |
+
+- The training sites (Marina, gulf entrance) choose n = 0; the held-out sites prefer n = 3 (Bundegi S2 RMSE 3.36 → 2.22 m). No single shape fits every scene and water.
+
+**The shape measured per scene from 865 nm** (`SCENE ... NIR <grid> <nm>`, read only by DROP; `tier4_prepare.py sites_nir`, `sites_l8_nir`).
+- Water is nearly black at 865 nm (a_w ≈ 4.6 m⁻¹), so the deep cells' NIR rrs is mostly offset. δ₆₆₅ and n are solved together for each reference.
+- **The offset is not flat.** In Python on the ACOLITE grids (`nir_shape` diagnostic), deep-cell n is 2–3.5 in most scenes and 0.5–1.5 in a few (2021-04-02, 2021-09-06, 2022-04-12). DROP finds n = 0.3–3.1 (S2) and 0.4–3.4 (L8).
+- Results (`nirm`), against default:
+  - S2: Bundegi 21.6 → 32.0 / 1.68 → 2.14, Tantabiddi 54.3 → 55.7 / 2.17 → 0.99, Marina 20.9 → 27.5 / 3.01 → 1.18, gulf entrance 1.5 → 1.7 / 3.85 → 1.27. Hits rise at every site.
+  - L8: Bundegi 17.3 → 13.0, Tantabiddi 58.4 → 54.4, Marina 17.2 → 16.6, gulf entrance 2.7 → 6.6.
+  - The training sites prefer the flat offset (Marina S2 32.3 against 27.5, L8 24.1 against 16.6).
+- Two anchors (665, 865 nm) do not fix the offset at 443–560 nm, and in the turbid inner gulf the water is not black at 865 nm.
+- With the NIR grids present, the default (mode 0) is unchanged.
+
+**A self-calibrated model error** (`PROFILE_EPS_AUTO`). Three sampled passes (about 4,000 cells) multiply ε by √(median reduced χ² of the best fits), then the full pass.
+- ε comes out at 4–17% on the real scenes (gulf entrance highest).
+- Tier 3 is unchanged (noise-free clear water 28 → 27% hits): on the synthetic scenes the calibrated ε is close to 5%. **So DROP's abstention in clean synthetic data is not an error-model problem.**
+- With mode 3 (`ea3`): S2 Tantabiddi 55.8 / 0.91 (above default), Marina 28.2 / 0.94; L8 Tantabiddi 53.9, gulf entrance 16.1 / 2.11.
+- **Tier 3 with mode 3:** noise-free hits rise (moderate 16 → 26%, turbid 12 → 14%), but noisy turbid RMSE rises 0.7 → 2.2 m. The synthetic water has no offset, but QAA v6's empirical a(560) does not match it, so mode 3 finds one.
+
+**Other atmospheric corrections** (`sites_tiled`, `sites_radcor`; S2).
+- **Neither removes the red offset:** the deep rrs∞(665) is 2.1–6.7 × 10⁻³ with each, as with the fixed-AOT correction.
+- Default DROP: tiled Tantabiddi 56.3 / 1.95 but Marina 18.9; radcor loses at three sites.
+- Mode 3 with tiled: Tantabiddi 56.4 / 1.02, Bundegi 27.7 / 3.22, Marina 26.7 / 1.34.
+
+**Where this leaves Phase G.**
+- **The diagnosis holds.** A red residual of about 10⁻³ in Rrs remains under every ACOLITE mode tried. Removing it breaks the depth ceiling at every site, on both sensors.
+- **Its value at 443–560 nm is what limits the correction.** A flat offset suits Marina; a steep one suits Bundegi and Tantabiddi on S2, but not on L8. The image's own bands cannot settle it.
+- **No variant passes the acceptance rule.** Every switch stays off (`PROFILE_QAA`, `PROFILE_OFFSET_N`, `PROFILE_EPS_AUTO`, `NIR`), and `make test` and the defaults are unchanged.
+- **The held-out sites have now been looked at many times.** The Exmouth split no longer gives an unbiased test; the second region does.
+- **The next step is G6, moved forward: fit the aerosol with the water and the seabed from TOA reflectance.** That fixes the offset's shape physically at every band, which is the missing piece.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

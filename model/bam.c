@@ -575,6 +575,7 @@ void run_combine() {
 
   scene_data[ps_output_scene].n_bands = scene_data[ps_in[0]].n_bands;
   scene_data[ps_output_scene].srf_present = scene_data[ps_in[0]].srf_present;
+  scene_data[ps_output_scene].nir_present = false;
   scene_data[ps_output_scene].srf = scene_data[ps_in[0]].srf;
   memcpy(scene_data[ps_output_scene].srf_band, scene_data[ps_in[0]].srf_band, sizeof(scene_data[ps_in[0]].srf_band));
   nbands = scene_data[ps_output_scene].n_bands;
@@ -1328,6 +1329,7 @@ CHARTDATUM /chart datum for file/ DEPTHRANGE /depth min/ /depth max/ SPVAL /soun
 //    RINF /R_inf band 1/ /R_inf band 2/ ... HTIDE /tidal offset to MSL/ K /K band 1/ 
 //    /K band 2/ ... RSIGMA /R sigma band 1/ /R sigma band 2/ ... KSIGMA /K sigma band 1/ 
 //    /K sigma band 2/ ... [optional] P /P grid/ G /G grid/ X /X grid/ SRF /spectral response .csv/
+//    NIR /near-infrared grid/ /wavelength/
 
 void run_scene() {
 
@@ -1387,6 +1389,7 @@ RINF /R_inf band 1/ /R_inf band 2/ ... HTIDE /tidal offset to MSL/ K /K band 1/ 
 
   scene_data[ps_scene].n_bands = nbands;
   scene_data[ps_scene].srf_present = false;
+  scene_data[ps_scene].nir_present = false;
 
   // Read wavelengths. 
 
@@ -1570,6 +1573,27 @@ RINF /R_inf band 1/ /R_inf band 2/ ... HTIDE /tidal offset to MSL/ K /K band 1/ 
     }
     scene_data[ps_scene].srf = srf;
     scene_data[ps_scene].srf_present = true;
+    k++;
+  }
+
+// [optional] Read NIR /near-infrared grid/ /wavelength/: used only by MODEL DROP, to estimate the
+// spectral shape of the atmospheric-correction offset (PROFILE_QAA 3); not a band of the fit.
+
+  if (strcmp(parsed[k], "NIR") == 0) {
+    success = parse_old_grid(&ps, ++k);
+    if (! success) return ;
+    if (! commensurate_grids(gridded_data[ps], gridded_data[scene_data[ps_scene].band_indexes[0]])) {
+      printf("\nERROR: the NIR grid is not commensurate with the bands.\n");
+      return ;
+    }
+    scene_data[ps_scene].nir_wavelength = atoi(parsed[++k]);
+    if (scene_data[ps_scene].nir_wavelength < 700 || scene_data[ps_scene].nir_wavelength > 1000) {
+      printf("\nERROR: NIR wavelength %s nm is outside 700-1000 nm.\n", parsed[k]);
+      return ;
+    }
+    scene_data[ps_scene].nir_index = ps;
+    scene_data[ps_scene].nir_present = true;
+    printf("\nNIR = %s, %d nm\n", grid_names[ps], scene_data[ps_scene].nir_wavelength);
     k++;
   }
 
