@@ -53,7 +53,7 @@ Main commands (dispatch in `bam.c:run_command`):
 | `SCENE NAME s BANDS ... WAVELENGTHS ... THETAVIEW v THETASUN w [HTIDE h] ...` | bam.c | Define a multi-band scene for the SA model |
 | `MODEL Lee_Semi_Analytical IN <scenes> OUT <10 grids> [DEPTHS g]` | bam.c → samodel.c | **The core physics-based model** |
 | `MODEL DROP IN <scenes> OUT <10 grids> [POINTS g]` | bam.c → profile.c | DROP, Deep-water Referenced Optical Profiling (formerly `Lee_Profile`, still accepted), for multispectral imagery: water from the image's deep pixels, exact depth profile (validation/EXPERIMENTS.md, Phase F) |
-| `MODEL lyzenga_log_linear GRIDS ... BATHYMETRY g [options]` | lyzenga.c | Lyzenga's empirical log-linear model, fitted to soundings by weighted least squares with Huber IRLS (options in any order: LSM/PERCENTILE, DEEP, RADIUS, DEPTHS, TIDE, HUBER, BALANCE, ERROR; writes model.bam and output.csv) |
+| `MODEL lyzenga_log_linear GRIDS ... BATHYMETRY g [options]` | lyzenga.c | Lyzenga's empirical log-linear model, fitted to soundings by weighted least squares with Huber IRLS (options in any order: LSM/PERCENTILE, DEEP, RADIUS, DEPTHS, TIDE, HUBER, BALANCE, POWER [ALL], ERROR; POWER rescales by an inverted power law against regression dilution; writes model.bam and output.csv) |
 | `MODEL polcyn_log_ratio ...` | bam.c | Older empirical two-band log-ratio model (analytic) |
 | `MODEL Lee_Kd_LS8\|Lee_Secchi_LS8\|Kd_490_Mueller\|Chl_Morel ...` | bam.c, secchi.c | Band-ratio water-quality products |
 | `COMPUTE AREA\|LSM\|LSB\|BOTTOM\|K\|PERCENTILE` | bam.c, jerlov.c | Deep-water signal, attenuation (Jerlov), areas, etc. |

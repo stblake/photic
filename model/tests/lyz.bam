@@ -3,5 +3,7 @@ READ GRID b1 b1.asc
 READ GRID b2 b2.asc
 READ SOUNDINGS soundings.xyz
 MODEL lyzenga_log_linear GRIDS b1 b2 BATHYMETRY H LSM 0.004 0.002 DEEP 0 RADIUS 1 DEPTHS 0 30 TIDE 0.5 HUBER 0 ERROR H_error
-PRINT GRIDSTATS H
+// POWER on data that follow the model exactly must be the identity (it writes model.bam and
+// output.csv last, which tests/lyz_check reads).
+MODEL lyzenga_log_linear GRIDS b1 b2 BATHYMETRY H_power LSM 0.004 0.002 DEEP 0 RADIUS 1 DEPTHS 0 30 TIDE 0.5 HUBER 0 POWER
 EXIT

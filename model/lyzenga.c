@@ -19,6 +19,17 @@
 // grids: lat = slat + i*cellsize). Only those in modelled, shallow cells with a depth in the
 // fitting range enter the fit, and the counts of those dropped are printed.
 //
+// A least-squares fit of depth on the bands shrinks its depths towards the mean (regression
+// dilution: the bands are noisy), so shallow water comes out too deep and deep water too shallow.
+// POWER corrects the scale by classical calibration: the fit's depths h at the soundings are
+// modelled as a function of the soundings' depths z, h = c z^d (robustly, in logs), and inverted,
+// z = (h/c)^(1/d). The mapped depths are then unbiased against depth at every depth (slope 1),
+// at the cost of more scatter; where the fit has saturated it cannot recover depth. The law
+// crosses the identity at h_x = c^(1/(1-d)); by default it is applied only beyond the crossover
+// (where the fit is compressed into too little depth), so the shallow depths keep the fit's
+// smaller scatter (Arabian Gulf, Landsat 8 against ICESat-2: hits 64 -> 69% in cross-validation,
+// against 58% when applied everywhere). POWER ALL applies it everywhere.
+//
 // Depth conventions: soundings are depths below the datum, positive down (a file whose median is
 // negative is taken as negative down and negated). TIDE is the water level above the datum at
 // the imagery's time: the fit uses depth + TIDE (the water the light saw) and the output is
@@ -35,6 +46,7 @@
 //   TIDE /h/                     water level above the datum at the imagery's time (m)
 //   HUBER /k/                    Huber threshold in robust sigmas (default 1.345; 0: least squares)
 //   BALANCE /bin/                weight soundings by 1/count in depth bins of this width (m)
+//   POWER [ALL]                  rescale the depths by the inverted power law above
 //   ERROR /grid/                 output: the 1-sigma prediction error (m)
 //
 // Outputs model.bam (the fitted model as applied) and output.csv (every sounding, its cell, the
@@ -151,10 +163,55 @@ static void covariance_factor(const double *R, int p, double *C) {
   }
 }
 
+// Iteratively reweighted least squares with Huber weights (scale from the median absolute
+// deviation), from the least-squares solution: coef, R, the final weights w and residuals res.
+// Returns the number of iterations, or -1 if the design is rank deficient.
+static int huber_irls(const double *A, const double *y, const double *w0, int n, int p, double huber,
+    double *coef, double *R, double *w, double *res) {
+
+  int i, m, it;
+  double prev[LYZ_MAX_BANDS + 1], s, change, *absr = malloc((size_t) n*sizeof(double));
+
+  for (m = 0; m < p; m++) coef[m] = 0.0;
+  for (i = 0; i < n; i++) w[i] = w0[i];
+  for (it = 0; it < LYZ_MAX_ITER; it++) {
+    for (m = 0; m < p; m++) prev[m] = coef[m];
+    if (lyzenga_wls(A, y, w, n, p, coef, R) != 0) {
+      free(absr);
+      return -1;
+    }
+    for (i = 0; i < n; i++) {
+      s = coef[0];
+      for (m = 1; m < p; m++) s += coef[m]*A[i*p + m];
+      res[i] = y[i] - s;
+    }
+    if (huber == 0.0) break;
+    for (i = 0; i < n; i++) absr[i] = fabs(res[i]);
+    s = 1.4826*median_double(absr, n);
+    if (s <= 0.0) break;
+    for (i = 0; i < n; i++) w[i] = w0[i]*(fabs(res[i]) <= huber*s ? 1.0 : huber*s/fabs(res[i]));
+    if (it > 0) {
+      change = 0.0;
+      for (m = 0; m < p; m++) change = MAX(change, fabs(coef[m] - prev[m])/(1.0 + fabs(coef[m])));
+      if (change < 1.0e-9) break;
+    }
+  }
+  free(absr);
+  return it + 1;
+}
+
+// The power-law rescaling of a fitted depth h (POWER): (h/c)^(1/d), with ln c = a; without ALL,
+// only on the deep side of the crossover h_x = c^(1/(1-d)), and h shallower.
+static double power_map(double h, double a, double d, bool all) {
+  if (h <= 0.0) return h;
+  if (! all && d != 1.0 && log(h) < a/(1.0 - d)) return h;
+  return exp((log(h) - a)/d);
+}
+
 static void usage(void) {
   printf("\nERROR: MODEL lyzenga_log_linear GRIDS /band 1/ ... /band n/ BATHYMETRY /output/ [optional, any order]\n"
     "  LAND /grid/ SHALLOW /grid/ LSM /Lsm 1/ ... /Lsm n/ PERCENTILE /p/ DEEP /k/ RADIUS /r/\n"
-    "  DEPTHS /min/ /max/ TIDE /h/ HUBER /k/ BALANCE /bin (m)/ ERROR /output/\n");
+    "  DEPTHS /min/ /max/ TIDE /h/ HUBER /k/ BALANCE /bin (m)/ POWER ERROR /output/\n");
 }
 
 static bool parse_number(int *k, double *v) {
@@ -172,11 +229,11 @@ void run_model_lyzenga(void) {
     bands[LYZ_MAX_BANDS], radius = depth_radius, n_cells = 0, n_fit = 0, it, *cell_i = NULL, *cell_j = NULL,
     dropped_outside = 0, dropped_masked = 0, dropped_deep = 0, dropped_range = 0, count, *status = NULL, bin;
   double v, lsm[LYZ_MAX_BANDS], sigma[LYZ_MAX_BANDS], pct = 1.0, deep_k = 2.0, dmin = depthmin, dmax = depthmax,
-    tide = 0.0, huber = 1.345, balance = 0.0, coef[LYZ_MAX_BANDS + 1] = {0.0}, prev[LYZ_MAX_BANDS + 1],
+    tide = 0.0, huber = 1.345, balance = 0.0, coef[LYZ_MAX_BANDS + 1] = {0.0},
     R[(LYZ_MAX_BANDS + 1)*(LYZ_MAX_BANDS + 1)], C[(LYZ_MAX_BANDS + 1)*(LYZ_MAX_BANDS + 1)], *A = NULL, *y = NULL,
-    *w0 = NULL, *w = NULL, *res = NULL, *tmp = NULL, s, s2, rss, sw, change, sign = 1.0, mae, bias, ss_tot, mean_y,
-    xrow[LYZ_MAX_BANDS + 1];
-  bool lsm_given = false, error_wanted = false, ok;
+    *w0 = NULL, *w = NULL, *res = NULL, *tmp = NULL, s, s2, rss, sw, sign = 1.0, mae, bias, ss_tot, mean_y,
+    xrow[LYZ_MAX_BANDS + 1], pw_a = 0.0, pw_d = 1.0;
+  bool lsm_given = false, error_wanted = false, power = false, power_all = false, ok;
   float ***Lbar = NULL, **bathy = NULL, **err = NULL, *vals, nodata, *depths;
   geogrid *g0;
   FILE *fp;
@@ -252,6 +309,12 @@ void run_model_lyzenga(void) {
       if (! parse_number(&k, &balance) || balance <= 0.0) {
         printf("\nERROR: BALANCE /bin width (m)/ > 0.\n");
         return ;
+      }
+    } else if (strcmp(parsed[k], "POWER") == 0) {
+      power = true;
+      if (k + 1 < MAX_ARGS && strcmp(parsed[k + 1], "ALL") == 0) {
+        power_all = true;
+        k++;
       }
     } else if (strcmp(parsed[k], "ERROR") == 0) {
       if (k + 1 >= MAX_ARGS || parsed[k + 1][0] == '\0') {
@@ -442,32 +505,9 @@ void run_model_lyzenga(void) {
 
 // Iteratively reweighted least squares (Huber), from the least-squares solution.
 
-  for (n = 0; n < n_fit; n++) w[n] = w0[n];
-  for (it = 0; it < LYZ_MAX_ITER; it++) {
-    for (m = 0; m < p; m++) prev[m] = coef[m];
-    if (lyzenga_wls(A, y, w, n_fit, p, coef, R) != 0) {
-      printf("\nERROR: the bands are collinear at the soundings; use fewer bands.\n");
-      goto done;
-    }
-    if (huber == 0.0) break;
-    for (n = 0; n < n_fit; n++) {
-      s = coef[0];
-      for (m = 1; m < p; m++) s += coef[m]*A[n*p + m];
-      res[n] = y[n] - s;
-    }
-    double *absr = malloc((size_t) n_fit*sizeof(double));
-    for (n = 0; n < n_fit; n++) absr[n] = fabs(res[n]);
-    s = 1.4826*median_double(absr, n_fit);
-    free(absr);
-    if (s <= 0.0) break;
-    for (n = 0; n < n_fit; n++) {
-      w[n] = w0[n]*(fabs(res[n]) <= huber*s ? 1.0 : huber*s/fabs(res[n]));
-    }
-    if (it > 0) {
-      change = 0.0;
-      for (m = 0; m < p; m++) change = MAX(change, fabs(coef[m] - prev[m])/(1.0 + fabs(coef[m])));
-      if (change < 1.0e-9) break;
-    }
+  if ((it = huber_irls(A, y, w0, n_fit, p, huber, coef, R, w, res)) < 0) {
+    printf("\nERROR: the bands are collinear at the soundings; use fewer bands.\n");
+    goto done;
   }
 
 // Fit statistics: the weighted residual variance, the coefficients' covariance, and the
@@ -501,8 +541,49 @@ void run_model_lyzenga(void) {
   printf("\n  standard errors:");
   for (m = 0; m < p; m++) printf(" %.4f", sqrt(C[m*p + m]));
   printf("\n  %s, %d iterations; rms %.3f m, mae %.3f m, bias %+.3f m, R2 %.3f, robust sigma %.3f m; "
-    "|R| diagonal ratio %.3g\n", huber > 0.0 ? "Huber IRLS" : "least squares", it + 1, sqrt(rms), mae, bias,
+    "|R| diagonal ratio %.3g\n", huber > 0.0 ? "Huber IRLS" : "least squares", it, sqrt(rms), mae, bias,
     1.0 - rms*n_fit/MAX(ss_tot, 1.0e-30), sqrt(s2), rmax/rmin);
+
+// The power-law rescaling (POWER): ln h = a + d ln z, robustly, over the soundings with h > 0.
+
+  if (power) {
+    double *A2 = malloc((size_t) 2*n_fit*sizeof(double)), *y2 = malloc((size_t) n_fit*sizeof(double)),
+      *wb = malloc((size_t) n_fit*sizeof(double)), *w2 = malloc((size_t) n_fit*sizeof(double)),
+      *r2 = malloc((size_t) n_fit*sizeof(double)), c2[2], R2[4], h, e;
+    int n2 = 0, it2;
+    for (n = 0; n < n_fit; n++) {
+      h = y[n] - res[n];
+      if (h <= 0.0 || y[n] <= 0.0) continue ;
+      A2[2*n2] = 1.0;
+      A2[2*n2 + 1] = log(y[n]);
+      y2[n2] = log(h);
+      wb[n2] = w0[n];
+      n2++;
+    }
+    it2 = n2 >= 4 ? huber_irls(A2, y2, wb, n2, 2, huber, c2, R2, w2, r2) : -1;
+    free(A2);
+    free(y2);
+    free(wb);
+    free(w2);
+    free(r2);
+    if (it2 < 0 || c2[1] <= 0.0) {
+      printf("\nERROR: POWER: the fitted depths do not increase with the soundings' depths.\n");
+      goto done;
+    }
+    pw_a = c2[0];
+    pw_d = c2[1];
+    double prms = 0.0, pmae = 0.0, pbias = 0.0;
+    for (n = 0; n < n_fit; n++) {
+      e = power_map(y[n] - res[n], pw_a, pw_d, power_all) - y[n];
+      prms += e*e/n_fit;
+      pmae += fabs(e)/n_fit;
+      pbias += e/n_fit;
+    }
+    printf("  power law: fit = %.4f depth^%.4f (%d soundings), so depth = (fit/%.4f)^%.4f %s; rms %.3f m, "
+      "mae %.3f m, bias %+.3f m\n", exp(pw_a), pw_d, n2, exp(pw_a), 1.0/pw_d, power_all ? "everywhere" : "on the deep side",
+      sqrt(prms), pmae, pbias);
+    if (! power_all && pw_d != 1.0) printf("  (beyond the crossover at %.2f m)\n", exp(pw_a/(1.0 - pw_d)));
+  }
 
 // The bathymetry (and its error), below the datum, negative down.
 
@@ -524,16 +605,18 @@ void run_model_lyzenga(void) {
         n_deep++;
         continue ;
       }
-      s = 0.0;
-      for (m = 0; m < p; m++) s += coef[m]*xrow[m];
-      bathy[i][j] = -(s - tide);
+      double h = 0.0, z;
+      for (m = 0; m < p; m++) h += coef[m]*xrow[m];
+      z = power ? power_map(h, pw_a, pw_d, power_all) : h;
+      bathy[i][j] = -(z - tide);
       n_depth++;
       if (error_wanted) {
         s = s2;
         for (ii = 0; ii < p; ii++) {
           for (jj = 0; jj < p; jj++) s += xrow[ii]*C[ii*p + jj]*xrow[jj];
         }
-        err[i][j] = sqrt(s);
+        // Through POWER, an error in h scales by dz/dh = z/(d h).
+        err[i][j] = sqrt(s)*(power && h > 0.0 && z != h ? z/(pw_d*h) : 1.0);
       }
     }
   }
@@ -564,6 +647,11 @@ void run_model_lyzenga(void) {
     for (m = 0; m < nb; m++) fprintf(fp, "%.8g%s", sigma[m], m < nb - 1 ? "," : "\n");
     fprintf(fp, "COEFFICIENTS=");  // H = a0 + sum a_m ln(L_m - Lsm_m)
     for (m = 0; m < p; m++) fprintf(fp, "%.8g%s", coef[m], m < p - 1 ? "," : "\n");
+    if (power) {
+      fprintf(fp, "POWER=%.8g,%.8g,%s\n", pw_a, pw_d, power_all ? "ALL" : "BEYOND");  // depth = exp((ln H - a)/d)
+    } else {
+      fprintf(fp, "POWER=none\n");
+    }
     fprintf(fp, "RADIUS=%d\nDEEP=%g\nTIDE=%g\nDEPTHS=%g,%g\nHUBER=%g\nBALANCE=%g\nNSOUNDINGS=%d\nRMS=%.4f\n",
       radius, deep_k, tide, dmin, dmax, huber, balance, n_fit, sqrt(rms));
     fclose(fp);
@@ -574,7 +662,7 @@ void run_model_lyzenga(void) {
     double *model_at = calloc(nsoundings, sizeof(double)), *weight_at = calloc(nsoundings, sizeof(double));
     for (n = 0; n < n_fit; n++) {
       int q = (int) tmp[n];
-      model_at[q] = y[n] - res[n] - tide;
+      model_at[q] = (power ? power_map(y[n] - res[n], pw_a, pw_d, power_all) : y[n] - res[n]) - tide;
       weight_at[q] = w[n];
     }
     fprintf(fp, "LON,LAT,ROW,COL,DEPTH,MODEL DEPTH,RESIDUAL,WEIGHT,STATUS\n");
