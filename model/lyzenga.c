@@ -38,7 +38,7 @@
 // MODEL lyzenga_log_linear GRIDS /band 1/ ... /band n/ BATHYMETRY /output/ [optional, any order]
 //   LAND /grid/                  cells where the grid has data are land
 //   SHALLOW /grid/               only cells where the grid has data are modelled
-//   LSM /Lsm 1/ ... /Lsm n/      deep-water signal per band (0 gives Lyzenga et al. 2006's ln L)
+//   LSM /Lsm 1/ ... /Lsm n/      deep-water signal per band (0 gives ln L; Lyzenga et al. 2006 subtract one)
 //   PERCENTILE /p/               else Lsm is the p-th percentile of the window means (default 1)
 //   DEEP /k/                     optically deep below k sigma above Lsm (default 2; 0: off)
 //   RADIUS /r/                   window radius (default SET DEPTHRADIUS)
@@ -73,7 +73,7 @@
 // grids above DEEP sigma is a straight line in g_m, and the weighted fit gives the depth H (from
 // how the attenuation differs between bands and scenes, which is what makes it independent of
 // B), its 1-sigma error and B. Cells with fewer than 3 such grids get none.
-// Lsm is the LSM value where it is > 0, else the PERCENTILE (so LSM 0, Lyzenga's ln L, still
+// Lsm is the LSM value where it is > 0, else the PERCENTILE (so LSM 0, the plain ln L, still
 // subtracts a deep-water signal here). TIDES /h_1/ ... /h_n/ are the scenes' water levels above
 // the datum (default TIDE for each). Outputs: /prefix/_/grid/, K of each grid (m^-1);
 // /prefix/_depth (below the datum, negative down), /prefix/_depth_sigma and /prefix/_bottom (B);

@@ -69,7 +69,7 @@ SEED = 1
 FOLDS = 4
 
 # Candidate settings for the cross-validation: band sets (nm), the deep-water signal (the 1st
-# percentile of the image, or none: ln L, Lyzenga et al. 2006) and the window radius.
+# percentile of the image, or none: ln L, with no deep-water signal subtracted) and the window radius.
 BAND_SETS = [(443, 483, 561), (483, 561), (443, 483, 561, 655), (483, 561, 655), (443, 561)]
 LSM_CHOICES = ["percentile", "none"]
 RADII = [1, 2, 3]

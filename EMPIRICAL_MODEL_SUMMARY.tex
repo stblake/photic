@@ -105,7 +105,8 @@ With $X_m = \ln v_m$, the model (Lyzenga 1978, 1985; Lyzenga et al.\ 2006) is
   \qquad \mathbf{x} = (1, X_1, \dots, X_n)^{\mathsf T}.
   \label{eq:lyzenga}
 \end{equation}
-Setting \code{LSM 0} gives Lyzenga et al.'s $\ln L$ form. Fitted to every scene's bands at once,
+Setting \code{LSM 0} gives the plain $\ln L$, with no deep-water signal subtracted; Lyzenga et
+al.\ (2006) always subtract one. Fitted to every scene's bands at once,
 equation~\eqref{eq:lyzenga} is the \emph{joint} model. It includes every weighted sum of per-scene
 fits as a special case. The scenes' tides are constants per scene, so they go into the
 coefficients, and the target is depth below the datum (\code{TIDE 0}).
@@ -269,7 +270,7 @@ equation solved for $Z$. In practice $g_m$ varies over a scene, and between scen
 water. \code{ATTENUATION} estimates it explicitly, in two stages.
 
 In stage~1, $\Lsm{m}$ is the \code{LSM} value where that is positive, and otherwise the
-percentile. So \code{LSM 0} (Lyzenga et al.'s $\ln L$) still subtracts a deep-water signal for
+percentile. So \code{LSM 0} (the plain $\ln L$) still subtracts a deep-water signal for
 the attenuation.
 
 %============================================================================================
