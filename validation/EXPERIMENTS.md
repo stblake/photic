@@ -160,9 +160,9 @@ Invert the confident pixels, calibrate a band-ratio depth model on them, and use
 
 **Rationale for the order.** Cheap diagnostics and decisions (G0–G2) come before builds. G1 targets the measured cause of the ceiling. G3 and G4 are self-contained extensions of the exact profile. G5 and G6 are large and pay off only if the cheaper steps confirm that forward-model and atmospheric errors are what is left.
 
-## Status and handoff (2026-10-20)
+## Status and handoff (2026-10-20, for the move to a larger machine)
 
-A summary of the session of 2026-10-19/20 (commits 241f224 to d51f5ab, branch `profile-data`), so the work can resume in a new session. The details are in the Log, under the sections named here.
+A summary of the sessions of 2026-10-19/20 (commits 241f224 onwards, branch `profile-data`). It covers the whole-scene gulf run the old machine was in the middle of when it crashed, and the clean-up for moving to a machine with more memory and disk. The details are in the Log, under the sections named here.
 
 **Where things stand.**
 - **DROP** (`MODEL DROP`, `model/profile.c`; formerly `Lee_Profile`) is the sounding-free model.
@@ -170,7 +170,8 @@ A summary of the session of 2026-10-19/20 (commits 241f224 to d51f5ab, branch `p
   - **Weakness:** above that it hits a **depth ceiling**: it calls 5–20 m water optically deep, or gives depths that are too shallow.
   - **Cause:** ACOLITE's DSF leaves a red/NIR offset over clear deep water, so QAA's κ comes out too strong. This is now confirmed held out, at the Arabian Gulf.
 - **The empirical bar at the gulf is high:** Lyzenga fitted jointly to all six scenes against ICESat-2 scores 90% hits on a held-out half. DROP has to reach that depth range without soundings.
-- **Main next step:** G6 step 2. Fit the aerosol where the water is: first per site or tile from DROP's local deep references, then inside DROP from TOA reflectance (M3).
+- **In progress:** the gulf over the whole Landsat 8 scene (below).
+- **Main next step for DROP:** G6 step 2. Fit the aerosol where the water is: first per site or tile from DROP's local deep references, then inside DROP from TOA reflectance (M3).
 
 **Key numbers** (hits % = within 0.5 m + 10% of the reference, over all reference cells):
 
@@ -183,7 +184,71 @@ A summary of the session of 2026-10-19/20 (commits 241f224 to d51f5ab, branch `p
 | same | Lyzenga, median composite, 4 bands, `POWER` | 79.8 | 1.47 | |
 | same | 2019 photic product (SA model started from Lyzenga depths) | 58.8 | 1.88 | compressed: +2 m shallow, −2.3 m at 10–20 m |
 
-**What changed in the code.**
+**In progress: the Arabian Gulf over the whole Landsat 8 scene** (`GULF_REGION=scene`).
+
+The goal is the joint Lyzenga model, and later DROP, over the whole scene's water: the coast from Abu Dhabi to Sharjah and the open Gulf. The palm box (54.7–55.2 E, 24.75–25.1 N) is only a small part of that.
+- **Code** (committed, not yet run end to end):
+  - `$GULF_REGION` in `tier4_gulf.py`, `tier4_fetch_atl24.py` and `gulf_lyzenga.py`. `palm` stays the default.
+  - Each region has its own data, with the suffix `_scene`: `raw/atl24_scene`, `derived/tier4/acolite_gulf_l8_scene`, `derived/tier4/atl24_gulf_scene.npz`, `derived/tier4/gulf_lyzenga_scene` and `runs/gulf_lyzenga_scene`. The palm results are untouched.
+  - **ICESat-2 box:** 23.47–25.63 N, 54.05–56.37 E, the whole scene. **Imagery:** cropped to the scene's water, 24.0–25.63 N by 54.05–55.7 E.
+  - **ACOLITE** (`tier4_gulf.py acolite`, 3 scenes at a time):
+    - writes L2W reprojected onto one regular WGS84 grid at 0.0003°, identical for all six scenes, so they stack without resampling;
+    - keeps only Rrs 443/483/561/655 and deletes the other outputs, leaving about 0.5 GB per scene;
+    - skips a scene that already has its `*L2W_projected.nc`.
+  - **Band grids:** written in photic's NetCDF format (16-bit packed). As `.asc` they would be about 6 GB of text. A round trip through photic confirmed the row order, the values and the nodata cells.
+  - **Settings:** the whole scene reuses the palm's cross-validated choice (`derived/tier4/gulf_lyzenga/cv.json`: joint, four bands, radius 2, ln L, `POWER`). A sweep at about 30 M cells is impractical, so only the coefficients are refitted, on the scene's own calibration half.
+- **State at the crash:**
+  - **ICESat-2:** 166 of 461 granules are in `raw/atl24_scene`. The fetch is idempotent, so it resumes. The four half-downloaded granules were deleted.
+  - **ACOLITE:** no scene finished. Three scenes had died mid-run, leaving 5 GB of L1R/L2R/L2W with no projected L2W; those were deleted. All six still need to run.
+  - **Modelling:** nothing has been modelled yet.
+- **To resume** (from `validation/`, with the venv and `GULF_REGION=scene` set for every command):
+  1. `tier4_fetch_atl24.py` (about 2 h for the remaining 295 granules), then `tier4_gulf.py reference`. This builds the reference with the cross-pass consistency filter.
+  2. `tier4_gulf.py acolite`. The six L1 scenes are already in `raw/l8_gulf`; they are the palm's haze-screened scenes.
+  3. `gulf_lyzenga.py prepare`, then `fit` (it takes the palm's chosen settings), `correlation`, then `points`.
+  4. Score the test half once and report the coverage.
+- **Risks:**
+  - **Haze elsewhere:** the six scenes were screened for haze near Dubai only. The joint model needs every scene, so haze elsewhere leaves areas without a depth.
+  - **Memory:** photic needs roughly 6–7 GB (24 band grids of about 30 M cells, plus work arrays). It did not fit comfortably in 16 GB.
+- **Not yet built:** DROP on the whole scene. `tier4_gulf.py sites` refuses `scene`, because DROP's 0.1° tiles exist for the palm only.
+- **Held-out discipline:** the palm's test half has been scored five times (below). The scene's cells outside the palm box have never been looked at, so score them separately. They are the cleanest held-out test available.
+
+**Moving to the new machine.**
+- **Repository:** push `profile-data`, and the parked branches `iterative`, `profile-ratio` and `b7-physics`, before cloning there. `origin/main` is at bdbd6b6, and nothing after it is pushed.
+- **Data:** copy `~/photic_dev/validation_data` (13 GB after the clean-up below), or set `$PHOTIC_VALIDATION_DATA` to wherever it goes.
+  - **`.venv`:** do not copy it. Rebuild it from the package list in the README.
+  - **`tools/OSOAA*`:** x86_64 Mach-O builds. On another architecture, rebuild them with gfortran and the README's patches. The tier 2 and tier 3 caches (`runs/tier2*`, `runs/tier3/{lut,lut_sky,osoaa*}`) mean OSOAA only reruns for new cases.
+  - **`tools/acolite`:** commit ca477dd. 1.7 GB of it is its LUT data, so copying beats re-downloading.
+- **Outside the data directory:**
+  - `~/.netrc`, the Earthdata login for NSIDC;
+  - the 2019 product, `~/Documents/bathymetry_data/dubai_to_abu_dhabi/H_sa_mean.nc`, which `gulf_lyzenga.py` reads (path hard-coded in `PRODUCT_2019`).
+- **photic:** rebuild it there (`make`). `spectra.o` compiles in the path to `model/data`.
+
+**Clean-up on 2026-10-20.**
+- **Worktrees:** the seven old worktrees (`photic_b12`, `photic_b2`, `photic_base`, `photic_c2`, `photic_exp`, `photic-iter`, `photic-ratio`) were removed. Their uncommitted work was first committed to their branches, and every branch is kept:
+  - `b7-physics`: the candidate 1 and 2 results, now also in the Log ("Candidates 1 and 2");
+  - `iterative`: `iterative.py`, `iterative_photic` and their results, now also in the Log ("Iterative inversion prototype");
+  - `profile-ratio`: the `PROFILE_RATIO` code in `profile.c`. It exists only on that branch.
+  
+  Every other branch is merged into `profile-data`. Scorecards `044db48` (rescored from `runs/044db48`), `a54973d` and `baseline_v2` were added to `scorecards/`.
+- **Scripts removed** (the Phase A–C and B-series diagnostics for the SA model, which is not developed further; all are in 95684e6): `phaseA.py`, `decouple.py`, `tile_fit.py`, `error_budget.py`, `h0_estimate.py`, `c1_oracle.py`, `b7_nir.py`, `b10_fit.py`, `b13_crb.py`, `bottom_rt.py`, and `tier4_scene_quality.py` (Sentinel-2 only). `drivers/invert_lab` stays. Log entries that name these scripts refer to that commit.
+- **Data removed (12.3 GB)**, all scratch or regenerable:
+  - the partial whole-scene ACOLITE outputs (5.0 GB);
+  - the gulf Lyzenga cross-validation runs, `runs/gulf_lyzenga/cv` (2.2 GB; the scores are in `cv.json`);
+  - `ab/runs` and `ab/build`, `ab.py`'s caches (1.8 GB; `ab/results` and `ab/cases` are kept);
+  - the per-run model outputs in `runs/tier3/<cid>` and `runs/tier4/<cid>` (3.2 GB) for every run whose summary `runs/<cid>/tier*.json` exists;
+  - `derived/tier4/aot_fit_work` (the fits are in `aot_fit_*.json`);
+  - the stopped `sa-d9d-l8` run.
+- **Kept:**
+  - every run's summary;
+  - the full model outputs that the paper scripts read (`profile-wt`, `head-d9d14d6`, `head-d9d14d6-t4`, `a54973d`);
+  - `gulf-heldout-l8-clear`, read by `gulf_lyzenga.py`;
+  - the Landsat 8 references `l8-head` and `prof-repro-l8`;
+  - the few runs without a summary;
+  - `runs/phaseA`, `runs/tier2*` and the tier 3 caches.
+  
+  To get another run's maps back, rerun it with `bench.py run --cid`.
+
+**What changed in the code** (sessions of 2026-10-19/20).
 - **DROP:**
   - The name. Banners print `DROP:`.
   - Switches, all off by default:
@@ -202,31 +267,30 @@ A summary of the session of 2026-10-19/20 (commits 241f224 to d51f5ab, branch `p
 - **Validation scripts:**
   - `aot_fit.py` (G6 step 1), plus `patch_acolite_fixed_aot` in `tier4_prepare.py`, which works around ACOLITE's fixed-AOT crash in-process;
   - `tier4_fetch_atl24.py`;
-  - `tier4_gulf.py`: `screen`, `select`, `reference` (with the cross-pass consistency filter), `acolite` and `sites`;
+  - `tier4_gulf.py`: `screen`, `select`, `reference` (with the cross-pass consistency filter), `acolite` and `sites`, with `$GULF_REGION`;
   - `gulf_lyzenga.py`: `prepare`, `cv`, `fit [composite|joint bands radius power|nopower]`, `correlation` and `points`.
 
 **Data.**
 - **Sentinel-2 is no longer kept** (deleted for space, 34 GB). Tier 4 defaults to `sites_l8`; the README says how to rebuild Sentinel-2.
 - **The acceptance baseline is out of date.** `scorecards/baseline.json` was scored on Sentinel-2, so a **Landsat 8 baseline must be recorded before the next model-core change**.
-- **Arabian Gulf** (54.7–55.2 E, 24.75–25.1 N), Landsat 8 path 160/043:
+- **Arabian Gulf palm box** (54.7–55.2 E, 24.75–25.1 N), Landsat 8 path 160/043:
   - **Scenes:** chosen by haze, then sun, then tide (`tier4_gulf.py select`). Few scenes there are clear: the first selection by cloud alone was too hazy for ACOLITE's SWIR mask.
   - **Reference:** ICESat-2 ATL24 v002 in `raw/atl24` (seabed and surface photons only, 281 MB), as depths below MSL. MSL is 0.25 m above EGM2008, estimated from the passes' sea surface minus the GOT4.10 tide.
   - **Bad passes:** some read a near-surface layer as seabed. A cross-pass consistency filter drops 9.4% of photons.
-- **Earthdata:** the login in `~/.netrc` works for NSIDC downloads (fixed this session).
 - **Outputs:** maps and plots are in `runs/gulf_lyzenga/final/`:
   - `lyzenga.png` and `icesat2.png`, both in photic's `PLOT GRID ... PALETTE gmt` on a shared −25 to 0 m scale;
   - `correlation.png`.
 
-**To reproduce the gulf** (from `validation/`, with the validation venv):
+**To reproduce the palm box** (from `validation/`, with the validation venv):
 1. `tier4_fetch_atl24.py`, then `tier4_gulf.py reference`.
 2. `tier4_gulf.py screen`, then `select`. Put the names in `tier4_fetch_l8.GULF_SCENES`.
 3. `tier4_fetch_l8.py gulf`, then `tier4_gulf.py acolite` and `sites`.
 4. DROP: `PHOTIC_TIER4_SITES=sites_gulf_l8 bench.py run --tier 4 --model DROP --cid gulf-heldout-l8-clear`.
-5. Lyzenga: `gulf_lyzenga.py prepare`, `cv`, `fit`, `correlation`, then `points` (`fit` clears `final/`, so run `points` after it).
+5. Lyzenga: `gulf_lyzenga.py prepare`, `cv`, `fit`, `correlation`, then `points` (`fit` clears `final/`, so run `points` after it). `fit` reads only `cv.json`; the fold runs `cv` writes are scratch.
 
 **Held-out discipline.**
 - **Exmouth:** its test split has been looked at many times and no longer gives an unbiased test.
-- **Gulf test half:** it has been scored five times with Lyzenga variants:
+- **Gulf palm test half:** it has been scored five times with Lyzenga variants:
   1. linear composite;
   2. composite with `POWER`;
   3. composite with `POWER` again, on the cleaned reference;
@@ -234,7 +298,7 @@ A summary of the session of 2026-10-19/20 (commits 241f224 to d51f5ab, branch `p
   5. the four-band composite, as asked.
   
   Every choice was made by cross-validation within the calibration half. DROP was scored there frozen, and was only rescored after the reference was cleaned.
-- **Next:** a third region, or a fresh split, would be needed for the next unbiased test.
+- **Next unbiased test:** the whole scene outside the palm box (above), or a third region.
 
 **Findings to remember.**
 - **DROP fits all scenes jointly,** with χ² summed over scenes. A scene that cannot see the bottom adds about 0 to the deep test, so the depth reach is the pooled evidence, not the worst scene's. But a pixel needs every scene, and one biased scene raises the threshold for all through the reduced-χ² scale. So screen scenes first.
@@ -248,19 +312,19 @@ A summary of the session of 2026-10-19/20 (commits 241f224 to d51f5ab, branch `p
   - photic's `PLOT` asks for a PGPLOT device on stdin: `file.png/PNG`.
 
 **Open decisions and next steps, in order.**
-1. **G6 step 2** (above). Its held-out test is the gulf DROP tiles.
-2. **Record a Landsat 8 tier 4 baseline** (`bench.py run --tier 4` on `sites_l8`, then `score` and `compare`) before accepting model-core changes.
-3. **Decision for the user: ICESat-2 as DROP's κ-scale anchor (G1b iii).** The split reference and fold machinery in `gulf_lyzenga.py` would serve it: calibrate κ's scale on the calibration half and score the test half.
-4. **Lyzenga joint model:**
+1. **Finish the whole-scene gulf** (above): the reference, ACOLITE, the joint Lyzenga fit, then a held-out score outside the palm box.
+2. **G6 step 2** (above). Its held-out test is the gulf DROP tiles, and later the whole scene.
+3. **Record a Landsat 8 tier 4 baseline** (`bench.py run --tier 4` on `sites_l8`, then `score` and `compare`) before accepting model-core changes.
+4. **Decision for the user: ICESat-2 as DROP's κ-scale anchor (G1b iii).** The split reference and fold machinery in `gulf_lyzenga.py` would serve it: calibrate κ's scale on the calibration half and score the test half.
+5. **Lyzenga joint model:**
    - ridge or fewer bands per scene, for transfer (the |R| ratio is 91);
-   - fill cells lacking a scene from the composite fit;
+   - fill cells lacking a scene from the composite fit (this matters more over the whole scene);
    - reach beyond about 16 m;
    - a Lyzenga baseline at Exmouth from the training sites' soundings.
-5. **Smaller items:**
+6. **Smaller items:**
    - a per-scene-median DROP variant, judged on the Exmouth training sites;
    - a depth-map pan-sharpening step;
    - the remaining Polcyn/BOUNDARY items (REVIEW.md §2e, item 9).
-6. **Push state:** `origin/main` is at bdbd6b6. d51f5ab and this summary are on `profile-data`, unpushed.
 
 ## Log
 
@@ -921,6 +985,53 @@ H_sigma is now per pixel: σ_d² = u² wᵀ[(JᵀJ)⁻¹]_HH w. Here w are the p
   - With one scene, σ often reaches the 60 m cap, correctly marking depth as unidentified.
 - **Tier 4** (`ab.py`): 0–4% of |e| ≤ σ. The errors are mostly the depth–albedo bias, which a linearised σ with independent residuals cannot see. Calibrating σ (for example, a correlated model-error term) is a follow-up.
 
+### Candidates 1 and 2 (2026-10-14)
+
+*Recorded on 2026-10-20 from branch `b7-physics`, where it had been left uncommitted; scorecards `044db48`, `a54973d` and `baseline_v2`.*
+
+- **Candidate 1, `044db48`** (branch `b12-geometry`): B6 + C2 (optically deep test) + B7 metadata + B15 glint offset.
+- **Candidate 2, `a54973d`** (branch `candidate2`): candidate 1 + Y_MODEL 2 + BOTTOM_BOUNDS.
+
+Both were run on tiers 1–4 and on the 5-band tier 4 sites (`sites5`, with Sentinel-2 B5). Baseline is `baseline_v2` (3aceb7a with the current benchmark).
+
+**Tier 3** (median over scenarios of RMSE m / within tolerance / fraction modelled):
+
+| Scenarios | baseline_v2 | B6 `a6d4847` | Cand. 1 | Cand. 2 |
+|---|---|---|---|---|
+| control (photic forward) | 37.6 / 0.00 / 1.00 | 1.82 / 0.87 / 1.00 | 0.09 / 1.00 / 0.46 | 1.93 / 0.68 / 0.45 |
+| noise-free | 30.4 / 0.02 / 1.00 | 4.08 / 0.37 / 1.00 | 1.72 / 0.59 / 0.46 | 2.43 / 0.71 / 0.49 |
+| noisy | 16.5 / 0.08 / 0.99 | 11.1 / 0.28 / 0.99 | 1.33 / 0.68 / 0.37 | 2.75 / 0.63 / 0.37 |
+| `DEPTHS` prior | 2.88 / 0.60 / 1.00 | 9.41 / 0.37 / 1.00 | 4.65 / 0.64 / 0.47 | 9.64 / 0.44 / 0.29 |
+| realistic bottoms, noise-free | 23.2 / 0.02 / 1.00 | – | 1.50 / 0.68 / 0.32 | **1.06 / 0.86** / 0.32 |
+| realistic bottoms, noisy | 17.9 / 0.11 / 0.99 | – | 1.28 / 0.75 / 0.22 | **1.29 / 0.84** / 0.21 |
+
+**The fraction modelled is the catch.** C2 drops every pixel it calls optically deep, and RMSE is scored only on the pixels kept. Most of the "gain" over B6 is that the worst pixels are no longer scored.
+- Turbid scenes keep 20–25% of pixels; realistic-bottom scenes keep 11–35%.
+- The default tier 3 bottoms (albedo 0.6 for every class) are outside candidate 2's class bounds, so its loss on the control and default scenarios is expected. On realistic bottoms, candidate 2 is the best version.
+
+**Tier 4, on the pixels both versions report** (RMSE m, within tolerance):
+
+| Site | Pixels: B6 → C1 → C2 | B6 | Cand. 1 | Cand. 2 (common with B6) |
+|---|---|---|---|---|
+| Marina | 6020 → 3640 → 3658 | 2.27, 0.16 | 2.46, 0.17 | 2.41, 0.16 |
+| Tantabiddi | 10607 → 2725 → 5480 | 2.62, 0.65 | 3.11, 0.62 | 2.51, 0.48 |
+| Bundegi | 1509 → 468 → 498 | 2.93, 0.15 | 3.03, 0.26 | 2.39, 0.42 |
+| Gulf entrance | 2427 → 86 → 85 | 5.57, 0.14 | 5.22, 0.36 | 4.26, 0.31 |
+
+- **Same pixels, similar depths.** Against B6, candidate 1 is slightly worse at Marina and Tantabiddi. Candidate 2 is equal or better everywhere and keeps twice as many Tantabiddi pixels as candidate 1.
+- On the pixels both candidates report, candidate 2 beats candidate 1 at every site. For example, Tantabiddi is 2.20 vs 3.02 m and Bundegi 2.11 vs 2.54 m.
+- **Pixels dropped are not deep.** Their surveyed depths are mostly 4–15 m. B6 got them badly wrong: 7–13 m too shallow, with almost none within tolerance at Marina, Bundegi and the gulf entrance. So the deep test works as a good "depth not resolvable" mask there.
+- **It over-rejects at Tantabiddi.** Candidate 1 drops 80% of the 2–5 m pixels, and B6 had 38% of those within tolerance. Candidate 2 drops 48%. The deep fit matches about as well because of the dark-bottom ambiguity, not because the water is deep.
+- **5 bands** (candidate 1, `sites5`): RMSE 2.31 / 3.28 / 2.57 / 8.06 m, with 4–52% more pixels kept than with 4 bands. Candidate 2's `sites5` run is pending.
+- **Run time:** candidate 2 takes 3–3.5× longer than candidate 1 per tier 4 site (Marina 99 vs 28 min). Y_MODEL 2's self-consistent Y and the bounded bottom need more LM iterations.
+
+**Verdict: neither candidate passes the acceptance rule as it stands.** Coverage loss reads as accuracy gain, so the benchmark needs:
+1. **A coverage-aware score:** report flagged pixels as a separate class, and score depth on a fixed pixel set (the pixels the reference version models), plus the coverage at each depth bin.
+2. **A deep test that flags only the unresolvable:** reject only when the shallow fit's depth is uncertain (its profile is flat across 5–30 m), not whenever the deep model fits about as well. Emit the flag as an output grid rather than dropping the depth.
+3. **B17** for the `DEPTHS` prior regression, which both candidates still have.
+
+Candidate 2 is the better base for that work: it is equal to or better than candidate 1 on every like-for-like tier 4 comparison and on realistic tier 3 bottoms.
+
 ### Merge of candidate 2 and the tier 4 failure (2026-10-14, `ab.py`, training split)
 
 Scores over all points: a *hit* is a depth within tolerance, a *miss* a depth outside it; no depth counts as neither.
@@ -1151,6 +1262,55 @@ Bottom constraints:
 - **The anchor sets the depth scale.** The red/green attenuation difference from pure water compresses depths (good at 0–2 m, poor beyond). QAA's is about 40% smaller, which matches the soundings' slope (0.45–0.56 at Tantabiddi). The anchor was chosen after seeing these results, so treat it as tuned on the benchmark sites.
 - **Depth beyond about 5 m remains weak** (5–10 m hits ≤ 13% except Marina with brightness shared), since the information there is only blue/green.
 
+### Iterative inversion prototype (2026-10-14, `iterative.py`, branch `iterative`)
+
+*Recorded on 2026-10-20 from branch `iterative`, where it had been left uncommitted. The prototype is on that branch only.*
+
+`iterative.py` stands in for the photic executable (`iterative_photic`), so `bench.py` runs and scores it unchanged. Lee's forward model with the following blocks, each improved in turn:
+
+1. **Pixels, with water and bottom colours fixed.** The exact profile χ² over a depth grid. The bottom class and brightness (bounded, shared by the scenes) are solved in closed form. One H and one bottom per pixel for all bands and scenes. This is vectorised over pixels and takes about 1 s per site.
+2. **Water, with pixels fixed, per scene.** P, G and X are fitted with Y fixed; κ comes from photic's IOPs, so pure-water absorption anchors the depth scale. rinf is free per band, which absorbs an atmospheric offset. The fit pools up to 6000 pixels; optically deep pixels see rinf only.
+3. **Bottom colours** (optional, `PHOTIC_ITER_BOTTOM=learn`): each class's spectrum is learned from its pixels.
+
+A pass is accepted only if the total χ² falls, halving the step otherwise. Pass 0 (`PHOTIC_ITER_N=0`) is the profile model, with water matched to QAA and no window. The first version pooled only the "confident" pixels, so its objective rose at Marina (1.48 → 1.80 × 10⁷). Pooling every pixel made the descent monotone (1.79 → 1.20 × 10⁷).
+
+**Full benchmark.** Tier 4 hits (%) and RMSE (m), Bundegi / Tantabiddi / Marina / gulf entrance:
+
+| Run | Hits | RMSE |
+|---|---|---|
+| SA, HEAD (`head-d9d14d6`) | 9.2 / 23.2 / 5.9 / 0.6 | 2.39 / 2.51 / 2.41 / 4.26 |
+| Profile (`paper-default`) | 21.6 / 54.3 / 20.9 / 1.5 | 1.68 / 2.17 / 3.01 / 3.85 |
+| Pass 0 (`iter-n0`) | 18.3 / 61.5 / 16.7 / 1.1 | 2.52 / 3.02 / 4.10 / 8.10 |
+| 4 passes (`iter-n4`) | 29.8 / 58.0 / 16.2 / 1.2 | 3.70 / 3.22 / 3.73 / 7.42 |
+| 4 passes, sand b ≤ 1.5 (`iter-n4-b15`) | 29.4 / 65.0 / 16.1 / 1.3 | 3.47 / 3.20 / 3.64 / 7.00 |
+
+Tier 3 (no-prior scenarios), mean hits / median RMSE, clear / moderate / turbid:
+
+| Run | Hits / RMSE |
+|---|---|
+| SA, HEAD | 45.6 / 1.87, 24.1 / 3.20, 12.6 / 1.78 |
+| Pass 0 | 45.3 / 3.10, 28.0 / 4.03, 15.7 / 2.04 |
+| 4 passes | 54.1 / 3.23, 32.5 / 2.90, 10.7 / 1.23 |
+| 4 passes, b ≤ 1.5 | 57.0 / 3.04, 31.5 / 3.59, 10.3 / 1.25 |
+
+- **The iterations help where the site-wide water is wrong.** Against pass 0:
+  - Bundegi +11 points, with 5–10 m going from 0 to 11–13%;
+  - tier 3 clear +9 to +12 and moderate +3.5 to +4.5;
+  - Tantabiddi +3.5, but only with the sand bound raised to 1.5 (−3.5 without);
+  - Marina −0.5 and the gulf entrance +0.2.
+- **The sand bound matters only at Tantabiddi:** its 5–10 m hits go from 2 to 13%, the "deep sand needs b > 0.75" finding again.
+- **Against the SA model, it fails the acceptance rule.**
+  - Hits are 3–6 points higher at every tier 4 site and in tier 3 clear and moderate water.
+  - But RMSE is worse at every tier 4 site (by 0.7–2.7 m), and tier 3 turbid loses 2.3 points.
+  - Coverage is much higher (Bundegi 22 → 73%, Marina 37 → 85%), so many more wrong depths are reported.
+- **It does not converge to the truth on tier 3.** Noise-free hits are 36–38% with an RMSE of 2.0–2.3 m (SA 35%, 1.52 m). A consistent fixed point is not the right one: on noise-free synthetic scenes a correct model must recover the depths.
+- **The ceiling remains.** 10–20 m bias is −7 to −9 m at every site; the pooled water fits deep cells placed at about 4 m.
+- **Learning the bottom colours does nothing:** within ±1.7 points everywhere.
+- **Next:**
+  1. find why noise-free tier 3 does not converge: the water parameterisation (Y fixed, rinf free) against OSOAA, or the gauge between κ and H;
+  2. an abstention rule for the much larger coverage (the profile model's T_deep and ambiguity tests);
+  3. only then, the water and bottom inputs to `Lee_Semi_Analytical`.
+
 ### Ratio consistency in the fit (2026-10-15, `RATIO_CONSISTENCY`, `PROFILE_RATIO`, off)
 
 The consistency condition (one H for every band ratio) inside the optimisation instead of after it. For every pair of bands i < j of a scene, a residual on the log ratio of the bottom contrasts D_b = Rrs_b − Rrs_deep,b, modelled against measured, [Δ ln(D_i/D_j)]/σ_ln, in chi units, with σ_ln² = (s_i/D_i)² + (s_j/D_j)² (s: noise and the 3% model error). In `Lee_Semi_Analytical` the water is shared by the window's regions, so the rows tie H and the attenuation differences K_i − K_j together in the same fit.
@@ -1161,7 +1321,7 @@ The consistency condition (one H for every band ratio) inside the optimisation i
   - weight 0.5 or RATIO_SIGMA_LN 0.1: neither consistent on both splits;
   - full tier 3 (mean hits / median RMSE), RINF image → + rows: clear 45.7 / 1.83 → 47.2 / 2.20, moderate 24.9 / 2.97 → 26.0 / 2.11, turbid 12.7 / 1.26 → 12.7 / 1.60. Mixed, within the noise floor below.
   - full tier 4 (hits / RMSE; RINF image alone gives HEAD's numbers there): Tantabiddi 23.2 / 2.51 → 35.6 / 2.46 m (0–5 m 29.0 → 45.7%, coverage 48.9 → 62.5%), gulf entrance 0.6 / 4.26 → 0.6 / 3.91 m, Marina 5.9 / 2.41 → 5.5 / 2.50 m, Bundegi 9.2 / 2.39 → 7.0 / 2.41 m (within tolerance of covered 41.8 → 23.3%, bias −0.48 → −1.14 m). Tantabiddi's gain is far beyond the noise floor, and so is Bundegi's loss: **fails the acceptance rule; stays off.** The rows help at Tantabiddi (clear water, large contrasts) and pull Bundegi shallower (bias = modelled − sounding).
-- **Profile model (`PROFILE_RATIO`, branch `profile-ratio`)**: the water is fixed (QAA), so the rows tie only H and the bottom. Full benchmark against `paper-default`: Marina 20.9 → 24.7 hits, RMSE 3.01 → 2.75 m; Tantabiddi 54.3 → 47.8; RMSE worse at Bundegi (1.68 → 2.07) and the gulf entrance (3.85 → 4.30); tier 3 clear 31.4 → 29.9, turbid 10.1 → 11.9. **Fails the acceptance rule.** With κ fixed, the rows push depths along the forward model's ratio error (the red/green slope 30–45% too steep, above).
+- **Profile model (`PROFILE_RATIO`, branch `profile-ratio` only; not in `profile-data`)**: the water is fixed (QAA), so the rows tie only H and the bottom. Full benchmark against `paper-default`: Marina 20.9 → 24.7 hits, RMSE 3.01 → 2.75 m; Tantabiddi 54.3 → 47.8; RMSE worse at Bundegi (1.68 → 2.07) and the gulf entrance (3.85 → 4.30); tier 3 clear 31.4 → 29.9, turbid 10.1 → 11.9. **Fails the acceptance rule.** With κ fixed, the rows push depths along the forward model's ratio error (the red/green slope 30–45% too steep, above).
 
 ### Speed (2026-10-15)
 

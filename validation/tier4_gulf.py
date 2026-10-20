@@ -41,10 +41,21 @@ import numpy as np
 import tier4_prepare as tp
 
 DATA = tp.DATA
-ATL24 = os.path.join(DATA, "raw", "atl24")
-REFERENCE = os.path.join(DATA, "derived", "tier4", "atl24_gulf.npz")
+# The region, from $GULF_REGION: "palm", the box around the Palm Jebel Ali first studied (the
+# default), or "scene", the whole Landsat 8 scene (path 160 row 43). Each has its own data.
+REGIONS = {"palm": [24.75, 54.7, 25.1, 55.2], "scene": [23.47, 54.05, 25.63, 56.37]}  # S, W, N, E
+# The scene's water (the coast from Abu Dhabi to Sharjah and the open Gulf), for its imagery: the
+# whole scene box at 0.0003 deg would be 56 M cells per band.
+WATER_LIMITS = {"scene": [24.0, 54.05, 25.63, 55.7]}
+REGION = os.environ.get("GULF_REGION", "palm")
+if REGION not in REGIONS:
+    raise SystemExit("GULF_REGION must be one of %s" % ", ".join(REGIONS))
+SUFFIX = "" if REGION == "palm" else "_" + REGION
+ATL24 = os.path.join(DATA, "raw", "atl24" + SUFFIX)
+REFERENCE = os.path.join(DATA, "derived", "tier4", "atl24_gulf%s.npz" % SUFFIX)
+ACOLITE = "acolite_gulf_l8" + SUFFIX
 GOT = os.path.join(DATA, "raw", "tides", "got")
-LIMIT = [24.75, 54.7, 25.1, 55.2]  # S, W, N, E for ACOLITE (tier4_fetch_atl24.BOX)
+LIMIT = REGIONS[REGION]  # S, W, N, E for ACOLITE and the ICESat-2 crop
 TILE = 0.1
 CELL = tp.L8_CELL  # ~31 m
 MIN_REFERENCE = 200
@@ -287,11 +298,41 @@ def select():
 
 
 def acolite():
-    tp.acolite_all("l8_gulf", "acolite_gulf_l8", limit=LIMIT)
+    if REGION == "palm":
+        tp.acolite_all("l8_gulf", ACOLITE, limit=LIMIT)
+        return
+    # The whole scene: ACOLITE reprojects L2W to one regular WGS84 grid (0.0003 deg, the same
+    # limit for every scene), so the scenes stack without resampling; only the four bands photic
+    # uses are kept, and the unprojected L2W is deleted (about 0.5 GB per scene remains).
+    from concurrent.futures import ProcessPoolExecutor
+    limit = WATER_LIMITS[REGION]
+    jobs = [d for d in sorted(glob.glob(os.path.join(DATA, "raw", "l8_gulf", "*"))) if os.path.isdir(d)]
+    with ProcessPoolExecutor(max_workers=3) as pool:
+        for out in pool.map(acolite_projected, jobs, [limit]*len(jobs)):
+            print(out, flush=True)
+
+
+def acolite_projected(scene, limit):
+    import contextlib
+    import io
+    out = os.path.join(DATA, "derived", "tier4", ACOLITE, os.path.basename(scene))
+    if glob.glob(os.path.join(out, "*L2W_projected.nc")):
+        return out + " (done)"
+    with contextlib.redirect_stdout(io.StringIO()):
+        tp.run_acolite(scene, out, limit, l2w_parameters=["Rrs_443", "Rrs_483", "Rrs_561", "Rrs_655"],
+                       output_projection=True, output_projection_epsg="4326",
+                       output_projection_resolution=[tp.L8_CELL, tp.L8_CELL], output_projection_limit=limit,
+                       reproject_outputs="L2W")
+    for f in glob.glob(os.path.join(out, "*.nc")):
+        if not f.endswith("L2W_projected.nc"):
+            os.remove(f)
+    return out
 
 
 def sites():
-    wavelengths, name, acolite_dir, min_cell = tp.L8_BANDS, "sites_gulf_l8", "acolite_gulf_l8", tp.L8_CELL
+    if REGION != "palm":
+        raise SystemExit("sites (DROP's tiles) are built for the palm region only")
+    wavelengths, name, acolite_dir, min_cell = tp.L8_BANDS, "sites_gulf_l8", ACOLITE, tp.L8_CELL
     # Tiles are chosen from the reference alone (before any model is run), one per tile with
     # its own centre's tide.
     chosen = {}

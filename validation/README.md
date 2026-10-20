@@ -57,7 +57,7 @@ This is a screen, not the acceptance test below. Use it to choose what to benchm
 
 ## Diagnosing the inversion
 
-`EXPERIMENTS.md` is the experiment plan and log for making the model work without a depth prior. `profile_model.py` is the Python prototype of DROP (Phase F), run on `ab.py`'s points against a photic variant. `paper_profile.py` runs the profile-model paper's experiments (ablation, scene subsets) and writes its figures (`paper/msab_figures/`). `phaseA.py` runs photic's own error function and optimiser on single tier 3 pixels through `drivers/invert_lab`, against the known truth.
+`EXPERIMENTS.md` is the experiment plan and log for making the model work without a depth prior. `profile_model.py` is the Python prototype of DROP (Phase F), run on `ab.py`'s points against a photic variant. `paper_profile.py` runs the profile-model paper's experiments (ablation, scene subsets) and writes its figures (`paper/msab_figures/`). `drivers/invert_lab` runs photic's own error function and optimiser on single tier 3 pixels against the known truth. The Phase A–C diagnostic scripts that drove it (`phaseA.py`, `decouple.py`, `error_budget.py` and others) were removed on 2026-10-20 once those phases closed; they are in git history before that date.
 
 ## Data and tools (all under `$PHOTIC_VALIDATION_DATA`, not in git)
 

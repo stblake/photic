@@ -6,7 +6,7 @@ Earthdata login in ~/.netrc, cropped to the site's box and saved as one .npz per
 raw/atl24/ (seabed and sea-surface photons only, every field, with the beam name); the full
 granule (about 100 MB) is then deleted. Downloads are idempotent (a granule with an .npz is skipped).
 
-    tier4_fetch_atl24.py
+    [GULF_REGION=scene] tier4_fetch_atl24.py
 """
 
 import json
@@ -22,8 +22,9 @@ import h5py
 import numpy as np
 
 DATA = os.environ.get("PHOTIC_VALIDATION_DATA", os.path.expanduser("~/photic_dev/validation_data"))
-OUT = os.path.join(DATA, "raw", "atl24")
-BOX = (54.7, 24.75, 55.2, 25.1)  # W, S, E, N: the Sentinel-2 and Landsat 8 gulf scenes' site
+import tier4_gulf  # noqa: E402 (the region: $GULF_REGION, palm or scene)
+OUT = tier4_gulf.ATL24
+BOX = (tier4_gulf.LIMIT[1], tier4_gulf.LIMIT[0], tier4_gulf.LIMIT[3], tier4_gulf.LIMIT[2])  # W, S, E, N
 BEAMS = ["gt1l", "gt1r", "gt2l", "gt2r", "gt3l", "gt3r"]
 CMR = "https://cmr.earthdata.nasa.gov/search/granules.json"
 KEEP_CLASSES = (40, 41)  # ATL24 class_ph: 40 seabed, 41 sea surface (0 is unclassified)

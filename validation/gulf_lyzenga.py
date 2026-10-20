@@ -46,8 +46,13 @@ import tier4_gulf as g
 import tier4_prepare as tp
 
 DATA = tp.DATA
-OUT = os.path.join(DATA, "derived", "tier4", "gulf_lyzenga")
-WORK = os.path.join(DATA, "runs", "gulf_lyzenga")
+# $GULF_REGION (tier4_gulf.py): palm (default) or scene, the whole Landsat 8 scene. The scene's
+# band grids are photic NetCDF (16-bit packed; .asc would be ~6 GB of text) on ACOLITE's projected
+# grid, and it reuses the palm's cross-validated settings (a sweep at 30 M cells is impractical).
+OUT = os.path.join(DATA, "derived", "tier4", "gulf_lyzenga" + g.SUFFIX)
+WORK = os.path.join(DATA, "runs", "gulf_lyzenga" + g.SUFFIX)
+CV_PALM = os.path.join(DATA, "derived", "tier4", "gulf_lyzenga", "cv.json")
+EXT = ".asc" if g.REGION == "palm" else ".nc"
 PHOTIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "model", "photic")
 PRODUCT_2019 = os.path.expanduser("~/Documents/bathymetry_data/dubai_to_abu_dhabi/H_sa_mean.nc")
 CELL = tp.L8_CELL
@@ -66,11 +71,48 @@ NC_LOCK = threading.Lock()  # netCDF4 is not thread-safe
 POINTS_CELL = 0.0006  # deg, the ICESat-2 points map's cells: each a visible dot
 
 
+def projected_l2w():
+    return sorted(glob.glob(os.path.join(DATA, "derived", "tier4", g.ACOLITE, "*", "*L2W_projected.nc")))
+
+
 def grid():
-    s, w, n, e = g.LIMIT
-    lon = w + CELL*np.arange(int(round((e - w)/CELL)) + 1)
-    lat = s + CELL*np.arange(int(round((n - s)/CELL)) + 1)
-    return lon, lat
+    if g.REGION == "palm":
+        s, w, n, e = g.LIMIT
+        lon = w + CELL*np.arange(int(round((e - w)/CELL)) + 1)
+        lat = s + CELL*np.arange(int(round((n - s)/CELL)) + 1)
+        return lon, lat
+    # ACOLITE's projected grid: x (cell centres) ascending, y descending; photic's rows run south.
+    import netCDF4
+    with netCDF4.Dataset(projected_l2w()[0]) as d:
+        return np.array(d["x"][:], float), np.array(d["y"][:], float)[::-1]
+
+
+def write_band(path, grid_, lon, lat, nodata=-9999.0):
+    """A band grid as .asc, or as photic's NetCDF (nc.c: lons, lats, bathy(lats, lons) as shorts
+    with add_offset, scale_factor, missing_value and decompressed_missing_value)."""
+    if path.endswith(".asc"):
+        tp.write_asc(path, grid_, lon, lat, CELL, nodata)
+        return
+    import netCDF4
+    v = grid_[np.isfinite(grid_)]
+    lo, hi = (float(v.min()), float(v.max())) if v.size else (0.0, 1.0)
+    scale = (hi - lo)/65000.0 if hi > lo else 1.0
+    offset = 0.5*(hi + lo)
+    packed = np.where(np.isfinite(grid_), np.rint((grid_ - offset)/scale), -32768).astype(np.int16)
+    with netCDF4.Dataset(path, "w") as d:
+        d.createDimension("lons", len(lon))
+        d.createDimension("lats", len(lat))
+        x = d.createVariable("lons", "f4", ("lons",))
+        y = d.createVariable("lats", "f4", ("lats",))
+        b = d.createVariable("bathy", "i2", ("lats", "lons"), zlib=True, complevel=1)
+        b.set_auto_maskandscale(False)
+        x[:] = lon
+        y[:] = lat
+        b.add_offset = np.float32(offset)
+        b.scale_factor = np.float32(scale)
+        b.missing_value = np.int16(-32768)
+        b.decompressed_missing_value = np.float32(nodata)
+        b[:] = packed
 
 
 def composite(lon, lat):
@@ -80,7 +122,17 @@ def composite(lon, lat):
     stacks = {wl: [] for wl in tp.L8_BANDS}
     tides = []
     tide_at = g.tide_for({"box": (g.LIMIT[1], g.LIMIT[3], g.LIMIT[0], g.LIMIT[2], CELL)})
-    for l2w in sorted(glob.glob(os.path.join(DATA, "derived", "tier4", "acolite_gulf_l8", "*", "*L2W.nc"))):
+    if g.REGION != "palm":
+        import netCDF4
+        for l2w in projected_l2w():
+            with netCDF4.Dataset(l2w) as d:
+                for wl in tp.L8_BANDS:
+                    v = np.ma.filled(d["Rrs_%d" % wl][:].astype(np.float32), np.nan)[::-1]
+                    v[~(v > 0)] = np.nan
+                    stacks[wl].append(v)
+                tides.append(tide_at(d.getncattr("isodate")))
+        return {wl: np.nanmedian(np.array(v), axis=0) for wl, v in stacks.items()}, float(np.mean(tides)), tides, stacks
+    for l2w in sorted(glob.glob(os.path.join(DATA, "derived", "tier4", g.ACOLITE, "*", "*L2W.nc"))):
         attrs, slon, slat, rrs = tp.read_l2w(l2w)
         ok = np.isfinite(slon) & np.isfinite(slat)
         dist, idx = cKDTree(np.column_stack([slon[ok], slat[ok]])).query(np.column_stack([LON.ravel(), LAT.ravel()]))
@@ -95,7 +147,10 @@ def composite(lon, lat):
 
 
 def water_mask():
-    """Cells of the composite where every band has data (the .asc files' nodata is -9999)."""
+    """Cells of the composite where every band has data (saved by prepare; else from the .asc
+    files, whose nodata is -9999)."""
+    if os.path.exists(os.path.join(OUT, "water.npy")):
+        return np.load(os.path.join(OUT, "water.npy"))
     return np.all([np.loadtxt(os.path.join(OUT, "b%d.asc" % b), skiprows=6, ndmin=2)[::-1] != -9999.0
                    for b in tp.L8_BANDS], axis=0)
 
@@ -138,13 +193,15 @@ def prepare():
     names = []
     for wl, b in bands.items():
         name = "b%d" % wl
-        tp.write_asc(os.path.join(OUT, name + ".asc"), b, lon, lat, CELL)
+        write_band(os.path.join(OUT, name + EXT), b, lon, lat)
         names.append(name)
     # Each scene's own bands too, for the joint model (all scenes' bands as predictors at once).
     for wl, v in stacks.items():
         for k, b in enumerate(v):
-            tp.write_asc(os.path.join(OUT, "s%d_b%d.asc" % (k + 1, wl)), b, lon, lat, CELL)
+            write_band(os.path.join(OUT, "s%d_b%d%s" % (k + 1, wl, EXT)), b, lon, lat)
     water = np.all([np.isfinite(b) for b in bands.values()], axis=0)
+    np.save(os.path.join(OUT, "water.npy"), water)
+    del stacks
     cal, test, n_cal, n_test = split_photons()
     cal_depth, cal_occupied = bin_cells(cal, lon, lat)
     test_depth, _ = bin_cells(test, lon, lat)
@@ -182,7 +239,7 @@ def run_photic(rundir, soundings, bands, lsm, radius, extra="", plot=None, name=
         names = ["s%d_b%d" % (k + 1, b) for k in range(n_scenes) for b in bands]
     else:
         names = ["b%d" % b for b in bands]
-    lines = ["READ GRID %s %s" % (n, os.path.join(OUT, n + ".asc")) for n in names]
+    lines = ["READ GRID %s %s" % (n, os.path.join(OUT, n + EXT)) for n in names]
     lines.append("READ SOUNDINGS %s" % soundings)
     words = "LSM " + " ".join("0" for _ in names) if lsm == "none" else "PERCENTILE 1"
     lines.append("MODEL lyzenga_log_linear GRIDS %s BATHYMETRY %s %s RADIUS %d DEPTHS 0 30%s"
@@ -316,7 +373,8 @@ def fit(override=None):
     lon, lat = grid()
     meta = json.load(open(os.path.join(OUT, "meta.json")))
     ref = np.load(os.path.join(OUT, "reference.npz"))
-    c = json.load(open(os.path.join(OUT, "cv.json")))["chosen"]
+    cv_file = os.path.join(OUT, "cv.json") if os.path.exists(os.path.join(OUT, "cv.json")) else CV_PALM
+    c = json.load(open(cv_file))["chosen"]
     rundir, score_file = os.path.join(WORK, "final"), os.path.join(OUT, "score.json")
     if override:
         inputs, bands, radius, power = override
@@ -392,7 +450,7 @@ def correlation():
                 transform=ax.transAxes, va="top", fontsize=9, bbox=dict(facecolor="white", alpha=0.85, lw=0))
         ax.legend(loc="lower right", fontsize=8)
         fig.colorbar(hb, ax=ax, shrink=0.8, label="cells")
-    c = json.load(open(os.path.join(OUT, "cv.json")))["chosen"]
+    c = json.load(open(os.path.join(OUT, "cv.json") if os.path.exists(os.path.join(OUT, "cv.json")) else CV_PALM))["chosen"]
     fig.suptitle("Dubai to Abu Dhabi: Lyzenga SDB (Landsat 8%s) against ICESat-2"
                  % (", power-law rescaled beyond the crossover" if c.get("power") else ""), fontsize=12)
     out = os.path.join(rundir, "correlation.png")
@@ -404,7 +462,8 @@ def points():
     """Every ICESat-2 reference photon (both halves), binned to POINTS_CELL cells (the median of at
     least 3 photons spreading at most 0.5 m), drawn by photic as the bathymetry map is."""
     rundir = os.path.join(WORK, "final")
-    s, w, n, e = g.LIMIT
+    glon, glat = grid()
+    s, w, n, e = glat[0], glon[0], glat[-1], glon[-1]
     lon = w + POINTS_CELL*np.arange(int(round((e - w)/POINTS_CELL)) + 1)
     lat = s + POINTS_CELL*np.arange(int(round((n - s)/POINTS_CELL)) + 1)
     R = np.load(g.REFERENCE)
