@@ -28,19 +28,20 @@ SCENES = [  # sun elevation, tide about MSL at the overpass
     "LC08_L1TP_115075_20190505_20190520_01_T1",  # 42 deg, +0.87 m
 ]
 
-# The Arabian Gulf between Abu Dhabi and Dubai (path 160, row 43; tier4_gulf.py): scene cloud cover
-# <= 0.3%, sun elevation 38-56 deg, a tide changing by at most 0.2 m/h, a spread of tides (GOT4.10 at
-# 54.6 E, 25.0 N), 2018-2021.
+# The Arabian Gulf between Abu Dhabi and Dubai (path 160, row 43), chosen by tier4_gulf.py select:
+# haze first (the six clearest by SWIR surface reflectance over open water, of 51 scenes with < 5%
+# cloud, 2018-10 to 2021), among those with the sun at 38-56 deg and a tide changing by at most
+# 0.2 m/h (GOT4.10).
 
 GULF_PREFIX = "LC08/01/160/043/"
 
 GULF_SCENES = [
-    "LC08_L1TP_160043_20180310_20180320_01_T1",  # 52 deg, -0.16 m
-    "LC08_L1TP_160043_20211012_20211019_01_T1",  # 53 deg, -0.07 m
-    "LC08_L1TP_160043_20191023_20191030_01_T1",  # 50 deg, +0.17 m
-    "LC08_L1TP_160043_20201025_20201106_01_T1",  # 49 deg, +0.24 m
-    "LC08_L1TP_160043_20191108_20191115_01_T1",  # 45 deg, +0.39 m
-    "LC08_L1TP_160043_20181105_20181115_01_T1",  # 46 deg, +0.60 m
+    "LC08_L1TP_160043_20190313_20190325_01_T1",  # SWIR 0.0042, 53 deg, -0.49 m
+    "LC08_L1TP_160043_20190209_20190221_01_T1",  # SWIR 0.0026, 43 deg, -0.07 m
+    "LC08_L1TP_160043_20181004_20181010_01_T1",  # SWIR 0.0048, 55 deg, +0.10 m
+    "LC08_L1TP_160043_20201110_20210316_01_T1",  # SWIR 0.0037, 44 deg, +0.19 m
+    "LC08_L1TP_160043_20191108_20191115_01_T1",  # SWIR 0.0048, 45 deg, +0.38 m
+    "LC08_L1TP_160043_20181207_20181211_01_T1",  # SWIR 0.0030, 39 deg, +0.64 m
 ]
 
 FILES = ["MTL.txt", "ANG.txt", "BQA.TIF"] + ["B%d.TIF" % b for b in (1, 2, 3, 4, 5, 6, 7, 9)]

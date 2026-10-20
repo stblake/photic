@@ -1,18 +1,26 @@
 """Tier 4, second region: the Arabian Gulf between Abu Dhabi and Dubai, scored against ICESat-2.
 
-A held-out test of sounding-free models: nothing here was used to choose any setting.
+A held-out test of sounding-free models: nothing here was used to choose any setting. Landsat 8
+only: few scenes here are clear enough to model, and the Sentinel-2 scenes first chosen (by cloud,
+sun and tide) were too hazy for ACOLITE's SWIR water mask.
 
-  reference      the ATL24 seabed photons (tier4_fetch_atl24.py) as depths below MSL:
-                 derived/tier4/atl24_gulf.npz (lon, lat, depth, year)
-  acolite s2|l8  ACOLITE (as tier4_prepare.py: DSF, fixed AOT, residual glint) on the gulf scenes
-                 (tier4_fetch_s2.py/tier4_fetch_l8.py gulf) over the site's box
-  sites s2|l8    photic inputs on 0.1 deg tiles: sites_gulf, sites_gulf_l8
+  screen     SWIR over open water for every candidate scene (haze): gulf_screen_l8.json
+  select     the scenes, by the rule below, as Collection 1 names for tier4_fetch_l8.GULF_SCENES
+  reference  the ATL24 seabed photons (tier4_fetch_atl24.py) as depths below MSL:
+             derived/tier4/atl24_gulf.npz (lon, lat, depth, year)
+  acolite    ACOLITE (as tier4_prepare.py: DSF, fixed AOT, residual glint) on the gulf scenes
+             (tier4_fetch_l8.py gulf) over the site's box
+  sites      photic inputs on 0.1 deg tiles: sites_gulf_l8
+
+Scene selection, in order: haze first (the six clearest by SWIR surface reflectance over open
+water), among scenes with the sun at 38-56 deg (lower: little light reaches depth; higher: sun
+glint) and a tide changing by at most 0.2 m/h over the hour around the overpass.
 
 Photons: class 40 (seabed), not low_confidence_flag and not sensor_depth_exceeded. ATL24's
 ortho_h is refraction-corrected and relative to the EGM2008 geoid. Mean sea level is found from
 the passes themselves: each pass's sea surface (surface_h, median over its seabed photons) minus
 the GOT4.10 tide at that time, averaged over all passes (GOT4.10 follows the passes' surface with
-r = 0.84, slope 0.85 and a non-tidal residual of 0.22 m). The depth below MSL is then
+r = 0.86 and a non-tidal residual of 0.20 m). The depth below MSL is then
 msl - ortho_h, without each pass's non-tidal residual.
 
 Scenes' HTIDE is GOT4.10 (pyTMD, cutoff 50 km) at the tile's centre at the overpass. Tiles are
@@ -37,7 +45,7 @@ REFERENCE = os.path.join(DATA, "derived", "tier4", "atl24_gulf.npz")
 GOT = os.path.join(DATA, "raw", "tides", "got")
 LIMIT = [24.75, 54.7, 25.1, 55.2]  # S, W, N, E for ACOLITE (tier4_fetch_atl24.BOX)
 TILE = 0.1
-CELL = 0.0002  # as the Exmouth sites; Landsat 8 uses tp.L8_CELL
+CELL = tp.L8_CELL  # ~31 m
 MIN_REFERENCE = 200
 EPOCH_2000 = datetime.datetime(2000, 1, 1)
 ATLAS_EPOCH = datetime.datetime(2018, 1, 1)  # ATL24 delta_time (GPS seconds; 18 s from UTC ignored)
@@ -123,16 +131,121 @@ def tide_for(sites):
     return fn
 
 
-def acolite(sensor):
-    raw, derived = ("s2_gulf", "acolite_gulf") if sensor == "s2" else ("l8_gulf", "acolite_gulf_l8")
-    tp.acolite_all(raw, derived, limit=LIMIT)
+WATER_BOX = (54.75, 25.0, 54.85, 25.08)  # W, S, N, E: open water 13-20 m deep, for the haze screen
 
 
-def sites(sensor):
-    if sensor == "s2":
-        wavelengths, name, acolite_dir, min_cell = tp.PHOTIC_BANDS, "sites_gulf", "acolite_gulf", 0.0
-    else:
-        wavelengths, name, acolite_dir, min_cell = tp.L8_BANDS, "sites_gulf_l8", "acolite_gulf_l8", tp.L8_CELL
+SUN = (38.0, 56.0)
+MAX_TIDE_RATE = 0.2  # m over the hour around the overpass
+N_SCENES = 6
+
+
+def screen_items():
+    """STAC items over the water box with little cloud: Landsat 8 C2 L2 (Planetary Computer, path
+    160 row 43, 2018-10 to 2021, the years of Collection 1 on Google Cloud, which ACOLITE reads)."""
+    import urllib.request
+    url = "https://planetarycomputer.microsoft.com/api/stac/v1/search"
+    body = dict(collections=["landsat-c2-l2"], datetime="2018-10-01T00:00:00Z/2021-12-31T23:59:59Z",
+                query={"eo:cloud_cover": {"lt": 5}, "platform": {"eq": "landsat-8"},
+                       "landsat:wrs_path": {"eq": "160"}, "landsat:wrs_row": {"eq": "043"}})
+    w, s, e, n = WATER_BOX
+    body.update(intersects={"type": "Point", "coordinates": [(w + e)/2, (s + n)/2]}, limit=200)
+    items = []
+    while True:
+        req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"})
+        page = json.load(urllib.request.urlopen(req))
+        items += page["features"]
+        nxt = [l for l in page.get("links", []) if l.get("rel") == "next"]
+        if not nxt or not page["features"]:
+            return items
+        body = nxt[0].get("body", body) if nxt[0].get("method", "GET") == "POST" else body
+        if nxt[0].get("method", "GET") != "POST":
+            url, body = nxt[0]["href"], None
+            page_items = []
+            while url:
+                p = json.load(urllib.request.urlopen(url))
+                items += p["features"]
+                url = next((l["href"] for l in p.get("links", []) if l.get("rel") == "next"), None) if p["features"] else None
+            return items
+
+
+def window_median(href, asset):
+    """Median reflectance of an asset over the water box (a ranged read of a cloud-optimised GeoTIFF)."""
+    import rasterio
+    from rasterio.warp import transform
+    band = (asset.get("raster:bands") or [{}])[0]
+    with rasterio.open(href) as src:
+        xs, ys = transform("EPSG:4326", src.crs, [WATER_BOX[0], WATER_BOX[2]], [WATER_BOX[1], WATER_BOX[3]])
+        win = rasterio.windows.from_bounds(min(xs), min(ys), max(xs), max(ys), src.transform)
+        a = src.read(1, window=win, boundless=True, fill_value=band.get("nodata", 0)).astype(float)
+    ok = a != band.get("nodata", 0)
+    if ok.mean() < 0.9:
+        return None
+    return float(np.median(a[ok]))*band.get("scale", 1.0) + band.get("offset", 0.0)
+
+
+def screen():
+    """SWIR (1.6 um) surface reflectance over open water for every candidate scene: water is black
+    there, so what remains is haze, glint or adjacency that the processor did not remove (ACOLITE
+    masks water where TOA reflectance at 1.6 um exceeds 0.0215). Also the tide and its rate at
+    the overpass and the sun elevation, for the selection."""
+    from concurrent.futures import ThreadPoolExecutor
+    import urllib.request
+    items = screen_items()
+    token = "?" + json.load(urllib.request.urlopen(
+        "https://planetarycomputer.microsoft.com/api/sas/v1/token/landsateuwest/landsat-c2"))["token"]
+
+    def one(it):
+        a = it["assets"]["swir16"]
+        try:
+            v = window_median(a["href"] + token, a)
+        except Exception as ex:  # noqa: BLE001 (a missing or unreadable asset: skip the scene)
+            return dict(id=it["id"], error=str(ex)[:100])
+        p = it["properties"]
+        return dict(id=it["id"], datetime=p["datetime"],
+                    cloud=p.get("eo:cloud_cover"), sun_elevation=p.get("view:sun_elevation"), swir=v)
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        rows = [r for r in pool.map(one, items)]
+    ok = [r for r in rows if r.get("swir") is not None]
+    times = [datetime.datetime.fromisoformat(r["datetime"].replace("Z", "+00:00")).replace(tzinfo=None) for r in ok]
+    t = np.array([(x - EPOCH_2000).total_seconds() for x in times])
+    w, s, e, n = WATER_BOX
+    lon, lat = np.full(t.size, (w + e)/2), np.full(t.size, (s + n)/2)
+    h = got_tide(lon, lat, t)
+    rate = got_tide(lon, lat, t + 1800) - got_tide(lon, lat, t - 1800)
+    for r, a, b in zip(ok, h, rate):
+        r.update(tide=float(a), tide_rate=float(b))
+    out = os.path.join(DATA, "derived", "tier4", "gulf_screen_l8.json")
+    json.dump(sorted(rows, key=lambda r: r["datetime"]), open(out, "w"), indent=1)
+    v = np.array([r["swir"] for r in ok])
+    print("%d items, %d read; SWIR over water: %s (5/25/50/75/95%%)"
+          % (len(rows), len(ok), np.round(np.percentile(v, [5, 25, 50, 75, 95]), 4)))
+
+
+def select():
+    """The six clearest screened scenes with the sun and tide rate in range, as Collection 1
+    product names on Google Cloud (tier4_fetch_l8.GULF_SCENES)."""
+    import urllib.request
+    rows = json.load(open(os.path.join(DATA, "derived", "tier4", "gulf_screen_l8.json")))
+    ok = [r for r in rows if r.get("swir") is not None and SUN[0] <= r["sun_elevation"] <= SUN[1]
+          and abs(r["tide_rate"]) <= MAX_TIDE_RATE]
+    chosen = sorted(ok, key=lambda r: r["swir"])[:N_SCENES]
+    listing = json.load(urllib.request.urlopen("https://storage.googleapis.com/storage/v1/b/gcp-public-data-landsat/o?"
+                                               "prefix=LC08/01/160/043/&delimiter=/&maxResults=1000"))["prefixes"]
+    for r in sorted(chosen, key=lambda r: r["tide"]):
+        date = r["id"].split("_")[3]
+        c1 = sorted(p.split("/")[-2] for p in listing if p.split("/")[-2].split("_")[3] == date
+                    and p.split("/")[-2].endswith("_T1"))
+        print('    "%s",  # SWIR %.4f, %.0f deg, %+.2f m' % (c1[-1] if c1 else "none for " + date, r["swir"],
+                                                          r["sun_elevation"], r["tide"]))
+
+
+def acolite():
+    tp.acolite_all("l8_gulf", "acolite_gulf_l8", limit=LIMIT)
+
+
+def sites():
+    wavelengths, name, acolite_dir, min_cell = tp.L8_BANDS, "sites_gulf_l8", "acolite_gulf_l8", tp.L8_CELL
     # Tiles are chosen from the reference alone (before any model is run), one per tile with
     # its own centre's tide.
     chosen = {}
@@ -164,9 +277,8 @@ def sites(sensor):
 
 if __name__ == "__main__":
     cmd = sys.argv[1:]
-    if cmd == ["reference"]:
-        reference()
-    elif len(cmd) == 2 and cmd[0] in ("acolite", "sites") and cmd[1] in ("s2", "l8"):
-        {"acolite": acolite, "sites": sites}[cmd[0]](cmd[1])
+    commands = {"screen": screen, "select": select, "reference": reference, "acolite": acolite, "sites": sites}
+    if len(cmd) == 1 and cmd[0] in commands:
+        commands[cmd[0]]()
     else:
         raise SystemExit(__doc__)

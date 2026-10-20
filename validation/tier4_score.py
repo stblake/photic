@@ -50,7 +50,7 @@ def published_on_grid(path, lon, lat):
 
 
 def run(photic, data, workroot, only=None):
-    sites_dir = os.path.join(data, "derived", "tier4", os.environ.get("PHOTIC_TIER4_SITES", "sites"))
+    sites_dir = os.path.join(data, "derived", "tier4", os.environ.get("PHOTIC_TIER4_SITES", "sites_l8"))
     published = glob.glob(os.path.join(data, "raw", "published", "exmouth_gulf", "*.tif"))
     cases = {}
     for site_dir in sorted(glob.glob(os.path.join(sites_dir, "*"))):

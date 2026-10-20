@@ -1579,29 +1579,34 @@ The Exmouth split has been looked at too often to be an unbiased test, so DROP i
 
 - **Reference:** ICESat-2 ATL24 v002 (`tier4_fetch_atl24.py`).
   - Inputs: 112 granules (2018–2024), 87 passes with seabed. Photons are class 40, excluding low confidence and sensor depth exceeded: 190,549 in all.
-  - Datum: ATL24's `ortho_h` is refraction-corrected and on EGM2008. MSL comes from the passes themselves: sea surface minus the GOT4.10 tide, averaged over the passes (0.25 m above the geoid). GOT4.10 follows the passes' surface with r = 0.86, slope 0.85 and a non-tidal residual of 0.20 m.
+  - Datum: ATL24's `ortho_h` is refraction-corrected and on EGM2008. MSL comes from the passes themselves: sea surface minus the GOT4.10 tide, averaged over the passes (0.25 m above the geoid). GOT4.10 follows the passes' surface with r = 0.86 and a non-tidal residual of 0.20 m.
   - Cells: the median of at least 3 photons spreading at most 0.5 m (the Exmouth rule), over water in the imagery.
 - **Sites:** 0.1° tiles holding at least 200 reference cells, chosen from the reference alone before any run. Scene tides are GOT4.10 at each tile's centre. ACOLITE runs as at Exmouth (DSF, fixed AOT, residual glint).
-- **Sentinel-2 cannot be used as selected.** Over open water the scenes' TOA reflectance at 1614 nm is 0.017–0.043 (haze or glint; one scene, 2025-02-04, is 0.0075). ACOLITE's SWIR mask (0.0215) then removes the water: three scenes have no valid pixels and two cover only the west. A sixth scene (2022-10-18) is blackfill over the site. The scenes were chosen by cloud, sun and tide, not by SWIR.
-- **Landsat 8 is usable:** three scenes (2018-11-05, 2019-10-23, 2019-11-08) are valid over the water, and nine tiles hold 12,887 reference cells.
+- **Scenes must be chosen for haze first.** Few scenes here are clear enough to model.
+  - The first selection (cloud, sun and tide only) was too hazy. Sentinel-2's TOA reflectance at 1614 nm over open water was 0.017–0.043, above ACOLITE's SWIR water mask (0.0215), so most of the water was masked. Only three of six Landsat 8 scenes were usable. Sentinel-2 was then dropped from the project (its data deleted).
+  - **Rule** (`tier4_gulf.py screen`, `select`): of the 51 Landsat 8 scenes with < 5% cloud (2018-10 to 2021, Collection 1), take the six clearest by SWIR (1.6 µm) surface reflectance over open water. Candidates must have the sun at 38–56° (lower: little light reaches depth; higher: glint) and a tide changing by at most 0.2 m/h.
+  - The chosen scenes have SWIR 0.0026–0.0048, against 0.003–0.035 across all candidates. Tides span −0.49 to +0.64 m. All six are valid over all the water.
 
-DROP on Landsat 8, pooled over the nine tiles:
+DROP on Landsat 8, pooled over the nine tiles (13,092 reference cells):
 
-| | Reference cells | With a depth | Hits % | RMSE m | Bias m | Within tolerance |
-|---|---|---|---|---|---|---|
-| All | 12,887 | 23% | 14.2 | 1.43 | −0.63 | 61% |
-
-| Depth (m) | Reference cells | With a depth | Bias m | RMSE m |
+| Scenes | With a depth | Hits % | RMSE m | Bias m |
 |---|---|---|---|---|
-| 0–2 | 684 | 61% | +0.43 | 0.66 |
-| 2–5 | 4,111 | 55% | −0.51 | 0.80 |
-| 5–10 | 4,301 | 7% | −2.53 | 2.92 |
-| 10–20 | 3,747 | 0% | — | — |
+| First selection (3 usable) | 23% | 14.2 | 1.43 | −0.63 |
+| Haze-screened (6) | 30% | 17.7 | 1.42 | −0.77 |
 
-- **Shallower than 5 m DROP is good:** RMSE 0.66–0.80 m, close to its Exmouth accuracy.
-- **Beyond 5 m it fails: the depth ceiling.** In clear Gulf water it calls 93% of the 5–10 m cells and every 10–20 m cell optically deep, and the few depths it gives there are 2.5 m too shallow.
-- This is the same failure the Exmouth diagnosis found: the residual red and NIR offset makes κ too strong. It confirms the diagnosis held out.
-- **Next:** G6 step 2 (the aerosol where the water is) is the fix to test here. For Sentinel-2, re-select the gulf scenes with SWIR clarity added to the rules, from STAC, before any model run.
+By depth, haze-screened scenes:
+
+| Depth (m) | Reference cells | With a depth | Hits % | Bias m | RMSE m |
+|---|---|---|---|---|---|
+| 0–2 | 734 | 66% | 51 | +0.41 | 0.70 |
+| 2–5 | 4,232 | 66% | 46 | −0.56 | 0.79 |
+| 5–10 | 4,333 | 16% | 0 | −2.31 | 2.48 |
+| 10–20 | 3,749 | 0% | 0 | — | — |
+
+- **Shallower than 5 m DROP holds up at a new site:** RMSE 0.70–0.79 m, about half the cells within tolerance.
+- **Beyond 5 m it fails: the depth ceiling.** In clear Gulf water it gives no correct depth beyond 5 m. The depths it does give there are 2.3 m too shallow, and below 10 m it calls every cell optically deep.
+- **Clear scenes do not lift the ceiling.** Haze screening raises coverage (23 → 30%) and hits (14.2 → 17.7%) but not the depth reach. The ceiling is not caused by hazy scenes: it is the residual red and NIR offset of ACOLITE's DSF making κ too strong, as diagnosed at Exmouth. That diagnosis now holds out at a second region.
+- **Next:** G6 step 2 (the aerosol where the water is) is the fix to test here, with the reference unchanged.
 
 ### Phase B order (from Phase A)
 

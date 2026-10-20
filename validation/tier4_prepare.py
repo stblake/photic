@@ -190,7 +190,7 @@ def prepare_sites(wavelengths=PHOTIC_BANDS, sites_name="sites", scenes_only=None
                   sites=SITES, min_cell=0.0, tide=None, reference=gauge_reference, nir=None):
     """photic inputs and reference grids for every site from the ACOLITE scenes in
     derived/tier4/<acolite>/ (those named in scenes_only, or all), written to
-    derived/tier4/<sites_name>/ (tier4_score.py reads $PHOTIC_TIER4_SITES, default "sites").
+    derived/tier4/<sites_name>/ (tier4_score.py reads $PHOTIC_TIER4_SITES, default "sites_l8").
     tide(isodate) gives the water level above MSL at the overpass (default: the Exmouth gauge);
     reference(site, lon, lat, cell) the reference depth grid and its fields for reference.npz.
     nir (nm): also write each scene's near-infrared Rrs and pass it as SCENE ... NIR, which only

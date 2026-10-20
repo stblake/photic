@@ -385,7 +385,7 @@ def main():
     ap.add_argument("--n", type=int, default=300)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--against", default="HEAD", help="the photic variant to compare with (ab.py syntax)")
-    ap.add_argument("--sites", default="sites", help="tier 4 site set for the profile model (sites5: 705 nm)")
+    ap.add_argument("--sites", default="sites_l8", help="tier 4 site set for the profile model (sites: Sentinel-2, sites5: 705 nm)")
     ap.add_argument("--ref", choices=["red", "oracle"], default="red")
     ap.add_argument("--eps", type=float, default=0.03, help="relative model error")
     ap.add_argument("--t-deep", type=float, default=9.0)

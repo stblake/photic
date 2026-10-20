@@ -105,7 +105,7 @@ Main commands (dispatch in `bam.c:run_command`):
 - **Tier 1:** the C equations against an independent Python reference (`photic_ref.py`) and SAMBUCA.
 - **Tier 2:** the forward model against exact radiative transfer (OSOAA).
 - **Tier 3:** inversion of synthetic scenes built from OSOAA.
-- **Tier 4:** Sentinel-2 over Exmouth Gulf, scored against WA DoT soundings.
+- **Tier 4:** Landsat 8 over Exmouth Gulf, scored against WA DoT soundings (the Sentinel-2 data was deleted for space; `validation/README.md` says how to rebuild it), and the Arabian Gulf against ICESat-2 as a held-out region.
 
 For quick iteration, `validation/ab.py A B` (git refs, or `.` for the working tree, each optionally `:<CFLAGS>` such as `.:-DLUT=0`, and `~DROP` for DROP) runs a paired A/B test on ~300 depth-stratified out-of-sample points in about a minute. It uses `MODEL Lee_Semi_Analytical ... POINTS <grid>`, which models only a grid's non-zero cells. It is a screen; the benchmark below is still the acceptance test.
 

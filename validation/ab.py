@@ -468,7 +468,7 @@ def main():
     ap.add_argument("--split", choices=sorted(SPLITS), default="test")
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--fresh", action="store_true", help="re-run cases already run for a build")
-    ap.add_argument("--sites", default="sites", help="tier 4 site set under derived/tier4 (default sites; "
+    ap.add_argument("--sites", default="sites_l8", help="tier 4 site set under derived/tier4 (default sites_l8; "
                     "sites16 has all 16 scenes)")
     ap.add_argument("--min-effect", type=float, default=0.02,
                     help="smallest change that counts: in net score (points per point) and in RMSE (as a "
