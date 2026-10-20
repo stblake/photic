@@ -1,7 +1,8 @@
 % EMPIRICAL_MODEL_SUMMARY.tex
 %
-% photic's empirical model, MODEL lyzenga_log_linear: the fit, its depth error estimate, and the
-% attenuation coefficients and physical depth from ATTENUATION, with their error estimate.
+% photic's empirical model, MODEL lyzenga_log_linear: its derivation from Lee's model, the fit,
+% its depth error estimate, and the attenuation coefficients and physical depth from
+% ATTENUATION, with their error estimate.
 %
 % Build: pdflatex EMPIRICAL_MODEL_SUMMARY.tex (twice, for the cross-references).
 
@@ -32,7 +33,9 @@ Lyzenga's Log-Linear Fit, Diffuse Attenuation and Depth Errors}
 \begin{abstract}
 \code{MODEL lyzenga\_log\_linear} fits Lyzenga's log-linear depth model to soundings, such as
 ICESat-2 bathymetric photons. The model can be fitted to one image or to several scenes at once.
-This note sets out how \textit{photic} makes three estimates.
+Its introduction derives Lyzenga's model from the radiative transfer equation, through Lee et
+al.'s semi-analytical approximation, which \textit{photic}'s physics-based model inverts. The
+note then sets out how \textit{photic} makes three estimates.
 \begin{enumerate}
 \item The depth, and its 1$\sigma$ prediction error (\code{ERROR}), from a robust weighted
   least-squares fit.
@@ -67,6 +70,157 @@ consistent bottom map at the Gulf.
 \end{abstract}
 
 \tableofcontents
+
+%============================================================================================
+\section{Introduction: from radiative transfer to Lyzenga's model}
+\label{sec:intro}
+
+\textit{photic} has two kinds of depth model. Its semi-analytical model (\code{MODEL
+Lee\_Semi\_Analytical}, \code{paper/photic.tex}) inverts Lee et al.'s approximation to the
+physics for depth, water and bottom at every cell. The empirical model of this note fits
+Lyzenga's log-linear regression to soundings. This section sets out how the two are related:
+the physics, Lee's approximation to it, and Lyzenga's model as a further approximation to
+Lee's. The approximations made along the way are the ones the rest of this note tests at the Gulf.
+
+\subsection{The physics: radiative transfer over a reflecting bottom}
+
+In a horizontally uniform water column, the radiance $L(z, \xi)$ at depth $z$ (positive down) in
+direction $\xi$ obeys the radiative transfer equation (Mobley 1994)
+\begin{equation}
+  \mu\, \frac{\mathrm{d}L(z,\xi)}{\mathrm{d}z} = -c(z)\, L(z,\xi)
+  + \int_{4\pi} \beta(z; \xi' \to \xi)\, L(z,\xi')\, \mathrm{d}\Omega' ,
+  \qquad c = a + b ,
+  \label{eq:rte}
+\end{equation}
+where $\mu$ is the cosine of the direction's zenith angle, $a$ and $b$ are the absorption and
+scattering coefficients, and $\beta$ is the volume scattering function (inelastic scattering
+and internal sources are left out). Two boundary conditions close it:
+\begin{itemize}
+\item at the surface, sunlight and skylight are refracted into the water, and upwelling light is
+  partly reflected back down (Fresnel, at a wind-roughened interface);
+\item at the bottom, depth $Z$, a Lambertian bottom of irradiance reflectance (albedo) $\rho$
+  returns $L = \rho\, E_d(Z)/\pi$ in every upward direction, where $E_d$ is the downwelling
+  irradiance.
+\end{itemize}
+After atmospheric correction, the satellite gives the remote-sensing reflectance
+$R_{rs} = L_w/E_d(0^+)$: the water-leaving radiance over the downwelling irradiance, just above
+the surface. Codes such as Hydrolight and OSOAA solve~\eqref{eq:rte} numerically, and the
+validation benchmark of \textit{photic} uses OSOAA as its exact reference (tier~2). Inverting it at every cell would
+need $a$, $b$ and $\beta$ at every wavelength, which is far more than a few bands can determine,
+and each forward solution is expensive.
+
+\subsection{Lee's semi-analytical approximation}
+
+Lee et al.\ (1998, 1999) fitted a closed form to Hydrolight solutions of~\eqref{eq:rte}, following
+Gordon et al.\ (1988) for optically deep water and Maritorena et al.\ (1994) for the bottom's
+contribution. The subsurface reflectance $r_{rs} = L_u(0^-)/E_d(0^-)$ is related to the measured
+one by
+\begin{equation}
+  R_{rs} = \frac{0.5\, r_{rs}}{1 - 1.5\, r_{rs}} ,
+  \label{eq:surface}
+\end{equation}
+and is the sum of a water-column and a bottom term:
+\begin{equation}
+  r_{rs} = r_{rs,\infty}\Bigl(1 - e^{-M_C \kappa Z}\Bigr) + \frac{\rho}{\pi}\, e^{-M_B \kappa Z},
+  \qquad
+  M_{C,B} = \sec\theta_{w,\mathrm{sun}} + D_{C,B}\, \sec\theta_{w,\mathrm{view}} .
+  \label{eq:lee}
+\end{equation}
+Every quantity but the angles and $Z$ depends on the band:
+\begin{itemize}
+\item $\kappa = a + b_b$ is the attenuation (written $k$ in \code{paper/photic.tex}), with $b_b$
+  the backscattering coefficient;
+\item $u = b_b/(a + b_b)$, and the deep-water reflectance is $r_{rs,\infty} = (0.084 + 0.170\,u)\,u$;
+\item $D_C = 1.03\sqrt{1 + 2.4\,u}$ and $D_B = 1.04\sqrt{1 + 5.4\,u}$ lengthen the upward path for
+  photons scattered by the water column and reflected by the bottom;
+\item $\theta_w$ are the zenith angles in water.
+\end{itemize}
+The water's $a$ and $b_b$ are then written in three parameters (phytoplankton $P$, gelbstoff $G$,
+particle backscatter $X$) and the bottom as a mixture of library spectra, so each cell has a few
+unknowns besides $Z$. \textit{photic}'s semi-analytical model is~\eqref{eq:surface}
+and~\eqref{eq:lee} (\code{samodel\_Rrs} in \code{model/samodel.c}), inverted across several scenes
+at once, with each scene's water column $Z = H + h_s$ for depth $H$ below the datum and tide $h_s$.
+
+\subsection{Lyzenga's model as an approximation to Lee's}
+\label{sec:lee2lyz}
+
+Rearranging~\eqref{eq:lee}, the signal above deep water is
+\begin{equation}
+  r_{rs} - r_{rs,\infty} = \frac{\rho}{\pi}\, e^{-M_B \kappa Z} - r_{rs,\infty}\, e^{-M_C \kappa Z} .
+  \label{eq:lee_signal}
+\end{equation}
+Three approximations turn this into Lyzenga's model.
+\begin{enumerate}
+\item \textbf{One path length.} With $D_C \approx D_B$, so $M_C \approx M_B = M$, the two
+  exponentials merge:
+  \begin{equation}
+    r_{rs} - r_{rs,\infty} \approx \Bigl(\frac{\rho}{\pi} - r_{rs,\infty}\Bigr)\, e^{-g Z},
+    \qquad g = M\kappa .
+    \label{eq:lee_lyz}
+  \end{equation}
+  This is Lyzenga's (1978) model: a single exponential in depth, from an \emph{apparent} bottom
+  reflectance $\rho/\pi - r_{rs,\infty}$, the bottom less the water column's own reflectance
+  (his eq.~6, Section~\ref{sec:physics}). In clear water the approximation is close
+  ($u \to 0$: $D_C = 1.03$, $D_B = 1.04$); it weakens as backscatter grows ($u = 0.1$: $D_C = 1.15$,
+  $D_B = 1.29$). Over a bright bottom the first term of~\eqref{eq:lee_signal} dominates and
+  $g \approx M_B\kappa$.
+\item \textbf{A linear surface.} By~\eqref{eq:surface},
+  \begin{equation*}
+    R_{rs} - R_{rs,\infty} = \frac{0.5\,(r_{rs} - r_{rs,\infty})}
+      {(1 - 1.5\,r_{rs})(1 - 1.5\,r_{rs,\infty})} .
+  \end{equation*}
+  For $r_{rs}$ up to about 0.05 the denominator moves by less than 8\%, so above the surface
+  $\ln(R_{rs} - R_{rs,\infty})$ is the log of~\eqref{eq:lee_lyz} plus a near-constant. A
+  spectrally flat offset in $R_{rs}$ (residual glint, $\Delta$ in \code{paper/photic.tex}) cancels in
+  the difference if deep water has it too.
+\item \textbf{A bottom of fixed colour and varying brightness.} If, across the area fitted,
+  $\rho_m/\pi - r_{rs,\infty,m} = A(\bx)\, r_m$ for band $m$ (bottoms differ in brightness $A$ but
+  share a colour $r_m$), and the water's $\kappa_m$ and $r_{rs,\infty,m}$ are constant, then
+  \begin{equation}
+    \ln(R_{rs,m} - R_{rs,\infty,m}) \approx B(\bx) + c_m - g_m Z ,
+    \qquad B = \ln A .
+  \end{equation}
+  This is~\eqref{eq:logmodel}. The factor is exact only where the bottom is much brighter than deep
+  water; otherwise a change of bottom also changes the colour of the apparent reflectance.
+\end{enumerate}
+Each band then gives one linear equation in the two unknowns $B$ and $Z$. Two bands eliminate the
+brightness:
+\begin{equation}
+  Z = \frac{(c_1 - c_2) - (X_1 - X_2)}{g_1 - g_2} ,
+  \qquad X_m = \ln(R_{rs,m} - R_{rs,\infty,m}),
+\end{equation}
+which is Lyzenga's regression~\eqref{eq:lyzenga} with $a_2 = -a_1 = 1/(g_1 - g_2)$. With $n$ bands,
+any coefficients with $-\sum_m a_m g_m = 1$ give the depth, and $\sum_m a_m = 0$ makes it
+independent of the brightness; these are Lyzenga et al.'s (2006) eqs.~12 and~13
+(Section~\ref{sec:calibration}). The regression does not need $g_m$ or $c_m$: it learns them, in
+the combination it needs, from the soundings. The price is that they must hold over the whole
+area and every bottom it covers.
+
+The derivation says what to expect when the approximations fail.
+\begin{itemize}
+\item \textbf{Varying water.} $g_m$ changes across the scene and between scenes, so one set of
+  coefficients is calibrated only on average. Stage~1 of \code{ATTENUATION}
+  (Section~\ref{sec:stage1}) estimates $g_m(\bx)$ as a smooth field instead.
+\item \textbf{The plain $\ln L$.} Without the deep-water signal subtracted,
+  $\ln r_{rs} = \ln\bigl(r_{rs,\infty} + (\rho/\pi - r_{rs,\infty})e^{-gZ}\bigr)$ by~\eqref{eq:lee_lyz},
+  whose slope with depth, $-g\,(r_{rs} - r_{rs,\infty})/r_{rs}$, falls to zero towards deep water. This is
+  the saturation of Section~\ref{sec:calibration}.
+\item \textbf{The attenuation it recovers.} \code{ATTENUATION} writes $g_m = K_m M_s$ with
+  $M_s = \sec\theta_{w,\mathrm{sun}} + \sec\theta_{w,\mathrm{view}}$, so under Lee's model
+  $K_m \approx \kappa_m (\sec\theta_{w,\mathrm{sun}} + D_B \sec\theta_{w,\mathrm{view}})/M_s \ge \kappa_m$.
+  Since $\kappa_m \ge a_w + b_{bw}$, a $K$ below pure water's absorption (Section~\ref{sec:results})
+  is not physical.
+\item \textbf{Dark bottoms.} Where $\rho/\pi < r_{rs,\infty}$ the apparent reflectance is negative,
+  the signal lies below deep water's, and the logarithm is undefined; those cells are dropped
+  (\code{DEEP}).
+\end{itemize}
+
+The rest of this note follows the empirical side: the inputs and the reference
+(Sections~\ref{sec:inputs} and~\ref{sec:reference}), Lyzenga's regression and its error
+(Section~\ref{sec:lyzenga}), the attenuation behind it in two stages
+(Sections~\ref{sec:physics}--\ref{sec:stage2}), results at the Gulf (Section~\ref{sec:results}),
+Lyzenga et al.'s calibration condition (Section~\ref{sec:calibration}), the depth-invariant bottom
+indices (Section~\ref{sec:indices}), and usage (Section~\ref{sec:usage}).
 
 %============================================================================================
 \section{Notation and inputs}
@@ -357,7 +511,7 @@ reference cell, the test-half score is 90.0\%.}
 \label{sec:physics}
 
 Lyzenga's model is the linearisation of a two-flow model of the water-leaving signal over an
-optically shallow bottom:
+optically shallow bottom, which Section~\ref{sec:lee2lyz} derives from Lee's:
 \begin{equation}
   L_m - \Lsm{m} \;\approx\; A(\bx)\, r_m\, \exp\!\bigl(-g_m(\bx)\, Z_s\bigr),
   \qquad
@@ -914,6 +1068,15 @@ follow the models exactly:
 \section*{References}
 
 \begin{itemize}
+\item Gordon, H.\,R., Brown, O.\,B., Evans, R.\,H., Brown, J.\,W., Smith, R.\,C., Baker, K.\,S.\ and
+  Clark, D.\,K. (1988). A semianalytic radiance model of ocean color. \textit{Journal of
+  Geophysical Research} 93(D9), 10909--10924.
+\item Lee, Z., Carder, K.\,L., Mobley, C.\,D., Steward, R.\,G.\ and Patch, J.\,S. (1998).
+  Hyperspectral remote sensing for shallow waters. I.\ A semianalytical model. \textit{Applied
+  Optics} 37(27), 6329--6338.
+\item Lee, Z., Carder, K.\,L., Mobley, C.\,D., Steward, R.\,G.\ and Patch, J.\,S. (1999).
+  Hyperspectral remote sensing for shallow waters. II.\ Deriving bottom depths and water
+  properties by optimization. \textit{Applied Optics} 38(18), 3831--3843.
 \item Lyzenga, D.\,R. (1978). Passive remote sensing techniques for mapping water depth and
   bottom features. \textit{Applied Optics} 17(3), 379--383.
 \item Lyzenga, D.\,R. (1985). Shallow-water bathymetry using combined lidar and passive
@@ -921,6 +1084,11 @@ follow the models exactly:
 \item Lyzenga, D.\,R., Malinas, N.\,P.\ and Tanis, F.\,J. (2006). Multispectral bathymetry using a
   simple physically based algorithm. \textit{IEEE Transactions on Geoscience and Remote Sensing}
   44(8), 2251--2259.
+\item Maritorena, S., Morel, A.\ and Gentili, B. (1994). Diffuse reflectance of oceanic shallow
+  waters: influence of water depth and bottom albedo. \textit{Limnology and Oceanography} 39(7),
+  1689--1703.
+\item Mobley, C.\,D. (1994). \textit{Light and Water: Radiative Transfer in Natural Waters}.
+  Academic Press, San Diego.
 \item Pope, R.\,M.\ and Fry, E.\,S. (1997). Absorption spectrum (380--700\,nm) of pure water.
   II.\ Integrating cavity measurements. \textit{Applied Optics} 36(33), 8710--8723.
 \end{itemize}
