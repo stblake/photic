@@ -85,6 +85,13 @@ extern double ref_wlens[], aw_Pope_Fry1997[], bbw_Morel_1974[], bottom_type_sand
 #define PROFILE_KAPPA 0            // attenuation: 0 QAA, 1 QAA after an offset matched to the image's
 #endif                             // brightest pixels line, 2 Jerlov's Kd for the type matching it
 
+#ifndef PROFILE_RATIO
+#define PROFILE_RATIO 0            // 1: add the log band-ratio consistency rows to chi2 (below)
+#endif
+#ifndef PROFILE_RATIO_WEIGHT
+#define PROFILE_RATIO_WEIGHT 1.0
+#endif
+
 #define N_CLASSES 3
 #define MAX_BANDS 16
 #define N_H 220
@@ -462,11 +469,49 @@ static void deep_reference(profile_data *pd, int s, int i0, int i1, int j0, int 
 // The profile chi2 over the depth grid for one cell, and its decision. Returns 1 (a depth), 2
 // (optically deep), 3 (ambiguous) or 0 (no data).
 
+// Log band-ratio consistency (PROFILE_RATIO; EXPERIMENTS.md, "Ratio consistency in the fit"):
+// for every pair of bands i < j of a scene, the chi2 of the log ratio of the bottom contrasts
+// D_b = rrs_b - rrs_inf,b, modelled against measured,
+//   [ln(D_i/D_j) modelled - ln(D_i/D_j) measured]^2/sigma_ln^2,
+// sigma_ln^2 = (s_i/D_i)^2 + (s_j/D_j)^2, with s_b the band's error (1/sqrt(w)). res is the
+// measured minus modelled rrs, so the modelled contrast is D - res. Contrasts are kept positive
+// and smooth as 0.5 (D + sqrt(D^2 + 4 s^2)), so weak contrasts carry little weight. Every ratio
+// is then matched by the one depth, bottom and water of the cell.
+
+static double positive_contrast(double D, double s) {
+  return 0.5*(D + sqrt(D*D + 4.0*s*s));
+}
+
+static double ratio_chi2(profile_data *pd, reference **ref, double rrs[][MAX_BANDS], double w[][MAX_BANDS],
+    double res[][MAX_BANDS]) {
+  int s, i, j;
+  double lm[MAX_BANDS], lo[MAX_BANDS], rel[MAX_BANDS], sd, D, d, chi2 = 0.0;
+  for (s = 0; s < pd->n_scenes; s++) {
+    for (i = 0; i < pd->n_bands[s]; i++) {
+      if (w[s][i] <= 0.0) continue;
+      sd = 1.0/sqrt(w[s][i]);
+      D = rrs[s][i] - ref[s]->rrs_inf[i];
+      lo[i] = log(positive_contrast(D, sd));
+      lm[i] = log(positive_contrast(D - res[s][i], sd));
+      rel[i] = sd/positive_contrast(D, sd);
+    }
+    for (i = 0; i < pd->n_bands[s]; i++) {
+      if (w[s][i] <= 0.0) continue;
+      for (j = i + 1; j < pd->n_bands[s]; j++) {
+        if (w[s][j] <= 0.0) continue;
+        d = (lm[i] - lm[j]) - (lo[i] - lo[j]);
+        chi2 += PROFILE_RATIO_WEIGHT*d*d/(rel[i]*rel[i] + rel[j]*rel[j]);
+      }
+    }
+  }
+  return chi2;
+}
+
 static int profile_cell(profile_data *pd, reference **ref, double rrs[][MAX_BANDS], char ok[][MAX_BANDS],
     double *H_out, double *sigma_out, double *misfit, int *class_out, double *b_out) {
 
   int s, b, h, c, k, n = 0, S = pd->n_scenes, best_c[N_H];
-  double w[MAX_SCENES][MAX_BANDS], y[MAX_SCENES][MAX_BANDS], T[MAX_SCENES][MAX_BANDS], x[MAX_SCENES][MAX_BANDS],
+  double res[MAX_SCENES][MAX_BANDS], w[MAX_SCENES][MAX_BANDS], y[MAX_SCENES][MAX_BANDS], T[MAX_SCENES][MAX_BANDS], x[MAX_SCENES][MAX_BANDS],
     chi[N_H], best_b[N_H], sw[MAX_SCENES], xs[MAX_SCENES], ys[MAX_SCENES], gw, sig2, Z, sxx, sxy, bb, e,
     chi_deep, d, dl, scale, H, x0, x1, x2, y0, y1, y2, den, A, B, lo, hi, far_min, sum2;
   int n_rel;
@@ -530,10 +575,12 @@ static int profile_cell(profile_data *pd, reference **ref, double rrs[][MAX_BAND
       for (s = 0; s < S; s++) {
         d = PROFILE_GLINT ? ys[s] - bb*xs[s] : 0.0;
         for (b = 0; b < pd->n_bands[s]; b++) {
-          e += w[s][b]*(y[s][b] - bb*x[s][b] - d)*(y[s][b] - bb*x[s][b] - d);
+          res[s][b] = y[s][b] - bb*x[s][b] - d;
+          e += w[s][b]*res[s][b]*res[s][b];
         }
         if (PROFILE_GLINT) e += gw*d*d;
       }
+      if (PROFILE_RATIO) e += ratio_chi2(pd, ref, rrs, w, res);
       if (e < chi[h]) {
         chi[h] = e;
         best_c[h] = c;
@@ -554,10 +601,12 @@ static int profile_cell(profile_data *pd, reference **ref, double rrs[][MAX_BAND
     }
     d = PROFILE_GLINT ? d/sw[s] : 0.0;
     for (b = 0; b < pd->n_bands[s]; b++) {
-      chi_deep += w[s][b]*(rrs[s][b] - ref[s]->rrs_inf[b] - d)*(rrs[s][b] - ref[s]->rrs_inf[b] - d);
+      res[s][b] = rrs[s][b] - ref[s]->rrs_inf[b] - d;
+      chi_deep += w[s][b]*res[s][b]*res[s][b];
     }
     if (PROFILE_GLINT) chi_deep += gw*d*d;
   }
+  if (PROFILE_RATIO) chi_deep += ratio_chi2(pd, ref, rrs, w, res);
 
   // The best depth, refined by a parabola through the grid neighbours.
 
