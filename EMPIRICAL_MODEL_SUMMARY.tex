@@ -816,6 +816,13 @@ off by default. \code{NORMALISE} is how per-site $K$ maps enter an empirical dep
 steps are possible: normalise $\ln L$ by its effective attenuation $g_m(L_m - \Lsm{m})/L_m$,
 which keeps $\ln L$'s coverage; or fill the optically deep cells from the $\ln L$ fit.
 
+\paragraph{Policy.} Every future Lyzenga experiment will include the calibration constraint
+(eq.~12, \code{CONSTRAIN GAIN} with \code{ATTENUATION} and $\ln(L - L_\infty)$), as a variant scored
+alongside the free fit. It adds little here, where the free fit already meets eq.~12 on average and
+most soundings lie where it holds. Elsewhere it may well matter: with fewer or less evenly spread
+soundings, noisier bands or stronger regression dilution, least squares can miss the condition,
+and the constraint enforces it from the measured attenuation instead.
+
 %============================================================================================
 \section{Depth-invariant bottom indices}
 \label{sec:indices}

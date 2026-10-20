@@ -100,6 +100,7 @@ Each rung must beat the one below it in **leave-region-out cross-validation** ov
 - (a) **Local Lyzenga:** joint `POWER`, fitted to each site's own labels. This is the upper reference, "locally calibrated". In the new harness it must reproduce `cv.json`'s 83.9% at the palm box to within 0.5 points.
 - (b) **DROP default:** the relocatable reference to beat.
 - (c) **Relocated Lyzenga:** coefficients pooled over the other sites and applied unchanged. This measures how badly a local empirical model relocates.
+- **Every Lyzenga baseline, (a) and (c), is also fitted with Lyzenga et al.'s calibration constraint** (eq. 12: `CONSTRAIN GAIN` with `ATTENUATION` and ln(L − L∞); `EXPERIMENTS.md`, "Lyzenga's calibration condition imposed on the fit"). It added little at the palm box, but it may well matter at sites with fewer or less evenly spread soundings, or noisier bands, where least squares misses the condition. For (c) it is the natural form: pooled coefficients calibrated by each site's own attenuation.
 
 **H1. Relocatable regression on normalised features, depth only.**
 - **Features:**
