@@ -17,6 +17,8 @@ ICESat-2 on a split reference.
             composite_443-483-561-655_r3_power)
   points    the ICESat-2 reference itself as coloured points, in the same format and colour scale as
             the bathymetry map (runs/gulf_lyzenga/final/icesat2.png)
+  errors    ERROR's calibration with Lyzenga 1978's noise (eq. 16, NOISE) and gain (eq. 17, GAIN),
+            out of fold on cv's folds (errors.json)
   calibrate  Lyzenga et al. 2006's calibration condition (eq. 12) imposed on the joint fit
             (CONSTRAIN GAIN [BRIGHTNESS], NORMALISE), against the free fit, out of fold on cv's
             folds (calibrate.json)
@@ -24,7 +26,8 @@ ICESat-2 on a split reference.
             and band over the box, and the depth from it, scored against Lyzenga's out of fold on
             cv's folds (the calibration half only; attenuation.json), then the maps from the whole
             calibration half (runs/gulf_lyzenga/attenuation/: attenuation.png, and K of every scene and band
-            as maps, k_maps.png, and spectra against pure water, k_spectra.png)
+            as maps, k_maps.png, and spectra against pure water, k_spectra.png; Lyzenga 1978's
+            depth-invariant bottom indices, bottom_indices.png)
 
 Every run passes ATTENUATION (each scene's tide and ACOLITE's sun and view zeniths), so photic
 also writes K and the attenuation's depth alongside Lyzenga's.
@@ -398,6 +401,65 @@ CALIBRATE_VARIANTS = [
 ]
 
 
+ERROR_BINS = [(0, 2), (2, 5), (5, 10), (10, 15), (15, 20), (20, 30)]
+
+
+def error_scores(ref, H, S):
+    """How well a 1-sigma error grid S describes the errors of H against ref: the share within
+    1 and 2 sigma, the rms of e/sigma and the median sigma, overall and by depth."""
+    m = np.isfinite(ref) & np.isfinite(H) & np.isfinite(S) & (S > 0)
+    def one(k):
+        e, s = H[k] - ref[k], S[k]
+        return dict(n=int(k.sum()), within_1=float(np.mean(np.abs(e) <= s)), within_2=float(np.mean(np.abs(e) <= 2*s)),
+                    rms_z=float(np.sqrt(np.mean((e/s)**2))), median_sigma=float(np.median(s)),
+                    rmse=float(np.sqrt(np.mean(e**2))))
+    out = one(m)
+    out["by_depth"] = {"%d-%d" % b: one(m & (ref >= b[0]) & (ref < b[1])) for b in ERROR_BINS if (m & (ref >= b[0]) & (ref < b[1])).any()}
+    return out
+
+
+ERROR_VARIANTS = [("error", ""), ("noise", " NOISE"), ("gain", " GAIN"), ("noise_gain", " NOISE GAIN")]
+
+
+def errors():
+    """ERROR's calibration with Lyzenga 1978's eqs. 16 (NOISE) and 17 (GAIN): the chosen model, out
+    of fold on cv's folds (the calibration half only), each 1-sigma grid scored on the held-out
+    cells (errors.json)."""
+    import tier3_scenes
+    lon, lat = grid()
+    meta = json.load(open(os.path.join(OUT, "meta.json")))
+    ref = np.load(os.path.join(OUT, "reference.npz"))
+    c = json.load(open(os.path.join(OUT, "cv.json") if os.path.exists(os.path.join(OUT, "cv.json")) else CV_PALM))["chosen"]
+    folds = cv_folds(lon, lat, meta)
+    jobs = [(v, f) for v in ERROR_VARIANTS for f in range(FOLDS)]
+
+    def one(job):
+        (name, words), f = job
+        rundir = os.path.join(WORK, "errors", "%s_f%d" % (name, f))
+        H, _ = run_photic(rundir, folds[f][0], c["bands"], c["lsm"], c["radius"],
+                          " TIDE 0%s ERROR H_error%s" % (" POWER" if c.get("power") else "", words), inputs="joint",
+                          writes=[("H_error", "H_error.nc")])
+        with NC_LOCK:
+            S = tier3_scenes.read_nc(os.path.join(rundir, "H_error.nc"))
+        return job, H, S
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(one, jobs))
+    table = {}
+    for name, words in ERROR_VARIANTS:
+        held = np.full(ref["calibration"].shape, np.nan)
+        Hf, Sf = held.copy(), held.copy()
+        for ((v, _), f), H, S in results:
+            if v != name:
+                continue
+            m = np.isfinite(folds[f][1])
+            held[m], Hf[m], Sf[m] = folds[f][1][m], H[m], S[m]
+        r = table[name] = dict(options=("ERROR" + words), **error_scores(held, Hf, Sf))
+        print("%-11s within 1 sigma %.0f%%, 2 sigma %.0f%%, rms z %.2f, median sigma %.2f m | %s" % (
+            name, 100*r["within_1"], 100*r["within_2"], r["rms_z"], r["median_sigma"],
+            "  ".join("%s %.0f%% (%.1f m)" % (k, 100*x["within_1"], x["median_sigma"]) for k, x in r["by_depth"].items())))
+    json.dump(dict(settings=c, folds=FOLDS, variants=table), open(os.path.join(OUT, "errors.json"), "w"), indent=1)
+
+
 def calibrate():
     """Lyzenga's calibration condition (eq. 12) imposed on the joint fit (CONSTRAIN GAIN
     [BRIGHTNESS], NORMALISE), against the free fit with and without POWER: out of fold on cv's
@@ -489,13 +551,17 @@ def attenuation(bands=None):
     # The whole calibration half: every K grid, the depth, its sigma and the bottom term.
     rundir = os.path.join(work, "final")
     names = ["s%d_b%d" % (k + 1, b) for k in range(meta["n_scenes"]) for b in c["bands"]]
-    outs = ["K_" + n for n in names] + ["K_depth", "K_depth_sigma", "K_bottom"]
-    _, fit_log = run_photic(rundir, os.path.join(OUT, "calibration.xyz"), c["bands"], c["lsm"], c["radius"], extra,
-                            inputs="joint", writes=[(o, o + ".nc") for o in outs])
+    nb = len(c["bands"])
+    index_names = ["K_index%d_s%d" % (i + 1, k + 1) for k in range(meta["n_scenes"]) for i in range(nb - 1)]
+    outs = ["K_" + n for n in names] + ["K_depth", "K_depth_sigma", "K_bottom"] + index_names
+    _, fit_log = run_photic(rundir, os.path.join(OUT, "calibration.xyz"), c["bands"], c["lsm"], c["radius"],
+                            extra + " INDICES", inputs="joint", writes=[(o, o + ".nc") for o in outs])
     result["fit"] = fit_log
     json.dump(result, open(os.path.join(OUT, "attenuation%s.json" % tag), "w"), indent=1)
     attenuation_maps(rundir, lon, lat, meta, c, names)
     attenuation_k_plots(rundir, lon, lat, meta, c, names)
+    result["indices"] = attenuation_index_plots(rundir, lon, lat, meta, c, ref)
+    json.dump(result, open(os.path.join(OUT, "attenuation%s.json" % tag), "w"), indent=1)
     print("\n".join(l for l in fit_log if "soundings, c" in l or "attenuation" in l or "Attenuation" in l))
     print(json.dumps(result["out_of_fold"], indent=1))
 
@@ -605,6 +671,82 @@ def attenuation_k_plots(rundir, lon, lat, meta, c, names):
     print(os.path.join(rundir, "k_maps.png"), os.path.join(rundir, "k_spectra.png"))
 
 
+def attenuation_index_plots(rundir, lon, lat, meta, c, ref):
+    """Lyzenga 1978's depth-invariant bottom indices (INDICES) of every scene as maps
+    (bottom_indices.png, one colour scale per index, and the median over the scenes), with two
+    checks: the correlation of each index with the ICESat-2 depth (calibration half), against that
+    of a band's own ln(L - Lsm), and the median correlation of each index between scenes."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import tier3_scenes
+    nb, ns = len(c["bands"]), meta["n_scenes"]
+    water = water_mask()
+    dates, geo = scene_dates(), scene_geometry()
+    Y = np.array([[tier3_scenes.read_nc(os.path.join(rundir, "K_index%d_s%d.nc" % (i + 1, k + 1)))
+                   for i in range(nb - 1)] for k in range(ns)])
+    Y[:, :, ~water] = np.nan
+    R = ref["calibration"]
+    checks = []
+    for i in range(nb - 1):
+        depth_r = []
+        for k in range(ns):
+            m = np.isfinite(R) & np.isfinite(Y[k, i])
+            depth_r.append(float(np.corrcoef(R[m], Y[k, i][m])[0, 1]))
+        pair_r = []
+        for k in range(ns):
+            for k2 in range(k + 1, ns):
+                m = np.isfinite(Y[k, i]) & np.isfinite(Y[k2, i])
+                pair_r.append(float(np.corrcoef(Y[k, i][m], Y[k2, i][m])[0, 1]))
+        checks.append(dict(index=i + 1, depth_correlation=depth_r, between_scenes_median=float(np.median(pair_r))))
+    # For comparison: a band's own signal, ln(L - Lsm) of the first band's 1st percentile, against depth.
+    import rasterio
+    band_r = []
+    for k in range(ns):
+        with rasterio.open(os.path.join(OUT, "s%d_b%d%s" % (k + 1, c["bands"][1], EXT))) as d:
+            x = d.read(1).astype(float)[::-1]
+            x[x == d.nodata] = np.nan
+        v = x - np.nanpercentile(x[water], 1)
+        X = np.log(np.where(v > 0, v, np.nan))
+        m = np.isfinite(R) & np.isfinite(X)
+        band_r.append(float(np.corrcoef(R[m], X[m])[0, 1]))
+    # Each scene's index carries that scene's constants (sum_j A_ij c_j: the bands' bottom colour,
+    # deep-water and atmospheric terms), so the maps are anomalies from each scene's median.
+    A = Y - np.nanmedian(Y, axis=(2, 3), keepdims=True)
+    fig, axes = plt.subplots(ns + 1, nb - 1, figsize=(4.2*(nb - 1) + 1, 2.5*(ns + 1) + 0.8), constrained_layout=True,
+                             squeeze=False)
+    extent = (lon[0], lon[-1], lat[0], lat[-1])
+    for i in range(nb - 1):
+        lim = np.nanpercentile(np.abs(A[:, i]), 98)*np.array([-1, 1])
+        rows = [A[k, i] for k in range(ns)] + [np.nanmedian(A[:, i], axis=0)]
+        for k, z in enumerate(rows):
+            ax = axes[k, i]
+            im = ax.imshow(z, origin="lower", extent=extent, cmap="RdBu_r", vmin=lim[0], vmax=lim[1],
+                           interpolation="nearest")
+            ax.set_aspect(1.0/np.cos(np.radians(np.mean(lat))))
+            ax.tick_params(labelsize=7)
+            if k == 0:
+                ax.set_title("index %d (r with depth %.2f to %.2f;\nbetween scenes %.2f)" % (
+                    i + 1, min(checks[i]["depth_correlation"]), max(checks[i]["depth_correlation"]),
+                    checks[i]["between_scenes_median"]), fontsize=9)
+            if i == 0:
+                ax.set_ylabel("median of %d scenes" % ns if k == ns else "%s\nsun %.0f\u00b0" % (dates[k], geo[k][0]),
+                              fontsize=9)
+        fig.colorbar(im, ax=axes[:, i], location="bottom", shrink=0.8, aspect=30, label="index, anomaly from the scene's median (ln units)")
+    fig.suptitle("Dubai to Abu Dhabi: depth-invariant bottom indices (Lyzenga 1978, with the local attenuation; "
+                 "%s nm)\nfor comparison, ln(L - Lsm) at %d nm has r = %.2f to %.2f with depth" % (
+                     "/".join(map(str, c["bands"])), c["bands"][1], min(band_r), max(band_r)), fontsize=11)
+    out = os.path.join(rundir, "bottom_indices.png")
+    fig.savefig(out, dpi=100)
+    plt.close(fig)
+    print(out)
+    for ch in checks:
+        print("index %d: r with depth %s; between scenes (median) %.2f" % (
+            ch["index"], " ".join("%.2f" % r for r in ch["depth_correlation"]), ch["between_scenes_median"]))
+    print("ln(L - Lsm) at %d nm: r with depth %s" % (c["bands"][1], " ".join("%.2f" % r for r in band_r)))
+    return dict(checks=checks, band_depth_correlation=band_r)
+
+
 def on_cells(path, lon, lat, cells):
     """A depth grid (positive down) sampled at the reference cells' centres, nearest neighbour."""
     import netCDF4
@@ -660,10 +802,10 @@ def fit(override=None):
     grids = ["s%d_b%d" % (k + 1, b) for k in range(meta["n_scenes"]) for b in c["bands"]] if joint else \
         ["b%d" % b for b in c["bands"]]
     H, fit_log = run_photic(rundir, soundings, c["bands"], c["lsm"], c["radius"],
-                            " TIDE %.4f%s ERROR H_error" % (0.0 if joint else meta["mean_tide"],
+                            " TIDE %.4f%s ERROR H_error NOISE GAIN" % (0.0 if joint else meta["mean_tide"],
                                                            " POWER" if c.get("power") else ""), plot,
                             name="Dubai_to_Abu_Dhabi", inputs=c.get("inputs", "composite"),
-                            writes=[("K_" + n, "K_%s.nc" % n) for n in grids])
+                            writes=[("K_" + n, "K_%s.nc" % n) for n in grids] + [("H_error", "H_error.nc")])
     test = ref["test"]
     result = dict(settings=c, fit=fit_log, lyzenga=scores(test, H))
     if os.path.exists(PRODUCT_2019):
@@ -773,7 +915,7 @@ def points():
 
 
 if __name__ == "__main__":
-    commands = {"prepare": prepare, "cv": cv, "fit": fit, "correlation": correlation, "points": points, "calibrate": calibrate,
+    commands = {"prepare": prepare, "cv": cv, "fit": fit, "correlation": correlation, "points": points, "calibrate": calibrate, "errors": errors,
                 "attenuation": attenuation}
     if len(sys.argv) == 3 and sys.argv[1] == "attenuation":
         attenuation([int(b) for b in sys.argv[2].split(",")])

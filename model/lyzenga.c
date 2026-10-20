@@ -47,10 +47,23 @@
 //   HUBER /k/                    Huber threshold in robust sigmas (default 1.345; 0: least squares)
 //   BALANCE /bin/                weight soundings by 1/count in depth bins of this width (m)
 //   POWER [ALL]                  rescale the depths by the inverted power law above
-//   ERROR /grid/                 output: the 1-sigma prediction error (m)
+//   ERROR /grid/ [NOISE] [GAIN]  output: the 1-sigma prediction error (m); see below
+//
+// ERROR is the prediction error of a new depth, s^2 + x'Cx: the fit's (robust) residual variance
+// and the coefficients' covariance. NOISE adds the cell's own radiometric noise (Lyzenga 1978,
+// eq. 16), sum a_m^2 sigma_m^2/(L_m - Lsm_m)^2; the soundings' mean of it is already in s^2, so it
+// is taken out of s^2 first. GAIN (with ATTENUATION) divides by the local gain of the depth on the
+// true depth, as Lyzenga 1978's eq. 17 divides by C: the bands' attenuation, -sum a_m g_m(x) f_m,
+// where f_m = (L_m - L_inf,m)/(L_m - Lsm_m) is 1 for ln(L - L_inf) and falls towards deep water
+// for ln L. Where the fit saturates the gain falls, and the error grows. The gain is capped at 1,
+// so the shallow water keeps the fit's own scatter, and floored at 0.05; with POWER the larger of
+// its rescaling and 1/gain is used, as both undo the same compression.
 //
 // Outputs model.bam (the fitted model as applied) and output.csv (every sounding, its cell, the
 // model depth and whether it was used).
+//
+// INDICES (with ATTENUATION) adds Lyzenga 1978's N - 1 depth-invariant bottom indices of each
+// scene of N bands, /prefix/_index/i/_s/scene/, computed with the local attenuation (see below).
 //
 // ATTENUATION /prefix/ also estimates the attenuation over the whole grid, with a physical depth
 // from it. Lyzenga's model is the linearised form of
@@ -571,7 +584,7 @@ static void att_stage1(att_field *af, const char *prefix, int nb, const int *ban
 static void att_outputs(const att_field *af, const char *prefix, int nb, const int *bands, float ***Lbar,
     const geogrid *g0, const double *lsm, const double *sigma, double deep_k, int n_scenes, const double *tides,
     const double *path, double dmin, double dmax, double sign, const int *cell_i, const int *cell_j,
-    const int *status) {
+    const int *status, bool indices) {
 
   int nr = g0->nrows, nc = g0->ncols, nbs = nb/n_scenes, nq = af->nq, m, s, n, i, j, l, q[4], n_depth = 0,
     n_few = 0;
@@ -701,6 +714,53 @@ static void att_outputs(const att_field *af, const char *prefix, int nb, const i
   if (! att_name(name, prefix, "bottom") || ! store_grid(name, bottom, g0)) goto done;
   bottom = NULL;
 
+// INDICES: Lyzenga 1978's depth-invariant bottom indices for each scene, with the local attenuation.
+// Within a scene, X_j = a_j - b_j Z with b_j = g_j(x); the rotation of eqs. 8 and B2-B7 takes the
+// bands to Y_N along b (depth) and N - 1 axes orthogonal to it, which depend on the bottom only:
+//   Y_i = sum_j A_ij X_j, A_ij = b_i+1 b_j/sqrt(S_i S_i+1) for j <= i, A_i,i+1 = -sqrt(S_i/S_i+1),
+// with S_i = sum_k<=i b_k^2. Here b follows the water across the scene, from stage 1.
+
+  for (s = 0; indices && s < n_scenes && nbs >= 2; s++) {
+    int ix;
+    for (m = s*nbs; m < (s + 1)*nbs; m++) {
+      if (! fitted[m]) break;
+    }
+    if (m < (s + 1)*nbs) {
+      printf("  INDICES: scene %d lacks the attenuation of a band; no indices\n", s + 1);
+      continue ;
+    }
+    for (ix = 0; ix < nbs - 1; ix++) {
+      char suffix[32];
+      allocate_float_array_2d(&out, nr, nc);
+      for (i = 0; i < nr; i++) {
+        for (j = 0; j < nc; j++) {
+          double b[LYZ_MAX_BANDS], x[LYZ_MAX_BANDS], S1 = 0.0, S2, y = 0.0;
+          out[i][j] = nodata;
+          if (! isfinite(Lbar[0][i][j])) continue ;
+          for (l = 0; l < nbs; l++) {
+            m = s*nbs + l;
+            v = Lbar[m][i][j] - lsm[m];
+            if (v <= 0.0) break;
+            x[l] = log(v);
+            node_weights(&nodes, i, j, q, f);
+            b[l] = 0.0;
+            for (n = 0; n < 4; n++) b[l] += f[n]*theta[m*nq + q[n]];
+          }
+          if (l < nbs) continue ;
+          for (l = 0; l <= ix; l++) S1 += b[l]*b[l];
+          S2 = S1 + b[ix + 1]*b[ix + 1];
+          if (S1 <= 0.0) continue ;
+          for (l = 0; l <= ix; l++) y += b[ix + 1]*b[l]/sqrt(S1*S2)*x[l];
+          y -= sqrt(S1/S2)*x[ix + 1];
+          out[i][j] = y;
+        }
+      }
+      snprintf(suffix, sizeof(suffix), "index%d_s%d", ix + 1, s + 1);
+      if (! att_name(name, prefix, suffix) || ! store_grid(name, out, g0)) goto done;
+      out = NULL;
+    }
+  }
+
 // K at every node.
 
   fp = fopen("attenuation.csv", "w");
@@ -733,7 +793,7 @@ static void usage(void) {
     "  LAND /grid/ SHALLOW /grid/ LSM /Lsm 1/ ... /Lsm n/ PERCENTILE /p/ DEEP /k/ RADIUS /r/\n"
     "  DEPTHS /min/ /max/ TIDE /h/ HUBER /k/ BALANCE /bin (m)/ POWER ERROR /output/\n"
     "  ATTENUATION /prefix/ SCENES /n/ TIDES /h_1/ ... SUNZENITH /theta_1/ ... VIEWZENITH /theta_1/ ...\n"
-    "  NODES /deg/ SMOOTHING /w/  CONSTRAIN GAIN [BRIGHTNESS]  NORMALISE (with ATTENUATION)\n");
+    "  NODES /deg/ SMOOTHING /w/ INDICES  CONSTRAIN GAIN [BRIGHTNESS]  NORMALISE (with ATTENUATION)\n");
 }
 
 static bool parse_number(int *k, double *v) {
@@ -757,7 +817,8 @@ void run_model_lyzenga(void) {
     *w0 = NULL, *w = NULL, *res = NULL, *tmp = NULL, s, s2, rss, sw, sign = 1.0, mae, bias, ss_tot, mean_y,
     xrow[LYZ_MAX_BANDS + 1], pw_a = 0.0, pw_d = 1.0;
   bool lsm_given = false, error_wanted = false, power = false, power_all = false, ok, scenes_given = false,
-    tides_given = false, con_gain = false, con_bright = false, normalise = false;
+    tides_given = false, con_gain = false, con_bright = false, normalise = false, error_noise = false,
+    error_gain = false, indices = false;
   att_field af = {0};
   int n_con = 0, piv[2] = {0, 0}, p_r = 0, freec[LYZ_MAX_BANDS + 1];
   double E[2][LYZ_MAX_BANDS + 1], dcon[2] = {0.0, 0.0}, gbar[LYZ_MAX_BANDS] = {0.0};
@@ -905,6 +966,13 @@ void run_model_lyzenga(void) {
       }
       error_wanted = true;
       k_error = ++k;
+      while (k + 1 < MAX_ARGS && (strcmp(parsed[k + 1], "NOISE") == 0 || strcmp(parsed[k + 1], "GAIN") == 0)) {
+        if (parsed[k + 1][0] == 'N') error_noise = true;
+        else error_gain = true;
+        k++;
+      }
+    } else if (strcmp(parsed[k], "INDICES") == 0) {
+      indices = true;
     } else {
       printf("\nERROR: MODEL lyzenga_log_linear: unexpected '%s'.\n", parsed[k]);
       usage();
@@ -940,8 +1008,8 @@ void run_model_lyzenga(void) {
     printf("\nERROR: the bathymetry and error grids need different names.\n");
     return ;
   }
-  if ((con_gain || normalise) && k_att < 0) {
-    printf("\nERROR: CONSTRAIN and NORMALISE need ATTENUATION (the attenuation at the soundings).\n");
+  if ((con_gain || normalise || error_gain || indices) && k_att < 0) {
+    printf("\nERROR: CONSTRAIN, NORMALISE, ERROR ... GAIN and INDICES need ATTENUATION.\n");
     return ;
   }
   if (k_att >= 0) {
@@ -955,6 +1023,13 @@ void run_model_lyzenga(void) {
     }
     if (! att_name(name, parsed[k_att], "depth") || ! att_name(name, parsed[k_att], "depth_sigma") ||
         ! att_name(name, parsed[k_att], "bottom")) return ;
+    for (ks = 0; indices && ks < n_scenes; ks++) {
+      for (m = 0; m < nb/n_scenes - 1; m++) {
+        char suffix[32];
+        snprintf(suffix, sizeof(suffix), "index%d_s%d", m + 1, ks + 1);
+        if (! att_name(name, parsed[k_att], suffix)) return ;
+      }
+    }
   }
 
   nr = g0->nrows;
@@ -1322,6 +1397,25 @@ void run_model_lyzenga(void) {
 
 // The bathymetry (and its error), below the datum, negative down.
 
+  // NOISE: the variance of a cell's depth from its bands' noise (Lyzenga 1978, eq. 16).
+  double s2_floor = s2;
+  #define LYZ_NOISE2(ci, cj, out) do { \
+    out = 0.0; \
+    for (int mm = 0; mm < nb; mm++) { \
+      double vv = Lbar[mm][ci][cj] - lsm[mm], gg = normalise ? att_g(&af, mm, ci, cj) : 1.0; \
+      out += coef[mm + 1]*coef[mm + 1]*sigma[mm]*sigma[mm]/(vv*vv*gg*gg); \
+    } \
+  } while (0)
+  if (error_wanted && error_noise) {
+    double nbar = 0.0, n2;
+    for (n = 0; n < n_fit; n++) {
+      LYZ_NOISE2(cell_i[(int) tmp[n]], cell_j[(int) tmp[n]], n2);
+      nbar += n2/n_fit;
+    }
+    s2_floor = MAX(s2 - nbar, 0.0);
+    printf("  ERROR NOISE: the soundings' mean noise %.3f m of the fit's %.3f m\n", sqrt(nbar), sqrt(s2));
+  }
+
   allocate_float_array_2d(&bathy, nr, nc);
   if (error_wanted) allocate_float_array_2d(&err, nr, nc);
   int n_deep = 0, n_depth = 0;
@@ -1351,12 +1445,24 @@ void run_model_lyzenga(void) {
       bathy[i][j] = -(z - tide);
       n_depth++;
       if (error_wanted) {
-        s = s2;
+        double n2 = 0.0, scale;
+        if (error_noise) LYZ_NOISE2(i, j, n2);
+        s = s2_floor + n2;
         for (ii = 0; ii < p; ii++) {
           for (jj = 0; jj < p; jj++) s += xrow[ii]*C[ii*p + jj]*xrow[jj];
         }
         // Through POWER, an error in h scales by dz/dh = z/(d h).
-        err[i][j] = sqrt(s)*(power && h > 0.0 && z != h ? z/(pw_d*h) : 1.0);
+        scale = power && h > 0.0 && z != h ? z/(pw_d*h) : 1.0;
+        if (error_gain) {
+          double gain = 0.0, fm;
+          for (m = 0; m < nb; m++) {
+            fm = Lbar[m][i][j] - att_lsm[m] > 0.0 ? (Lbar[m][i][j] - att_lsm[m])/(Lbar[m][i][j] - lsm[m]) : 0.0;
+            fm = MIN(fm, 1.0);
+            gain -= coef[m + 1]*fm*(normalise ? 1.0 : att_g(&af, m, i, j));
+          }
+          scale = MAX(scale, 1.0/MAX(MIN(gain, 1.0), 0.05));
+        }
+        err[i][j] = sqrt(s)*scale;
       }
     }
   }
@@ -1426,7 +1532,7 @@ void run_model_lyzenga(void) {
 
   if (k_att >= 0 && af.fitted != NULL) {
     att_outputs(&af, parsed[k_att], nb, bands, Lbar, g0, att_lsm, sigma, deep_k, n_scenes, tides, path, dmin, dmax,
-      sign, cell_i, cell_j, status);
+      sign, cell_i, cell_j, status, indices);
   }
 
 done:

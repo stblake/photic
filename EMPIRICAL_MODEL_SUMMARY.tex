@@ -58,6 +58,12 @@ near 16\,m is the condition failing as $\ln L$ flattens. Imposing it on the fit 
 nothing. Dividing each predictor by the local attenuation (\code{NORMALISE}) gains about
 3 points of hits on the same cells, nearly all at 10--20\,m, but loses coverage, so the chosen
 model is unchanged.
+
+Lyzenga's 1978 paper adds two things. Dividing the error by the local gain (its eq.~17) makes
+$\sigma$ grow where the fit saturates: beyond 15\,m, 87\% of the test errors now lie within
+$\pm1\sigma$, against 23\%. Its depth-invariant bottom indices, computed with the local
+attenuation, remove most of the depth from the signal but not all, and do not yet give a
+consistent bottom map at the Gulf.
 \end{abstract}
 
 \tableofcontents
@@ -189,37 +195,73 @@ It therefore cannot see:
 \item errors in the soundings themselves.
 \end{itemize}
 
+\paragraph{Noise and gain (\code{NOISE}, \code{GAIN}).} Lyzenga (1978) derives the depth error from
+the sensor noise and the signal's sensitivity to depth $C$ (his eqs.~16 and 17):
+\begin{equation}
+  (\Delta Y_N)^2 = \sum_i A_{Ni}^2 \frac{\mathrm{NE}\Delta L_i^2}{(L_i - L_{si})^2}, \qquad
+  \Delta Z = \frac{\Delta Y_N}{C} .
+\end{equation}
+Two options of \code{ERROR} follow from them.
+\begin{itemize}
+\item \textbf{\code{NOISE}} adds each cell's own noise,
+  $n^2(\bx) = \sum_m a_m^2 \sigma_m^2/(\bar L_m - L_{0,m})^2$, where $L_{0,m}$ is the signal
+  subtracted in the fit (0 for $\ln L$). The soundings' mean of it,
+  $\bar n^2$, is already part of $s^2$, so it is taken out first:
+  $\sigma^2 = \max(s^2 - \bar n^2, 0) + n^2(\bx) + \mathbf{x}^{\mathsf T} C\mathbf{x}$.
+\item \textbf{\code{GAIN}} (with \code{ATTENUATION}) divides $\sigma$ by the local gain of the
+  fitted depth on the true depth. This is $C$, and it is the gain of Section~\ref{sec:calibration}:
+  \begin{equation}
+    G(\bx) = -\sum_m a_m\, g_m(\bx)\, f_m, \qquad
+    f_m = \min\Bigl(1, \frac{\bar L_m - L_{\infty,m}}{\bar L_m - L_{0,m}}\Bigr) ,
+  \end{equation}
+  where $L_{\infty,m}$ is the deep-water signal (the percentile), so $f_m = 1$ for
+  $\ln(L - L_\infty)$ and falls towards deep water for $\ln L$. $G$ needs no depth: it comes from the observed signal and the K maps.
+  Where the fit saturates, $G$ falls and $\sigma$ grows. $G$ is capped at 1, so the shallow water
+  keeps the fit's own scatter, and floored at 0.05. With \code{POWER}, the larger of its rescaling
+  and $1/G$ is used, as both undo the same compression.
+\end{itemize}
+
 \paragraph{Calibration at the Gulf.} This is the joint model, four bands per scene, with
 \code{POWER}, scored against ICESat-2 cells that the fit did not use (Table~\ref{tab:lyz_error}).
 \begin{itemize}
-\item \textbf{The core is conservative:} 80\% of the errors lie within $\pm1\sigma$, against 68\%
-  for a Gaussian.
-\item \textbf{The tails are heavy:} 93.6\% lie within $\pm2\sigma$, against 95\%. The rms of
-  $e/\sigma$ is 1.6.
-\item \textbf{$\sigma$ hardly varies:} it is 0.70--0.76\,m at every depth, because
-  $\mathbf{x}^{\mathsf T}C\mathbf{x}$ is small next to $s^2$ for 6,017 soundings.
-\item \textbf{It misses the saturation:} below about 16\,m, the 20--30\,m cells have no errors
-  within $\pm1\sigma$.
+\item \textbf{Plain \code{ERROR}:} 80\% of the errors lie within $\pm1\sigma$ and 93.6\% within
+  $\pm2\sigma$ (68 and 95\% for a Gaussian), and the rms of $e/\sigma$ is 1.6. So the core is
+  conservative and the tails are heavy. $\sigma$ is 0.70--0.76\,m at every depth, because
+  $\mathbf{x}^{\mathsf T}C\mathbf{x}$ is small next to $s^2$ for 6,017 soundings. It misses the
+  saturation entirely: beyond 15\,m, only 23\% of the errors are within $\pm1\sigma$.
+\item \textbf{With \code{NOISE GAIN}:} 86.9\% lie within $\pm1\sigma$ and 96.4\% within
+  $\pm2\sigma$, and the rms of $e/\sigma$ is 1.14. At 15--20\,m, 87\% are within $\pm1\sigma$, with a
+  median $\sigma$ of 3.1\,m. Nothing changes shallower than 5\,m. The noise itself is small,
+  0.13--0.18\,m of the fit's 0.65--0.75\,m; the gain does the work.
+\item \textbf{Out of fold} (the four cross-validation folds, calibration half), the same holds: the
+  share within $\pm1\sigma$ beyond 15\,m goes from 9 to 81\%, and the rms of $e/\sigma$ from 2.9 to
+  1.6. The two forms of the gain (capped at 1 or not) were compared on the test half first, so this
+  is the confirmation.
+\item \textbf{Still too small at 20--30\,m} (22\%): there the depth no longer responds at all, and
+  the error is most of the depth.
 \end{itemize}
-So it is a fair guide to the typical error in the depths the model reaches. It is not a bound,
-and it says nothing about saturation.
+So with \code{NOISE GAIN}, $\sigma$ is a fair guide to the error at every depth the model reaches,
+and it flags where it stops reaching. It is still not a bound.
 
 \begin{table}[h]
 \centering
 \caption{Calibration of Lyzenga's \code{ERROR} on the Gulf's test half (joint model, four bands,
-\code{POWER}; 5,543 cells with a depth). Overall, 93.6\% of the errors lie within $\pm2\sigma$.}
+\code{POWER}; 5,543 cells with a depth), plain and with \code{NOISE GAIN}.}
 \label{tab:lyz_error}
-\begin{tabular}{lrrrr}
+\begin{tabular}{lrrrrrr}
 \toprule
-Depth (m) & Cells & Within $\pm1\sigma$ & Median $\sigma$ (m) & RMSE (m) \\
+ & & \multicolumn{2}{c}{\code{ERROR}} & \multicolumn{2}{c}{\code{ERROR NOISE GAIN}} & \\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}
+Depth (m) & Cells & Within $\pm1\sigma$ & Median $\sigma$ & Within $\pm1\sigma$ & Median $\sigma$ & RMSE (m) \\
 \midrule
-0--2   & 161   & 83\% & 0.70 & 2.38 \\
-2--5   & 1,352 & 87\% & 0.70 & 1.32 \\
-5--10  & 2,027 & 79\% & 0.74 & 0.78 \\
-10--20 & 1,980 & 77\% & 0.75 & 0.97 \\
-20--30 & 23    & 0\%  & 0.76 & 8.77 \\
+0--2   & 161   & 83\% & 0.70 & 83\% & 0.69 & 2.38 \\
+2--5   & 1,352 & 87\% & 0.70 & 87\% & 0.69 & 1.32 \\
+5--10  & 2,027 & 79\% & 0.74 & 82\% & 0.75 & 0.78 \\
+10--15 & 1,737 & 84\% & 0.75 & 94\% & 0.96 & 0.65 \\
+15--20 & 243   & 23\% & 0.76 & 87\% & 3.08 & 2.15 \\
+20--30 & 23    & 0\%  & 0.76 & 22\% & 3.39 & 8.77 \\
 \midrule
-All    & 5,543 & 80\% & 0.74 & 1.21 \\
+All    & 5,543 & 80\% & 0.74 & 87\% & 0.75 & 1.21 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -265,6 +307,17 @@ view), $M_s$ is about 2.1--2.25.
 
 If the down- and up-welling attenuations differ, $g_m = K_{d}\sec\theta_{w,\mathrm{sun}} +
 K_{u}\sec\theta_{w,\mathrm{view}}$. The reported $K_m = g_m/M_s$ is then their path-weighted mean.
+
+Lyzenga (1978, eq.~6) shows that scattering in the water column has the same depth dependence as
+the bottom's signal. So $A\,r_m$ is an \emph{apparent} bottom reflectance,
+\begin{equation}
+  r_B' = r_B - \frac{\pi\beta(\mu_s)}{K(\mu + \mu')} ,
+\end{equation}
+which depends on the water as well as the bottom ($\beta$ is the volume scattering function, and
+$\mu$, $\mu'$ the cosines of the paths). A bottom darker than the water column's own scattering
+has $r_B' < 0$: its signal lies below deep water's, $L < L_\infty$, and its cell is dropped. The same
+paper notes the model's remaining nonlinearity: internal reflection at the surface bends
+$\ln(L - L_\infty)$ against depth in very shallow water over bright bottoms.
 
 Taking logs of~\eqref{eq:twoflow} gives, for grid $m$ of scene $s$,
 \begin{equation}
@@ -418,6 +471,9 @@ It is small. Between 443 and 561\,nm, $K$ differs by only 0.01--0.03\,m$^{-1}$, 
 about 0.02--0.07\,m$^{-1}$, and the scenes' different sun angles add little. A bottom colour that
 departs from spectral flatness by $\delta$ in $\ln$ therefore moves the depth by about
 $\delta/\Delta g$. For $\delta = 0.1$ that is 1.5--5\,m, comparable to the depths being estimated.
+This is Lyzenga's (1978, eq.~18) result for the two-band ratio method, whose noise error is
+$\bigl[\sum_i (\mathrm{NE}\Delta L_i/(L_i - L_{si}))^2\bigr]^{1/2}/((\kappa_1 - \kappa_2) f)$ and grows
+without limit as the bands' attenuations approach each other.
 
 Equation~\eqref{eq:sigmaH} treats the $n_u$ residuals as independent, with a common scale. It
 omits three things.
@@ -521,7 +577,9 @@ The depth from the attenuation is not competitive with Lyzenga's. With so little
 a change of bottom type (seagrass against sand) shifts the band ratios enough to move the depth
 by metres. Lyzenga's regression absorbs the site's bottom--depth relationships into its
 coefficients; equation~\eqref{eq:stage2} cannot. Dropping the red removes the unphysical $K$ and
-helps the shallowest water most (0--2\,m: 5 $\to$ 34\%). Its error estimate is too small
+helps the shallowest water most (0--2\,m: 5 $\to$ 34\%). In the shallowest water the straight line
+of eq.~\eqref{eq:stage2} is also least exact, because of internal reflection
+(Section~\ref{sec:physics}). Its error estimate is too small
 (Section~\ref{sec:att_error}).
 
 So \code{ATTENUATION} is kept, off unless asked, with no effect on Lyzenga's fit. $K$ at
@@ -665,23 +723,78 @@ steps are possible: normalise $\ln L$ by its effective attenuation $g_m(L_m - \L
 which keeps $\ln L$'s coverage; or fill the optically deep cells from the $\ln L$ fit.
 
 %============================================================================================
+\section{Depth-invariant bottom indices}
+\label{sec:indices}
+
+Lyzenga (1978) rotates the $N$ log-bands of one scene into $N - 1$ indices that do not depend on
+depth, and one that does (his eqs.~8 and 9). Within a scene, $X_j = a_j - b_j Z$, with $a_j$
+depending on the bottom and $b_j = g_j$. The rotation takes $Y_N$ along $\mathbf{b}$, so
+$Y_N = B_m - CZ$ carries the depth, and the other axes orthogonal to it, so they carry only the
+bottom. His Appendix~B gives the rotation:
+\begin{equation}
+  Y_i = \sum_{j=1}^{N} A_{ij} X_j, \qquad
+  A_{ij} = \frac{b_{i+1}\, b_j}{\sqrt{S_i S_{i+1}}} \;(j \le i), \quad
+  A_{i,i+1} = -\sqrt{\frac{S_i}{S_{i+1}}}, \quad
+  A_{ij} = 0 \;(j > i + 1),
+\end{equation}
+for $i = 1, \dots, N - 1$, where $S_i = \sum_{k \le i} b_k^2$. With two bands this is the familiar
+index $(b_2 X_1 - b_1 X_2)/|\mathbf{b}|$, which \code{COMPUTE BOTTOM} already provides with a fixed
+attenuation ratio.
+
+\code{INDICES} (with \code{ATTENUATION}) computes them for every scene, with $b_j = g_j(\bx)$ from
+stage~1. So the rotation follows the water across the scene, rather than assuming one attenuation
+ratio everywhere. The outputs are \code{/prefix/\_index/i/\_s/scene/}. \code{make test} checks them
+against the exact values on synthetic data, where the depth term cancels exactly (largest error
+$2.3\times10^{-4}$).
+
+\paragraph{At the Gulf} (Figure~\ref{fig:indices}). Each scene's index carries that scene's
+constants ($\sum_j A_{ij} c_j$: the bands' bottom colour, deep-water and atmospheric terms), so the
+maps show anomalies from each scene's median. Two checks follow.
+\begin{itemize}
+\item \textbf{Most of the depth is removed, but not all.} A band's own $\ln(L - L_\infty)$ has
+  $r = -0.80$ to $-0.64$ with the ICESat-2 depth. With 443/483/561\,nm, index~1 has $r = -0.28$ to
+  $+0.14$, and index~2 still $+0.31$ to $+0.51$. Index~2 shows the same near-shore against offshore
+  split in every scene. There are three candidates: errors in $K$; a bottom that really changes with
+  depth at this site; and the apparent reflectance of Section~\ref{sec:physics}, which depends on
+  the water.
+\item \textbf{The scenes do not agree.} The bottom is the same in every scene, so its indices should
+  be too, but the median correlation between scenes is only 0.17 (index~1) and 0.38 (index~2);
+  0.19--0.63 with four bands. Index~1 is dominated by large patterns that differ between scenes:
+  the atmosphere, adjacency and the water.
+\end{itemize}
+So the rotation is right, but at this site the bottom's contrast is small next to these effects, and
+the indices are not yet a bottom map. They stay, off by default, as the formalism for two bottom
+classes in stage~2 ($Y_N = B_m - CZ$ with a class-specific $B_m$, which is Lyzenga's own route to the
+depth) and as features for the learned model.
+
+\begin{figure}[p]
+\centering
+\includegraphics[height=0.82\textheight,keepaspectratio]{paper/empirical_figures/bottom_indices.png}
+\caption{Depth-invariant bottom indices of every scene (443/483/561\,nm, with the local attenuation),
+as anomalies from each scene's median, and their median over the scenes. The titles give each
+index's correlation with the ICESat-2 depth (six scenes) and between scenes (median).}
+\label{fig:indices}
+\end{figure}
+
+%============================================================================================
 \section{Usage}
 \label{sec:usage}
 
 \begin{verbatim}
 MODEL lyzenga_log_linear GRIDS g1 ... gn BATHYMETRY H [options, any order]
   LSM l1 ... ln | PERCENTILE p    DEEP k    RADIUS r    DEPTHS zmin zmax
-  TIDE h    HUBER k    BALANCE bin    POWER [ALL]    ERROR H_error
+  TIDE h    HUBER k    BALANCE bin    POWER [ALL]    ERROR H_error [NOISE] [GAIN]
   ATTENUATION K SCENES S [TIDES h1 ... hS] [SUNZENITH t1 ... tS]
                          [VIEWZENITH t1 ... tS] [NODES deg] [SMOOTHING w]
-  CONSTRAIN GAIN [BRIGHTNESS]    NORMALISE         (both need ATTENUATION)
+  CONSTRAIN GAIN [BRIGHTNESS]    NORMALISE    INDICES
+                             (these, and ERROR ... GAIN, need ATTENUATION)
 \end{verbatim}
 
 \code{SCENES} must come before the per-scene lists, and the grids are scene-major. The outputs are:
 \begin{itemize}
 \item \code{H} and \code{H\_error};
 \item with \code{ATTENUATION}, \code{K\_/grid/} for every grid, and \code{K\_depth},
-  \code{K\_depth\_sigma} and \code{K\_bottom};
+  \code{K\_depth\_sigma} and \code{K\_bottom}; with \code{INDICES}, \code{K\_index/i/\_s/scene/};
 \item the files \code{model.bam} (the fitted model as applied), \code{output.csv} (every sounding,
   its model depth and whether it was used) and \code{attenuation.csv}.
 \end{itemize}
@@ -692,8 +805,9 @@ in \textit{photic}. \code{make test} checks the fit and the attenuation on synth
 follow the models exactly:
 \begin{itemize}
 \item \code{tests/lyz\_*}: the coefficients and every sounding's depth;
-\item \code{tests/att\_*}: $K$ at every node, to $3\times10^{-6}$, and the depth at every cell,
-  within 5\,mm (the float precision of the band grids).
+\item \code{tests/att\_*}: $K$ at every node, to $3\times10^{-6}$, the depth at every cell, within
+  5\,mm (the float precision of the band grids), and the depth-invariant indices, within
+  $2\times10^{-3}$; then both constraints of \code{NORMALISE CONSTRAIN GAIN BRIGHTNESS}, exactly.
 \end{itemize}
 
 \section*{References}

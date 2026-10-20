@@ -2091,6 +2091,41 @@ Lyzenga et al. (2006) substitute the physical model, X_m = ln(L_m − L∞) = B 
 - **Decision:** keep `CONSTRAIN` and `NORMALISE` as options, off by default. `NORMALISE` is worth keeping for the relocatable model: it is how per-site K maps enter an empirical depth (`FUTURE_EXPERIMENTS.md`, H4(c)).
 - **Next, if pursued:** `NORMALISE` on ln L with the effective attenuation g(L − L∞)/L, which keeps ln L's coverage; or fill the optically deep cells from the ln L fit.
 
+### Lyzenga (1978): the depth error from the gain, and depth-invariant bottom indices (2026-10-20, `ERROR ... NOISE GAIN`, `INDICES`, `gulf_lyzenga.py errors`)
+
+Lyzenga (1978) derives the depth error from the sensor noise, (ΔY_N)² = Σ A²_Ni NEΔL_i²/(L_i − L_si)² (eq. 16), divided by C, the signal's sensitivity to depth: ΔZ = ΔY_N/C (eq. 17). It also rotates the N log-bands into N − 1 depth-invariant bottom indices and one depth variable (eqs. 8 and 9, Appendix B).
+
+- **`ERROR /grid/ NOISE`:** adds eq. 16's noise at each cell. The soundings' mean of it is already in the fit's s², so it is taken out of s² first.
+- **`ERROR /grid/ GAIN`** (with `ATTENUATION`): divides σ by the local gain, eq. 17 with C = −Σ a_m g_m(x) f_m (the eq. 12 gain, with f_m = (L − L∞)/(L − Lsm) for ln L). The gain is capped at 1 (shallow water keeps the fit's own scatter) and floored at 0.05. With `POWER`, the larger of `POWER`'s rescaling and 1/gain is used.
+- **`INDICES`** (with `ATTENUATION`): the N − 1 indices of each scene, `/prefix/_index/i/_s/scene/`, from the rotation of Appendix B with b_j = g_j(x), so the rotation follows the water across the scene. `make test` checks them against the exact values (2.3 × 10⁻⁴).
+- **Prediction:** `GAIN` grows σ where the fit saturates and fixes the calibration beyond 15 m; `NOISE` changes little (on the test half, the noise is 0.08–0.23 m against median errors of 0.24–0.38 m shallower than 15 m and 1.5–7 m beyond). The two variants of `GAIN` (capped or not) were compared on the test half first, so the out-of-fold check below is the confirmation.
+
+**`ERROR` out of fold** (the chosen model; calibration half; `errors.json`):
+
+| | Within ±1σ | ±2σ | rms e/σ | 0–2 | 2–5 | 5–10 | 10–15 | 15–20 (σ) | 20–30 (σ) |
+|---|---|---|---|---|---|---|---|---|---|
+| `ERROR` | 75% | 90% | 2.91 | 69% | 80% | 75% | 76% | 9% (0.8 m) | 0% (0.8 m) |
+| `NOISE` | 75% | 90% | 2.83 | 69% | 80% | 75% | 77% | 9% | 0% |
+| `GAIN` | 83% | 93% | 1.64 | 69% | 81% | 81% | 93% | 79% (4.9 m) | 20% (4.5 m) |
+| **`NOISE GAIN`** | **83%** | **93%** | **1.61** | 69% | 81% | 81% | 93% | **81%** (5.1 m) | 25% (4.6 m) |
+
+- **Confirmed:** dividing by the gain makes σ grow where the fit saturates. Beyond 15 m the share within ±1σ goes from 9 to 81%, and the rms of e/σ falls from 2.9 to 1.6. Nothing changes shallower than 5 m.
+- **`NOISE` adds little,** as predicted: 0.13–0.18 m of the fit's 0.65–0.75 m. Use both: `gulf_lyzenga.py fit` now passes `ERROR H_error NOISE GAIN` and writes `H_error.nc`.
+- **Still too small at 20–30 m** (25% within ±1σ): there the depth no longer responds, and the error is the whole depth.
+
+**Depth-invariant indices** (`attenuation`'s final run, `bottom_indices.png`; anomalies from each scene's median, as each scene's index carries its own constants):
+
+| | r with ICESat-2 depth (six scenes) | Between scenes (median r) |
+|---|---|---|
+| ln(L − L∞) at 483 nm, for comparison | −0.80 to −0.64 | |
+| 443/483/561, index 1 | −0.28 to +0.14 | 0.17 |
+| 443/483/561, index 2 | +0.31 to +0.51 | 0.38 |
+| four bands, index 1 / 2 / 3 | −0.30 to +0.14 / +0.31 to +0.51 / −0.24 to +0.47 | 0.19 / 0.40 / 0.63 |
+
+- **The rotation removes most of the depth, not all.** Index 2 keeps a near-shore against offshore split in every scene (r 0.3–0.5). Three explanations are possible: errors in K; a bottom that changes with depth at this site; and water-column scattering, which makes the "bottom" an apparent reflectance r_B − πβ/(K(μ + μ′)) (Lyzenga 1978, eq. 6), itself dependent on the water.
+- **The scenes do not agree** (median r 0.17–0.63). Index 1 is mostly scene artefacts: large patterns, differing between scenes, from the atmosphere, adjacency and the water.
+- **So these are not yet a bottom map at this site.** The rotation is right (the synthetic test), but the Gulf's bottom contrast is small next to these effects. `INDICES` stays, off by default, as the formalism for two bottom classes in stage 2 and as features for the learned model.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

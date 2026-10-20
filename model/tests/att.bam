@@ -6,8 +6,10 @@ READ GRID s2_b1 s2_b1.asc
 READ GRID s2_b2 s2_b2.asc
 READ GRID s2_b3 s2_b3.asc
 READ SOUNDINGS soundings.xyz
-MODEL lyzenga_log_linear GRIDS s1_b1 s1_b2 s1_b3 s2_b1 s2_b2 s2_b3 BATHYMETRY H LSM 0.004 0.003 0.002 0.005 0.0035 0.0025 DEEP 0 RADIUS 1 DEPTHS 0 30 HUBER 0 ATTENUATION A SCENES 2 TIDES 0.3 -0.4 SUNZENITH 30 50 NODES 0.012 SMOOTHING 0
+MODEL lyzenga_log_linear GRIDS s1_b1 s1_b2 s1_b3 s2_b1 s2_b2 s2_b3 BATHYMETRY H LSM 0.004 0.003 0.002 0.005 0.0035 0.0025 DEEP 0 RADIUS 1 DEPTHS 0 30 HUBER 0 ATTENUATION A SCENES 2 TIDES 0.3 -0.4 SUNZENITH 30 50 NODES 0.012 SMOOTHING 0 INDICES
 // The depth from the attenuation at every interior node (tests/att_check).
 READ SOUNDINGS check.xyz
 WRITE POINTS A_depth depth_points.xyz
+WRITE POINTS A_index1_s1 index1_points.xyz
+WRITE POINTS A_index2_s1 index2_points.xyz
 EXIT

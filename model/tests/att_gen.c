@@ -11,7 +11,8 @@
 // soundings and varies elsewhere. Stage 1 must recover K at the nodes exactly, and stage 2 the
 // depth at every cell. Writes s<s>_b<b>.asc, soundings.xyz (every third node), check.xyz (every
 // interior node, with its depth) and expected_K.txt (K at the four nodes, nodes row-major from
-// the south-west, grids scene-major).
+// the south-west, grids scene-major) and index_s1.xyz, scene 1's two depth-invariant bottom indices
+// (Lyzenga 1978, INDICES) at every interior node, exact because the depth term cancels.
 //
 // Usage: att_gen /output directory/
 
@@ -88,6 +89,29 @@ int main(int argc, char **argv) {
   if ((fp = fopen(file, "w")) == NULL) return 1;
   for (i = 1; i < NROWS - 1; i++) {
     for (j = 1; j < NCOLS - 1; j++) fprintf(fp, "%.7f %.7f %.6f\n", wlon + j*cellsize, slat + i*cellsize, depth(i, j));
+  }
+  fclose(fp);
+
+  // Scene 1's indices: Y_i = sum_j A_ij X_j with b_j = K_j (the path M cancels in the rotation).
+  snprintf(file, sizeof(file), "%s/index_s1.xyz", argv[1]);
+  if ((fp = fopen(file, "w")) == NULL) return 1;
+  for (i = 1; i < NROWS - 1; i++) {
+    for (j = 1; j < NCOLS - 1; j++) {
+      double bb[NB], x[NB], y[NB - 1], S1, S2;
+      int l, ix;
+      for (l = 0; l < NB; l++) {
+        bb[l] = K(0, l, j/(NCOLS - 1.0), i/(NROWS - 1.0));
+        x[l] = log(brightness(i, j)*r[0][l]) - bb[l]*path(0)*(depth(i, j) + tide[0]);
+      }
+      for (ix = 0; ix < NB - 1; ix++) {
+        S1 = 0.0;
+        for (l = 0; l <= ix; l++) S1 += bb[l]*bb[l];
+        S2 = S1 + bb[ix + 1]*bb[ix + 1];
+        y[ix] = -sqrt(S1/S2)*x[ix + 1];
+        for (l = 0; l <= ix; l++) y[ix] += bb[ix + 1]*bb[l]/sqrt(S1*S2)*x[l];
+      }
+      fprintf(fp, "%.7f %.7f %.8f %.8f\n", wlon + j*cellsize, slat + i*cellsize, y[0], y[1]);
+    }
   }
   fclose(fp);
 
