@@ -2150,6 +2150,27 @@ B13's angular depth failed because the water differs between scenes: with water 
 - **But they do not beat the bands.** With 443/483/561 nm, removing the bottom colour costs more (11.5 points) than it saves. With four bands, it fixes 0–2 m (5 → 39%), where the red's colour error dominated, and loses at 10–20 m (42 → 37%). The scenes' own artefacts (atmosphere, adjacency) enter the depth through the same differences.
 - **So multiple sun angles are no more use here than in the SA model.** Measured water makes the scenes' differences informative, but the same unmodelled scene-to-scene differences limit both. Not taken into photic.
 
+### The training soundings filtered by the blue/green log ratio (2026-10-21, `gulf_lyzenga.py ratio_filter`, `RATIO_FILTER`)
+
+Some ICESat-2 cells plainly disagree with the image: in Figure 1's calibration panel, cells at 2–5 m that the fit puts at 10–16 m. The filter compares each cell with Stumpf's ratio, ln(1000 R₄₈₃)/ln(1000 R₅₆₁) of the median composite (3 × 3 cells):
+- **The relation:** the running median of depth against the ratio and its robust spread (1.4826 MAD, at least 0.5 m), in 40 equal-count bins. Spearman 0.89 (calibration half).
+- **Two directions, not alike.** Cells much *shallower* than the ratio implies (an ICESat-2 seabed where the image sees deep water) come in runs along a few tracks. Cells much *deeper* are nearly all beyond 10 m, where the ratio saturates (its median flattens at 11–13 m): those are probably real, and dropping them would teach the model that deep water does not exist.
+- **So:** drop cells more than 3 spreads shallower everywhere, and more than 3 deeper only where the ratio is not saturated (below its 90th percentile). In the saturated range the spread is held at its value at the saturation point, as the shallow outliers there would otherwise inflate it (top bin 9.9 m) and hide themselves.
+- **Design:** each fold's filter is fitted on that fold's training cells; the held-out cells and the test half are scored unfiltered (the honest score), and filtered for reference (optimistic: the filter uses the image the model sees).
+
+| Chosen model (joint, four bands, r2, `POWER`) | Out of fold, all held-out | Test half, all | Test RMSE | Test, filtered cells |
+|---|---|---|---|---|
+| No filter | 83.9% | 90.0% | 1.21 m | 90.0% (all 5,695) |
+| Drop shallower than the ratio | 84.2% | 90.2% | 1.19 m | 91.7%, 0.90 m (5,573) |
+| **Both, not where saturated** | **84.6%** | **90.2%** | **1.19 m** | 92.2%, 0.79 m (5,408) |
+
+- **The filter drops 377 of the 6,238 calibration cells** (6.0%): 276 shallower than the ratio, 101 deeper.
+- **It barely changes the honest scores** (+0.7 points out of fold, +0.2 on the test half), and no depth bin is more than a point worse. The fit's Huber weights already discount these cells; they cost more in the scoring than in the fit.
+- **The filtered test score (92.2%) is not a fair measure.** It removes the cells the model gets wrong by using the same image.
+- **Decision (the gate is met): train on the filtered cells.** `RATIO_FILTER = ("both", 3.0)` in `gulf_lyzenga.py` applies it wherever training soundings are written (`prepare`'s `calibration.xyz` and every fold's); the test half and held-out cells are never filtered.
+- **Then re-chosen by cross-validation:** the top four settings are within 0.2 points (84.6–84.8%), and the choice moves within that tie to radius 3 without `POWER` (84.8%). Test half: **90.0%**, RMSE 1.20 m, bias −0.08 m. The analyses above used the earlier choice (radius 2, `POWER`) on the unfiltered training set, and are not rerun.
+- **Figures:** `runs/gulf_lyzenga/ratio_filter/ratio_filter.png` (the calibration half against the ratio, kept and dropped, and where the dropped cells are) and `runs/gulf_lyzenga/final/icesat2_reference.png` (every reference cell, and the training cells only).
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

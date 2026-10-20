@@ -15,8 +15,13 @@ ICESat-2 on a split reference.
   correlation [/run/]  the fitted depths against ICESat-2, test and calibration halves, as density
             plots (runs/gulf_lyzenga/final/correlation.png, or a fit's run, e.g.
             composite_443-483-561-655_r3_power)
+  reference_maps  the ICESat-2 cells by depth: all, and the training cells only after the ratio
+            filter (runs/gulf_lyzenga/final/icesat2_reference.png)
   points    the ICESat-2 reference itself as coloured points, in the same format and colour scale as
             the bathymetry map (runs/gulf_lyzenga/final/icesat2.png)
+  ratio_filter  the calibration soundings filtered by their agreement with the blue/green log
+            ratio (shallower than the ratio implies; or both ways, but not where it saturates), scored
+            out of fold and on the test half, unfiltered and filtered (ratio_filter.json)
   errors    ERROR's calibration with Lyzenga 1978's noise (eq. 16, NOISE) and gain (eq. 17, GAIN),
             out of fold on cv's folds (errors.json)
   calibrate  Lyzenga et al. 2006's calibration condition (eq. 12) imposed on the joint fit
@@ -85,6 +90,10 @@ COLOUR_RANGE = (-25.0, 0.0)  # m, the maps' colour scale (PLOT GRID ... MIN MAX)
 NC_LOCK = threading.Lock()  # netCDF4 is not thread-safe
 POINTS_CELL = 0.0006  # deg, the ICESat-2 points map's cells: each a visible dot
 ATT_NODES = 0.05  # deg, the attenuation's node spacing (ATTENUATION ... NODES)
+# The training soundings (calibration.xyz and every fold's) keep only the cells that agree with the
+# blue/green log ratio (RatioFilter: mode, k; ratio_filter() for the evidence); None keeps all. The
+# test half and the folds' held-out cells are never filtered.
+RATIO_FILTER = ("both", 3.0)
 
 
 def projected_l2w():
@@ -223,7 +232,7 @@ def prepare():
     test_depth, _ = bin_cells(test, lon, lat)
     cal_depth[~water] = np.nan
     test_depth[~water | cal_occupied] = np.nan
-    write_xyz(os.path.join(OUT, "calibration.xyz"), cal_depth, lon, lat)
+    write_xyz(os.path.join(OUT, "calibration.xyz"), training(cal_depth), lon, lat)
     np.savez(os.path.join(OUT, "reference.npz"), lon=lon, lat=lat, calibration=cal_depth, test=test_depth,
              mean_tide=mean_tide)
     meta = dict(cell=CELL, shape=[len(lat), len(lon)], bands=names, scene_tides=tides, mean_tide=mean_tide,
@@ -232,6 +241,14 @@ def prepare():
                 cells_calibration=int(np.isfinite(cal_depth).sum()), cells_test=int(np.isfinite(test_depth).sum()))
     json.dump(meta, open(os.path.join(OUT, "meta.json"), "w"), indent=1)
     print(json.dumps(meta, indent=1))
+
+
+def training(depth):
+    """The training soundings: depth without the cells RATIO_FILTER drops (fitted on these cells)."""
+    if RATIO_FILTER is None:
+        return depth
+    ratio = log_ratio()
+    return np.where(RatioFilter(depth, ratio, *RATIO_FILTER).keep(depth, ratio), depth, np.nan)
 
 
 def write_xyz(path, depth, lon, lat):
@@ -326,7 +343,7 @@ def scores(ref, H):
 
 def cv_folds(lon, lat, meta):
     """The cross-validation folds by pass within the calibration half: each fold's training
-    soundings (cv_train_<f>.xyz, below MSL) and its held-out cells."""
+    soundings (cv_train_<f>.xyz, below MSL, after RATIO_FILTER) and its held-out cells (unfiltered)."""
     water = water_mask()
     cal, _, _, _ = split_photons()
     passes = np.random.default_rng(SEED + 1).permutation(np.unique(cal["granule"]))
@@ -338,7 +355,7 @@ def cv_folds(lon, lat, meta):
         train[~water] = np.nan
         test[~water | train_occupied] = np.nan
         path = os.path.join(OUT, "cv_train_%d.xyz" % f)
-        write_xyz(path, train, lon, lat)
+        write_xyz(path, training(train), lon, lat)
         folds.append((path, test))
     return folds
 
@@ -458,6 +475,188 @@ def errors():
             name, 100*r["within_1"], 100*r["within_2"], r["rms_z"], r["median_sigma"],
             "  ".join("%s %.0f%% (%.1f m)" % (k, 100*x["within_1"], x["median_sigma"]) for k, x in r["by_depth"].items())))
     json.dump(dict(settings=c, folds=FOLDS, variants=table), open(os.path.join(OUT, "errors.json"), "w"), indent=1)
+
+
+def log_ratio(blue=483, green=561):
+    """Stumpf et al.'s blue/green log ratio, ln(1000 R_blue)/ln(1000 R_green), of the median
+    composite, over 3 x 3 cells as photic's window (nan where either band is missing)."""
+    from scipy.ndimage import uniform_filter
+    import rasterio
+    out = []
+    for wl in (blue, green):
+        with rasterio.open(os.path.join(OUT, "b%d%s" % (wl, EXT))) as d:
+            x = d.read(1).astype(float)[::-1]
+            x[x == d.nodata] = np.nan
+        m = np.isfinite(x) & (x > 0)
+        xb = uniform_filter(np.where(m, x, 0), 3)/np.maximum(uniform_filter(m.astype(float), 3), 1e-9)
+        xb[~m] = np.nan
+        out.append(xb)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.log(1000*out[0])/np.log(1000*out[1])
+
+
+class RatioFilter:
+    """The soundings' depth against the log ratio: the running median and robust spread
+    (1.4826 MAD, at least FLOOR m) in equal-count bins, fitted on one set of cells and applied to
+    any (the spread held at its value where the ratio saturates). mode "shallow" drops cells more than k spreads shallower than the ratio implies (an
+    ICESat-2 seabed where the image sees deep water); "both" also drops those deeper, except where
+    the ratio is saturated (its top 10%), as the ratio cannot tell 15 m from 25 m."""
+    FLOOR, BINS = 0.5, 40
+
+    def __init__(self, depth, ratio, mode="shallow", k=3.0):
+        m = np.isfinite(depth) & np.isfinite(ratio)
+        z, r = depth[m], ratio[m]
+        o = np.argsort(r)
+        e = np.linspace(0, len(o), self.BINS + 1).astype(int)
+        parts = [o[a:b] for a, b in zip(e[:-1], e[1:])]
+        self.r = np.array([np.median(r[p]) for p in parts])
+        self.z = np.array([np.median(z[p]) for p in parts])
+        self.s = np.array([1.4826*np.median(np.abs(z[p] - np.median(z[p]))) for p in parts])
+        self.saturated = np.percentile(r, 90)
+        # Where the ratio saturates, the shallow outliers themselves would inflate the spread: it is
+        # held at its value at the saturation point.
+        sat = self.r >= self.saturated
+        if sat.any() and (~sat).any():
+            self.s[sat] = self.s[~sat][-1]
+        self.mode, self.k = mode, k
+
+    def residual(self, depth, ratio):
+        """(depth - median)/spread, nan where either is missing."""
+        med = np.interp(ratio, self.r, self.z)
+        spr = np.maximum(np.interp(ratio, self.r, self.s), self.FLOOR)
+        return (depth - med)/spr
+
+    def keep(self, depth, ratio):
+        with np.errstate(invalid="ignore"):
+            res = self.residual(depth, ratio)
+            drop = res < -self.k
+            if self.mode == "both":
+                drop |= (res > self.k) & (ratio < self.saturated)
+        return np.isfinite(depth) & np.isfinite(ratio) & ~drop | (np.isfinite(depth) & ~np.isfinite(ratio))
+
+
+RATIO_VARIANTS = [("none", None, None), ("shallow_k3", "shallow", 3.0), ("both_k3", "both", 3.0)]
+
+
+def ratio_filter():
+    """The calibration soundings filtered by their agreement with the blue/green log ratio
+    (RatioFilter), for the chosen model: out of fold on cv's folds (each fold's filter fitted on its
+    own training cells), scored on the held-out cells unfiltered (the honest score) and filtered
+    (optimistic: the filter uses the image); then fitted on the whole calibration half and scored
+    once on the test half, both ways (ratio_filter.json, runs/gulf_lyzenga/ratio_filter/)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    lon, lat = grid()
+    meta = json.load(open(os.path.join(OUT, "meta.json")))
+    ref = np.load(os.path.join(OUT, "reference.npz"))
+    c = json.load(open(os.path.join(OUT, "cv.json") if os.path.exists(os.path.join(OUT, "cv.json")) else CV_PALM))["chosen"]
+    ratio = log_ratio()
+    folds = cv_folds(lon, lat, meta)
+    water = water_mask()
+    cal, _, _, _ = split_photons()
+    extra = " TIDE 0%s" % (" POWER" if c.get("power") else "")
+    work = os.path.join(WORK, "ratio_filter")
+    jobs = []
+    for name, mode, k in RATIO_VARIANTS:
+        for f in range(FOLDS):
+            passes = np.random.default_rng(SEED + 1).permutation(np.unique(cal["granule"]))
+            held = np.isin(cal["granule"], passes[f::FOLDS])
+            train, _ = bin_cells({key: v[~held] for key, v in cal.items()}, lon, lat)
+            train[~water] = np.nan
+            filt = RatioFilter(train, ratio, mode, k) if mode else None
+            if filt:
+                train[~filt.keep(train, ratio)] = np.nan
+            path = os.path.join(work, "train_%s_%d.xyz" % (name, f))
+            os.makedirs(work, exist_ok=True)
+            write_xyz(path, train, lon, lat)
+            jobs.append((name, f, path, filt, int(np.isfinite(train).sum())))
+
+    def one(job):
+        name, f, path, filt, n = job
+        H, _ = run_photic(os.path.join(work, "%s_f%d" % (name, f)), path, c["bands"], c["lsm"], c["radius"], extra,
+                          inputs="joint")
+        return job, H
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(one, jobs))
+    table = {}
+    for name, mode, k in RATIO_VARIANTS:
+        held = np.full(ref["calibration"].shape, np.nan)
+        Hf, kept = held.copy(), np.zeros(held.shape, bool)
+        n_train = []
+        for (nm, f, _, filt, n), H in results:
+            if nm != name:
+                continue
+            m = np.isfinite(folds[f][1])
+            held[m], Hf[m] = folds[f][1][m], H[m]
+            kept[m] = filt.keep(folds[f][1], ratio)[m] if filt else True
+            n_train.append(n)
+        r_all, r_kept = scores(held, Hf), scores(np.where(kept, held, np.nan), Hf)
+        table[name] = dict(mode=mode, k=k, train_cells=n_train, out_of_fold=r_all, out_of_fold_filtered=r_kept)
+        print("%-11s train cells %s | held out, all %d: hits %.3f rmse %.2f bias %+.2f %s | filtered %d: hits %.3f" % (
+            name, n_train, r_all["n_reference"], r_all["hits"], r_all["rmse"], r_all["bias"],
+            " ".join("%s %2.0f" % (b, 100*x["hits"]) for b, x in r_all["by_depth"].items()), r_kept["n_reference"],
+            r_kept["hits"]))
+    # The whole calibration half, scored once on the test half.
+    for name, mode, k in RATIO_VARIANTS:
+        R = ref["calibration"].copy()
+        filt = RatioFilter(R, ratio, mode, k) if mode else None
+        if filt:
+            R[~filt.keep(R, ratio)] = np.nan
+        path = os.path.join(work, "calibration_%s.xyz" % name)
+        write_xyz(path, R, lon, lat)
+        H, _ = run_photic(os.path.join(work, "%s_final" % name), path, c["bands"], c["lsm"], c["radius"], extra,
+                          inputs="joint")
+        T = ref["test"]
+        t_all = scores(T, H)
+        t_kept = scores(np.where(filt.keep(T, ratio), T, np.nan), H) if filt else t_all
+        table[name].update(calibration_cells=int(np.isfinite(R).sum()), test=t_all, test_filtered=t_kept)
+        print("%-11s final: calibration cells %d | test, all: hits %.3f rmse %.2f bias %+.2f %s | filtered %d: hits %.3f rmse %.2f" % (
+            name, np.isfinite(R).sum(), t_all["hits"], t_all["rmse"], t_all["bias"],
+            " ".join("%s %2.0f" % (b, 100*x["hits"]) for b, x in t_all["by_depth"].items()), t_kept["n_reference"],
+            t_kept["hits"], t_kept["rmse"]))
+    json.dump(dict(settings=c, ratio="ln(1000 R483)/ln(1000 R561), median composite", variants=table),
+              open(os.path.join(OUT, "ratio_filter.json"), "w"), indent=1)
+
+    # The calibration half against the ratio, kept and dropped (both_k3), and where the dropped cells are.
+    R = ref["calibration"]
+    filt = RatioFilter(R, ratio, "both", 3.0)
+    m = np.isfinite(R) & np.isfinite(ratio)
+    keep = filt.keep(R, ratio)
+    res = filt.residual(R, ratio)
+    shallow = m & ~keep & (res < 0)
+    deep = m & ~keep & (res > 0)
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6), constrained_layout=True)
+    ax = axes[0]
+    ax.scatter(ratio[m & keep], R[m & keep], s=2, c="0.6", label="kept (%d)" % (m & keep).sum())
+    ax.scatter(ratio[shallow], R[shallow], s=6, c="tab:red", label="dropped: shallower than the ratio (%d)" % shallow.sum())
+    ax.scatter(ratio[deep], R[deep], s=6, c="tab:blue", label="dropped: deeper, ratio not saturated (%d)" % deep.sum())
+    rr = np.linspace(filt.r[0], filt.r[-1], 200)
+    med = np.interp(rr, filt.r, filt.z)
+    spr = np.maximum(np.interp(rr, filt.r, filt.s), filt.FLOOR)
+    ax.plot(rr, med, "k-", lw=1.5, label="running median")
+    ax.plot(rr, med - 3*spr, "k--", lw=1, label="3 robust spreads")
+    ax.plot(rr, med + 3*spr, "k--", lw=1)
+    ax.axvline(filt.saturated, color="0.3", ls=":", label="saturated beyond (top 10% of the ratio)")
+    ax.set_xlabel("ln(1000 R$_{483}$) / ln(1000 R$_{561}$), median composite")
+    ax.set_ylabel("ICESat-2 ATL24 depth below MSL (m)")
+    ax.set_ylim(0, 26)
+    ax.set_xlim(np.nanpercentile(ratio[m], 0.2), np.nanpercentile(ratio[m], 99.8))
+    ax.legend(fontsize=8, loc="upper left")
+    ax.set_title("Calibration half against the blue/green log ratio")
+    ax = axes[1]
+    ax.imshow(np.where(water, 1.0, np.nan), origin="lower", extent=(lon[0], lon[-1], lat[0], lat[-1]), cmap="Greys",
+              vmin=0, vmax=4, interpolation="nearest")
+    ii, jj = np.nonzero(m & keep)
+    ax.scatter(lon[jj], lat[ii], s=1, c="0.5")
+    for sel, col in ((shallow, "tab:red"), (deep, "tab:blue")):
+        ii, jj = np.nonzero(sel)
+        ax.scatter(lon[jj], lat[ii], s=8, c=col)
+    ax.set_aspect(1.0/np.cos(np.radians(np.mean(lat))))
+    ax.set_title("Where the dropped cells are (red: shallower than the ratio; blue: deeper)")
+    out = os.path.join(work, "ratio_filter.png")
+    fig.savefig(out, dpi=120)
+    print(out)
 
 
 def calibrate():
@@ -885,6 +1084,47 @@ def correlation(run="final"):
     print(out)
 
 
+def reference_maps():
+    """The ICESat-2 reference as cells coloured by depth: (a) every cell, calibration and test
+    halves; (b) only the training cells (the calibration half after RATIO_FILTER), with the cells
+    the filter drops (runs/gulf_lyzenga/final/icesat2_reference.png)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    lon, lat = grid()
+    ref = np.load(os.path.join(OUT, "reference.npz"))
+    water = water_mask()
+    cal, test = ref["calibration"], ref["test"]
+    train = training(cal)
+    dropped = np.isfinite(cal) & ~np.isfinite(train)
+    fig, axes = plt.subplots(1, 2, figsize=(16, 5.4), constrained_layout=True)
+    extent = (lon[0], lon[-1], lat[0], lat[-1])
+    panels = [("(a) ICESat-2 ATL24, every cell: calibration %d + test %d" % (np.isfinite(cal).sum(), np.isfinite(test).sum()),
+               np.where(np.isfinite(cal), cal, test), None),
+              ("(b) Training cells only: the calibration half after the ratio filter (%d; %d dropped, black)" % (
+                  np.isfinite(train).sum(), dropped.sum()), train, dropped)]
+    for ax, (title, z, drop) in zip(axes, panels):
+        ax.imshow(np.where(water, 1.0, np.nan), origin="lower", extent=extent, cmap="Greys", vmin=0, vmax=8,
+                  interpolation="nearest")
+        ii, jj = np.nonzero(np.isfinite(z))
+        sc = ax.scatter(lon[jj], lat[ii], c=z[ii, jj], s=2.5, cmap="viridis_r", vmin=0, vmax=25, linewidths=0)
+        if drop is not None:
+            ii, jj = np.nonzero(drop)
+            ax.scatter(lon[jj], lat[ii], c="k", s=5, marker="x", linewidths=0.6)
+        ax.set_aspect(1.0/np.cos(np.radians(np.mean(lat))))
+        ax.set_xlim(lon[0], lon[-1])
+        ax.set_ylim(lat[0], lat[-1])
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel("longitude")
+        ax.set_ylabel("latitude")
+    fig.colorbar(sc, ax=axes, shrink=0.75, label="depth below MSL (m)")
+    fig.suptitle("Dubai to Abu Dhabi: the ICESat-2 reference (cells of 0.0003\u00b0, the median of at least 3 photons "
+                 "spreading at most 0.5 m)", fontsize=12)
+    out = os.path.join(WORK, "final", "icesat2_reference.png")
+    fig.savefig(out, dpi=130)
+    print(out)
+
+
 def points():
     """Every ICESat-2 reference photon (both halves), binned to POINTS_CELL cells (the median of at
     least 3 photons spreading at most 0.5 m), drawn by photic as the bathymetry map is."""
@@ -924,6 +1164,7 @@ def points():
 
 if __name__ == "__main__":
     commands = {"prepare": prepare, "cv": cv, "fit": fit, "correlation": correlation, "points": points, "calibrate": calibrate, "errors": errors,
+                "ratio_filter": ratio_filter, "reference_maps": reference_maps,
                 "attenuation": attenuation}
     if len(sys.argv) == 3 and sys.argv[1] == "attenuation":
         attenuation([int(b) for b in sys.argv[2].split(",")])

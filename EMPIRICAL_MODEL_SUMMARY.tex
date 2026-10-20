@@ -107,6 +107,81 @@ through \code{TIDE}, it is counted twice; this happened in the Gulf composite ru
 fixed on 20 October 2026.
 
 %============================================================================================
+\section{The reference and the training soundings}
+\label{sec:reference}
+
+\paragraph{The reference.} ICESat-2 ATL24 v002 seabed photons over the box, as depths below MSL,
+are binned to the image's cells (0.0003\textdegree): a cell is the median of at least 3 photons
+spreading at most 0.5\,m (Figure~\ref{fig:reference}a). The passes are split at random into two
+halves, so the halves are separate tracks: 44 passes calibrate (6,238 cells) and 43 test (5,695
+cells). A test cell that also holds a calibration photon is dropped. Settings are chosen by 4-fold
+cross-validation by pass within the calibration half, and the test half is scored once.
+
+\paragraph{The training filter.} Some cells plainly disagree with the image. The filter compares
+each calibration cell with Stumpf's blue/green log ratio, $\ln(1000 R_{483})/\ln(1000 R_{561})$ of
+the median composite, over $3\times3$ cells (Figure~\ref{fig:ratiofilter}). It takes the running
+median of depth against the ratio and its robust spread (1.4826\,MAD, at least 0.5\,m), in 40
+equal-count bins; the Spearman correlation is 0.89. The two directions differ.
+\begin{itemize}
+\item \textbf{Shallower than the ratio implies:} an ICESat-2 seabed where the image sees deep water.
+  These come in runs along a few tracks, which suggests misclassified photons along stretches of a
+  pass. They are dropped beyond 3 spreads, everywhere.
+\item \textbf{Deeper than the ratio implies:} nearly all beyond 10\,m, where the ratio saturates (its
+  median flattens at 11--13\,m). These are probably real, and dropping them would teach the model
+  that deep water does not exist. They are dropped beyond 3 spreads only where the ratio is not
+  saturated (below its 90th percentile).
+\end{itemize}
+In the saturated range the spread is held at its value at the saturation point, as the shallow
+outliers there would otherwise inflate it (to 9.9\,m in the top bin) and hide themselves. The
+filter drops 377 of the 6,238 calibration cells (6.0\%): 276 shallower, 101 deeper.
+
+Each fold's filter is fitted on that fold's own training cells. The held-out cells and the test half
+are never filtered, as the filter uses the image the model sees, and a filtered test would remove
+exactly the cells the model gets wrong (Table~\ref{tab:filter}).
+
+\begin{table}[h]
+\centering
+\caption{The training filter, for the model chosen before it (joint, four bands, radius 2,
+\code{POWER}). The last column is optimistic: it scores only the test cells the filter keeps.}
+\label{tab:filter}
+\begin{tabular}{lrrrr}
+\toprule
+ & Out of fold & Test half & Test RMSE (m) & Test, filtered cells \\
+\midrule
+No filter                          & 83.9\% & 90.0\% & 1.21 & 90.0\% \\
+Drop shallower than the ratio      & 84.2\% & 90.2\% & 1.19 & 91.7\% \\
+Both ways, not where saturated     & \textbf{84.6\%} & \textbf{90.2\%} & 1.19 & 92.2\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The filter barely changes the honest scores (+0.7 points out of fold, +0.2 on the test half), and
+no depth bin is more than a point worse: Huber weighting already discounts these cells in the fit.
+It is adopted for the training soundings from 21 October 2026 (Figure~\ref{fig:reference}b). With
+it, cross-validation's top four settings are within 0.2 points (84.6--84.8\%), and its choice moves
+within that tie to radius 3 without \code{POWER}, which scores 90.0\% on the test half (RMSE
+1.20\,m). Figure~\ref{fig:lyz} is that model. The analyses of Sections~\ref{sec:lyz_error},
+\ref{sec:results} and~\ref{sec:calibration} used the earlier choice (radius 2, \code{POWER}) on the
+unfiltered training set.
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth]{paper/empirical_figures/icesat2_reference.png}
+\caption{The ICESat-2 reference by depth: (a) every cell, both halves; (b) only the training cells,
+the calibration half after the ratio filter, with the dropped cells as black crosses.}
+\label{fig:reference}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth]{paper/empirical_figures/ratio_filter.png}
+\caption{The calibration half against the blue/green log ratio: kept, dropped as shallower than the
+ratio implies (red) and dropped as deeper where the ratio is not saturated (blue), with the running
+median and 3 robust spreads; and where the dropped cells are.}
+\label{fig:ratiofilter}
+\end{figure}
+
+%============================================================================================
 \section{Lyzenga's regression}
 \label{sec:lyzenga}
 
@@ -269,8 +344,10 @@ All    & 5,543 & 80\% & 0.74 & 87\% & 0.75 & 1.21 \\
 \begin{figure}[h]
 \centering
 \includegraphics[width=\textwidth]{paper/empirical_figures/lyzenga_correlation.png}
-\caption{The joint Lyzenga model against ICESat-2 at the Gulf, as density of cells (white: none).
-The test half is held out by pass; the calibration half was fitted. Hits here count cells with a depth. Counting every
+\caption{The joint Lyzenga model (four bands, radius 3, trained on the filtered cells;
+Section~\ref{sec:reference}) against ICESat-2 at the Gulf, as density of cells (white: none). The
+test half is held out by pass. The calibration panel shows every calibration cell, though the fit
+used only those the filter keeps. Hits here count cells with a depth. Counting every
 reference cell, the test-half score is 90.0\%.}
 \label{fig:lyz}
 \end{figure}
