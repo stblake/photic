@@ -1108,6 +1108,53 @@ Tier 3 is unchanged by either switch (the synthetic scenes give δ = 0 and their
 - The depth dependence of the needed attenuation points to the forward model's assumptions over the shallows (A3 uniform water, A6 bottom, A1 structure), not to a calibration constant.
 - Every switch stays off.
 
+### Iterative inversion prototype (2026-10-14, `iterative.py`, branch `iterative`)
+
+`iterative.py` stands in for the photic executable (`iterative_photic`), so `bench.py` runs and scores it unchanged. Lee's forward model with the following blocks, each improved in turn:
+
+1. **Pixels, with water and bottom colours fixed.** The exact profile χ² over a depth grid. The bottom class and brightness (bounded, shared by the scenes) are solved in closed form. One H and one bottom per pixel for all bands and scenes. This is vectorised over pixels and takes about 1 s per site.
+2. **Water, with pixels fixed, per scene.** P, G and X are fitted with Y fixed; κ comes from photic's IOPs, so pure-water absorption anchors the depth scale. rinf is free per band, which absorbs an atmospheric offset. The fit pools up to 6000 pixels; optically deep pixels see rinf only.
+3. **Bottom colours** (optional, `PHOTIC_ITER_BOTTOM=learn`): each class's spectrum is learned from its pixels.
+
+A pass is accepted only if the total χ² falls, halving the step otherwise. Pass 0 (`PHOTIC_ITER_N=0`) is the profile model, with water matched to QAA and no window. The first version pooled only the "confident" pixels, so its objective rose at Marina (1.48 → 1.80 × 10⁷). Pooling every pixel made the descent monotone (1.79 → 1.20 × 10⁷).
+
+**Full benchmark.** Tier 4 hits (%) and RMSE (m), Bundegi / Tantabiddi / Marina / gulf entrance:
+
+| Run | Hits | RMSE |
+|---|---|---|
+| SA, HEAD (`head-d9d14d6`) | 9.2 / 23.2 / 5.9 / 0.6 | 2.39 / 2.51 / 2.41 / 4.26 |
+| Profile (`paper-default`) | 21.6 / 54.3 / 20.9 / 1.5 | 1.68 / 2.17 / 3.01 / 3.85 |
+| Pass 0 (`iter-n0`) | 18.3 / 61.5 / 16.7 / 1.1 | 2.52 / 3.02 / 4.10 / 8.10 |
+| 4 passes (`iter-n4`) | 29.8 / 58.0 / 16.2 / 1.2 | 3.70 / 3.22 / 3.73 / 7.42 |
+| 4 passes, sand b ≤ 1.5 (`iter-n4-b15`) | 29.4 / 65.0 / 16.1 / 1.3 | 3.47 / 3.20 / 3.64 / 7.00 |
+
+Tier 3 (no-prior scenarios), mean hits / median RMSE, clear / moderate / turbid:
+
+| Run | Hits / RMSE |
+|---|---|
+| SA, HEAD | 45.6 / 1.87, 24.1 / 3.20, 12.6 / 1.78 |
+| Pass 0 | 45.3 / 3.10, 28.0 / 4.03, 15.7 / 2.04 |
+| 4 passes | 54.1 / 3.23, 32.5 / 2.90, 10.7 / 1.23 |
+| 4 passes, b ≤ 1.5 | 57.0 / 3.04, 31.5 / 3.59, 10.3 / 1.25 |
+
+- **The iterations help where the site-wide water is wrong.** Against pass 0:
+  - Bundegi +11 points, with 5–10 m going from 0 to 11–13%;
+  - tier 3 clear +9 to +12 and moderate +3.5 to +4.5;
+  - Tantabiddi +3.5, but only with the sand bound raised to 1.5 (−3.5 without);
+  - Marina −0.5 and the gulf entrance +0.2.
+- **The sand bound matters only at Tantabiddi:** its 5–10 m hits go from 2 to 13%, the "deep sand needs b > 0.75" finding again.
+- **Against the SA model, it fails the acceptance rule.**
+  - Hits are 3–6 points higher at every tier 4 site and in tier 3 clear and moderate water.
+  - But RMSE is worse at every tier 4 site (by 0.7–2.7 m), and tier 3 turbid loses 2.3 points.
+  - Coverage is much higher (Bundegi 22 → 73%, Marina 37 → 85%), so many more wrong depths are reported.
+- **It does not converge to the truth on tier 3.** Noise-free hits are 36–38% with an RMSE of 2.0–2.3 m (SA 35%, 1.52 m). A consistent fixed point is not the right one: on noise-free synthetic scenes a correct model must recover the depths.
+- **The ceiling remains.** 10–20 m bias is −7 to −9 m at every site; the pooled water fits deep cells placed at about 4 m.
+- **Learning the bottom colours does nothing:** within ±1.7 points everywhere.
+- **Next:**
+  1. find why noise-free tier 3 does not converge: the water parameterisation (Y fixed, rinf free) against OSOAA, or the gauge between κ and H;
+  2. an abstention rule for the much larger coverage (the profile model's T_deep and ambiguity tests);
+  3. only then, the water and bottom inputs to `Lee_Semi_Analytical`.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

@@ -1,0 +1,3 @@
+#!/bin/sh
+# photic stand-in for bench.py and ab.py: the iterative prototype (iterative.py).
+exec "${PHOTIC_VALIDATION_DATA:-$HOME/photic_dev/validation_data}/.venv/bin/python" "$(dirname "$0")/iterative.py" "$@"
