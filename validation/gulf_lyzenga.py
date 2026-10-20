@@ -832,8 +832,11 @@ def correlation(run="final"):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.colors import LogNorm
+    from matplotlib.colors import LinearSegmentedColormap, LogNorm
     import tier3_scenes
+    # White -> yellow -> orange -> red on a log scale from half a cell, so white is no cells and a
+    # single cell is already pale yellow.
+    cmap = LinearSegmentedColormap.from_list("white_yellow_orange_red", ["white", "yellow", "orange", "red"])
     rundir = os.path.join(WORK, run)
     H = -tier3_scenes.read_nc(os.path.join(rundir, "H.nc"))
     ref = np.load(os.path.join(OUT, "reference.npz"))
@@ -847,7 +850,8 @@ def correlation(run="final"):
         hits = np.mean(np.abs(e) <= 0.5 + 0.1*x)
         r = np.corrcoef(x, y)[0, 1]
         slope, icpt = np.polyfit(x, y, 1)
-        hb = ax.hexbin(x, y, gridsize=70, extent=(0, top, 0, top), mincnt=1, cmap="viridis", norm=LogNorm())
+        hb = ax.hexbin(x, y, gridsize=70, extent=(0, top, 0, top), mincnt=1, cmap=cmap, linewidths=0)
+        hb.set_norm(LogNorm(vmin=0.5, vmax=hb.get_array().max()))
         t = np.array([0.0, top])
         ax.plot(t, t, color="k", lw=1.2, label="1:1")
         ax.fill_between(t, t - (0.5 + 0.1*t), t + (0.5 + 0.1*t), color="k", alpha=0.08, lw=0,
@@ -863,7 +867,11 @@ def correlation(run="final"):
                 % (m.sum(), 100*hits, np.sqrt(np.mean(e**2)), e.mean(), r, slope, icpt),
                 transform=ax.transAxes, va="top", fontsize=9, bbox=dict(facecolor="white", alpha=0.85, lw=0))
         ax.legend(loc="lower right", fontsize=8)
-        fig.colorbar(hb, ax=ax, shrink=0.8, label="cells")
+        ticks = [n for n in (1, 3, 10, 30, 100, 300, 1000) if n <= hb.get_array().max()]
+        cb = fig.colorbar(hb, ax=ax, shrink=0.8, label="cells")
+        cb.set_ticks(ticks)
+        cb.set_ticklabels([str(n) for n in ticks])
+        cb.minorticks_off()
     if run == "final":
         c = json.load(open(os.path.join(OUT, "cv.json") if os.path.exists(os.path.join(OUT, "cv.json")) else CV_PALM))["chosen"]
     else:

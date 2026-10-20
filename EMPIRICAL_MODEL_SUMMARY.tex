@@ -269,8 +269,8 @@ All    & 5,543 & 80\% & 0.74 & 87\% & 0.75 & 1.21 \\
 \begin{figure}[h]
 \centering
 \includegraphics[width=\textwidth]{paper/empirical_figures/lyzenga_correlation.png}
-\caption{The joint Lyzenga model against ICESat-2 at the Gulf. The test half is held out by
-pass; the calibration half was fitted. Hits here count cells with a depth. Counting every
+\caption{The joint Lyzenga model against ICESat-2 at the Gulf, as density of cells (white: none).
+The test half is held out by pass; the calibration half was fitted. Hits here count cells with a depth. Counting every
 reference cell, the test-half score is 90.0\%.}
 \label{fig:lyz}
 \end{figure}
@@ -453,6 +453,23 @@ The outputs are three grids:
 \item \code{/prefix/\_depth\_sigma}, its error $\sigma_H$;
 \item \code{/prefix/\_bottom}, the bottom brightness $\hat B$.
 \end{itemize}
+
+\paragraph{Which differences carry the depth.} The leverage comes from how $g$ differs among a
+cell's grids: between bands, and between scenes, where both the water and the light path change.
+A prototype (out of fold, 443/483/561\,nm) splits them.
+\begin{itemize}
+\item \textbf{One intercept per band} removes the bottom colour, as a band's colour offset is the
+  same in every scene, and leaves only the differences between scenes. It scores 49.5\% hits
+  against 61.0\% for the common intercept. With four bands it ties (56.7 against 56.1\%), fixing
+  0--2\,m (5 $\to$ 39\%) but losing at 10--20\,m.
+\item \textbf{One $K$ per band shared by the scenes} leaves only the sun angle and the tide. The
+  Gulf's sun zeniths of 35--51\textdegree\ change the path by 6\%, and the result has no depth
+  information (4\% hits).
+\end{itemize}
+So measuring each scene's water makes the differences between scenes informative, unlike the
+semi-analytical model's free water per scene. But the scenes' own unmodelled differences
+(atmosphere, adjacency; Section~\ref{sec:indices}) limit them as much as the bottom colour limits
+the bands.
 
 \subsection{The depth error estimate}
 \label{sec:att_error}

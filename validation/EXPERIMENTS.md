@@ -2126,6 +2126,30 @@ Lyzenga (1978) derives the depth error from the sensor noise, (ΔY_N)² = Σ A²
 - **The scenes do not agree** (median r 0.17–0.63). Index 1 is mostly scene artefacts: large patterns, differing between scenes, from the atmosphere, adjacency and the water.
 - **So these are not yet a bottom map at this site.** The rotation is right (the synthetic test), but the Gulf's bottom contrast is small next to these effects. `INDICES` stays, off by default, as the formalism for two bottom classes in stage 2 and as features for the learned model.
 
+### Depth from the differences between scenes, with the measured attenuation (2026-10-20, prototype `angular.py` in the scratchpad)
+
+B13's angular depth failed because the water differs between scenes: with water free per scene, the change of water absorbs the angular signal (B12). At Exmouth, the sun angles also changed the path by only about 3%. `ATTENUATION`'s stage 1 now measures each scene's K at every cell, so a change of water is a known lever rather than an unknown. And a non-flat bottom colour is the same offset in a band in every scene, so a depth from the differences between scenes only is immune to the bottom colour that limits stage 2.
+
+- **Variants of stage 2** (out of fold on cv's folds; the folds' own K maps; one pass, no reselection):
+  - **common**, as photic: one B per cell, all grids. The prototype reproduces photic's stage 2 (61.0 against 61.4% with 443/483/561 nm; photic also reselects).
+  - **band:** one intercept per band, so only the differences between scenes (water, sun angle, tide) give depth.
+  - **geometry:** as band, with one K per band shared by the scenes (their median), so only the sun angle and the tide give depth (B13).
+- **Gulf geometry:** sun zenith 35–51°, near-nadir view, M = 2.11–2.23 (6%); tides −0.49 to +0.64 m.
+
+| Out of fold, 5,833 cells | Hits % | RMSE m | 0–2 | 2–5 | 5–10 | 10–20 | Lever √S_gg |
+|---|---|---|---|---|---|---|---|
+| 443/483/561, common | 61.0 | 2.91 | 34 | 55 | 69 | 67 | 3.31 |
+| 443/483/561, band | 49.5 | 3.39 | 23 | 40 | 59 | 58 | 2.91 |
+| 443/483/561, geometry | 3.5 | 30.2 | 2 | 4 | 4 | 3 | 0.26 |
+| four bands, common | 56.1 | 3.07 | 5 | 56 | 79 | 42 | 6.90 |
+| four bands, band | 56.7 | 3.32 | 39 | 60 | 74 | 37 | 4.39 |
+| four bands, geometry | 3.9 | 27.9 | 4 | 2 | 5 | 5 | 0.35 |
+
+- **Sun angle and tide alone carry no depth here** (hits 4%): their lever is 10–13× smaller than the scenes' differences of water. Six percent of path at K ≈ 0.08 m⁻¹ changes ln L by about 0.1 at 10 m, below the scenes' unmodelled differences (0.2–0.6 in ln; see the indices).
+- **The differences of water between scenes do carry depth** (49.5–56.7% hits from them alone), now that stage 1 measures them. They are nearly as large a lever as the differences between bands.
+- **But they do not beat the bands.** With 443/483/561 nm, removing the bottom colour costs more (11.5 points) than it saves. With four bands, it fixes 0–2 m (5 → 39%), where the red's colour error dominated, and loses at 10–20 m (42 → 37%). The scenes' own artefacts (atmosphere, adjacency) enter the depth through the same differences.
+- **So multiple sun angles are no more use here than in the SA model.** Measured water makes the scenes' differences informative, but the same unmodelled scene-to-scene differences limit both. Not taken into photic.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.
