@@ -103,6 +103,11 @@ Invert the confident pixels, calibrate a band-ratio depth model on them, and use
 
 ## Phase G: towards a state-of-the-art sounding-free model (planned 2026-10-19)
 
+**Closed on 2026-10-20.** DROP is frozen at its default settings, and the work continues as the learned model of `FUTURE_EXPERIMENTS.md` (see "Status and handoff"). What Phase G found carries over to that model's design:
+- the atmospheric red/NIR offset;
+- κ's absolute scale as the depth ceiling's cause;
+- one AOT per scene failing to hold across the image.
+
 **Naming.** The profile model of Phase F is now called **DROP**, Deep-water Referenced Optical Profiling (`MODEL DROP`; `Lee_Profile` is still accepted). Entries before 2026-10-19 use the old name.
 
 **Where we are.**
@@ -171,7 +176,12 @@ A summary of the sessions of 2026-10-19/20 (commits 241f224 onwards, branch `pro
   - **Cause:** ACOLITE's DSF leaves a red/NIR offset over clear deep water, so QAA's κ comes out too strong. This is now confirmed held out, at the Arabian Gulf.
 - **The empirical bar at the gulf is high:** Lyzenga fitted jointly to all six scenes against ICESat-2 scores 90% hits on a held-out half. DROP has to reach that depth range without soundings.
 - **In progress:** the gulf over the whole Landsat 8 scene (below).
-- **Main next step for DROP:** G6 step 2. Fit the aerosol where the water is: first per site or tile from DROP's local deep references, then inside DROP from TOA reflectance (M3).
+- **Decision (2026-10-20): DROP is frozen, in favour of a learned model.**
+  - DROP is no longer developed. The main line is the relocatable, physics-constrained learned model of `FUTURE_EXPERIMENTS.md`: trained once on ICESat-2 and soundings from many sites, then run on imagery alone.
+  - DROP stays in photic (`MODEL DROP`) at its default settings, for two reasons:
+    - it is that plan's relocatable baseline (H0(b)), the model every gate must beat;
+    - its forward equation is the learned model's physics decoder.
+  - G6 step 2 and the other DROP items below are closed.
 
 **Key numbers** (hits % = within 0.5 m + 10% of the reference, over all reference cells):
 
@@ -209,7 +219,7 @@ The goal is the joint Lyzenga model, and later DROP, over the whole scene's wate
 - **Risks:**
   - **Haze elsewhere:** the six scenes were screened for haze near Dubai only. The joint model needs every scene, so haze elsewhere leaves areas without a depth.
   - **Memory:** photic needs roughly 6–7 GB (24 band grids of about 30 M cells, plus work arrays). It did not fit comfortably in 16 GB.
-- **Not yet built:** DROP on the whole scene. `tier4_gulf.py sites` refuses `scene`, because DROP's 0.1° tiles exist for the palm only.
+- **Not yet built:** DROP on the whole scene. `tier4_gulf.py sites` refuses `scene`, because DROP's 0.1° tiles exist for the palm only. DROP is frozen, so the whole scene needs it only as the H0(b) baseline when the gulf is scored as a held-out region (`FUTURE_EXPERIMENTS.md`).
 - **Held-out discipline:** the palm's test half has been scored five times (below). The scene's cells outside the palm box have never been looked at, so score them separately. They are the cleanest held-out test available.
 
 **Moving to the new machine.**
@@ -313,18 +323,24 @@ The goal is the joint Lyzenga model, and later DROP, over the whole scene's wate
 
 **Open decisions and next steps, in order.**
 1. **Finish the whole-scene gulf** (above): the reference, ACOLITE, the joint Lyzenga fit, then a held-out score outside the palm box.
-2. **G6 step 2** (above). Its held-out test is the gulf DROP tiles, and later the whole scene.
-3. **Record a Landsat 8 tier 4 baseline** (`bench.py run --tier 4` on `sites_l8`, then `score` and `compare`) before accepting model-core changes.
-4. **Decision for the user: ICESat-2 as DROP's κ-scale anchor (G1b iii).** The split reference and fold machinery in `gulf_lyzenga.py` would serve it: calibrate κ's scale on the calibration half and score the test half.
-5. **Lyzenga joint model:**
-   - ridge or fewer bands per scene, for transfer (the |R| ratio is 91);
-   - fill cells lacking a scene from the composite fit (this matters more over the whole scene);
-   - reach beyond about 16 m;
-   - a Lyzenga baseline at Exmouth from the training sites' soundings.
-6. **Smaller items:**
-   - a per-scene-median DROP variant, judged on the Exmouth training sites;
+   - It is also the first site through `FUTURE_EXPERIMENTS.md`'s site pipeline.
+   - It is one of that plan's reserved held-out regions, so no learned model may train on it.
+2. **Learned model, first steps** (`FUTURE_EXPERIMENTS.md`):
+   - choose and record the training sites and the held-out regions before any training;
+   - build `sites.py`;
+   - run H0 (local Lyzenga, DROP default, relocated Lyzenga) and H1, leave-region-out.
+3. **Lyzenga as the local baseline (H0(a)):**
+   - ridge or fewer bands per scene (the |R| ratio is 91);
+   - fill cells lacking a scene from the composite fit;
+   - a Lyzenga baseline at Exmouth from the soundings.
+4. **Only if the model core changes again:** record a Landsat 8 tier 4 baseline (`bench.py run --tier 4` on `sites_l8`, then `score` and `compare`).
+5. **Smaller items:**
    - a depth-map pan-sharpening step;
    - the remaining Polcyn/BOUNDARY items (REVIEW.md §2e, item 9).
+6. **Closed with DROP's freeze:**
+   - G6 step 2 (the aerosol where the water is);
+   - G1b(iii) (ICESat-2 as DROP's κ-scale anchor, superseded: labels are now used in training only);
+   - the per-scene-median DROP variant.
 
 ## Log
 
