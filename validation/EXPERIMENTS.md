@@ -1660,7 +1660,35 @@ photic's `MODEL lyzenga_log_linear` was rewritten as a least-squares fit (REVIEW
   - `lyzenga.png`, the bathymetry;
   - `icesat2.png`, the reference itself as points;
   - `correlation.png`, the test and calibration halves against ICESat-2.
-- **For the sounding-free goal:** an ICESat-2-fitted empirical model sets a high bar at this site (80% hits). DROP's job is to match its reach without soundings.
+**All six scenes at once** (2026-10-20). The fits above used one image, the median composite at the scenes' mean tide. The joint model is one Lyzenga regression with every scene's log-bands as predictors, depth = a₀ + Σ_s Σ_b a_sb ln L_sb:
+- It includes every weighted sum of per-scene fits as a special case, so one least-squares solve finds the best combination.
+- The scenes' tides go into the intercept, so the target is depth below MSL.
+- A cell needs every scene.
+- With four bands per scene (coastal 443, blue 483, green 561, red 655), it has 24 predictors and 25 coefficients; photic now allows up to 32 grids.
+
+| Cross-validation (calibration half) | Hits % | With a depth |
+|---|---|---|
+| Composite, best (443 + 561, r3, `POWER`) | 74.5 | 100% |
+| Composite, four bands (r3, `POWER`) | 73.7 | 100% |
+| **Joint, four bands per scene (r2, `POWER`)** | **83.9** | 96.3% |
+| Joint, 483 + 561 + 655 | 83.3 | 96.3% |
+| Joint, 443 + 561 | 79.4 | 96.3% |
+
+Test half (5,695 cells; scored for the chosen joint model, and for the four-band composite as asked):
+
+| | With a depth | Hits % | RMSE m | Bias m | 0–2 | 2–5 | 5–10 | 10–20 |
+|---|---|---|---|---|---|---|---|---|
+| **Joint, four bands, `POWER`** | 97.3% | **90.0** | **1.21** | −0.02 | 66 | 86 | 92 | 94 |
+| Composite, four bands, `POWER` | 100% | 79.8 | 1.47 | +0.16 | 46 | 81 | 79 | 84 |
+| 2019 photic product | 100% | 58.8 | 1.88 | −0.84 | 13 | 76 | 87 | 23 |
+
+- **Modelling the scenes jointly is worth 10 points of hits** over the composite: r 0.954, slope 0.90. The gain holds at every depth, most at 0–2 m (46 → 66%) and 5–10 m (79 → 92%). The scenes differ in tide, glint and noise, and a median composite throws that away; the joint fit weights each scene's bands by what they add.
+- **Fit:** in-sample R² 0.78, robust σ 0.70 m. The power law is now mild (exponent 0.96, from 6.9 m).
+- **Limits:**
+  - it still saturates near 16 m (20–30 m: no hits);
+  - 2.7% of test cells get no depth, where some scene lacks data (cloud, swath edge);
+  - the coefficients' |R| ratio is 91, so with 24 correlated predictors, ridge or fewer bands per scene may generalise better elsewhere.
+- **For the sounding-free goal:** an ICESat-2-fitted empirical model sets a high bar at this site, 90% hits. DROP already fits all scenes jointly, so it has the same advantage; it needs the reach.
 
 ### Phase B order (from Phase A)
 

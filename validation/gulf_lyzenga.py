@@ -5,15 +5,23 @@ ICESat-2 on a split reference.
             band on a 0.0003 deg grid over the site's box (.asc), and the ATL24 seabed photons
             split by pass into a calibration half (soundings for photic, .xyz) and a test half
             (derived/tier4/gulf_lyzenga/)
-  cv        choose the bands, the deep-water signal and the window by 4-fold cross-validation
-            by pass within the calibration half (cv.json); the test half is not used
-  fit       photic's MODEL lyzenga_log_linear with the chosen settings on the whole calibration
+  cv        choose the input (the composite, or all scenes jointly), the bands, the deep-water
+            signal, the window and POWER by 4-fold cross-validation by pass within the calibration
+            half (cv.json); the test half is not used
+  fit [composite|joint /bands/ /radius/ power|nopower]
+            photic's MODEL lyzenga_log_linear with the chosen settings (or those given) on the whole calibration
             half, scored once on the test half, with DROP and the 2019 product on the same cells
             (score.json), and the map in the style of photic's PLOT GRID ... PALETTE gmt
   correlation  the fitted depths against ICESat-2, test and calibration halves, as density plots
             (runs/gulf_lyzenga/final/correlation.png)
   points    the ICESat-2 reference itself as coloured points, in the same format and colour scale as
             the bathymetry map (runs/gulf_lyzenga/final/icesat2.png)
+
+Inputs: the composite (one image at the scenes' mean tide), or every scene at once: one Lyzenga
+regression with each scene's log-bands as predictors, depth = a0 + sum_s sum_b a_sb ln L_sb. The
+joint model includes every weighted sum of per-scene fits as a special case, so one least-squares
+solve finds the best combination; the scenes' tides (constant per scene) go into the intercept, so
+the target is depth below MSL (TIDE 0). A cell needs every scene.
 
 The split is by ICESat-2 pass (granule), alternating by date after a seeded shuffle, so the two
 halves are separate tracks rather than neighbouring photons of one track. A cell is the median of
@@ -51,6 +59,7 @@ FOLDS = 4
 BAND_SETS = [(443, 483, 561), (483, 561), (443, 483, 561, 655), (483, 561, 655), (443, 561)]
 LSM_CHOICES = ["percentile", "none"]
 RADII = [1, 2, 3]
+INPUTS = ["composite", "joint"]
 POWER_CHOICES = [False, True]  # MODEL lyzenga_log_linear ... POWER: the inverted power law, deep side
 COLOUR_RANGE = (-25.0, 0.0)  # m, the maps' colour scale (PLOT GRID ... MIN MAX), shared by both maps
 NC_LOCK = threading.Lock()  # netCDF4 is not thread-safe
@@ -82,7 +91,7 @@ def composite(lon, lat):
             band[far | ~(band > 0)] = np.nan
             stacks[wl].append(band)
         tides.append(tide_at(attrs["isodate"]))
-    return {wl: np.nanmedian(np.array(v), axis=0) for wl, v in stacks.items()}, float(np.mean(tides)), tides
+    return {wl: np.nanmedian(np.array(v), axis=0) for wl, v in stacks.items()}, float(np.mean(tides)), tides, stacks
 
 
 def water_mask():
@@ -125,12 +134,16 @@ def bin_cells(P, lon, lat):
 def prepare():
     os.makedirs(OUT, exist_ok=True)
     lon, lat = grid()
-    bands, mean_tide, tides = composite(lon, lat)
+    bands, mean_tide, tides, stacks = composite(lon, lat)
     names = []
     for wl, b in bands.items():
         name = "b%d" % wl
         tp.write_asc(os.path.join(OUT, name + ".asc"), b, lon, lat, CELL)
         names.append(name)
+    # Each scene's own bands too, for the joint model (all scenes' bands as predictors at once).
+    for wl, v in stacks.items():
+        for k, b in enumerate(v):
+            tp.write_asc(os.path.join(OUT, "s%d_b%d.asc" % (k + 1, wl)), b, lon, lat, CELL)
     water = np.all([np.isfinite(b) for b in bands.values()], axis=0)
     cal, test, n_cal, n_test = split_photons()
     cal_depth, cal_occupied = bin_cells(cal, lon, lat)
@@ -145,6 +158,7 @@ def prepare():
     np.savez(os.path.join(OUT, "reference.npz"), lon=lon, lat=lat, calibration=cal_depth, test=test_depth,
              mean_tide=mean_tide)
     meta = dict(cell=CELL, shape=[len(lat), len(lon)], bands=names, scene_tides=tides, mean_tide=mean_tide,
+                n_scenes=len(tides),
                 seed=SEED, passes_calibration=n_cal, passes_test=n_test,
                 cells_calibration=int(np.isfinite(cal_depth).sum()), cells_test=int(np.isfinite(test_depth).sum()))
     json.dump(meta, open(os.path.join(OUT, "meta.json"), "w"), indent=1)
@@ -158,15 +172,19 @@ def write_xyz(path, depth, lon, lat, tide):
             f.write("%.7f %.7f %.3f\n" % (lon[b], lat[a], depth[a, b] + tide))
 
 
-def run_photic(rundir, soundings, bands, lsm, radius, extra="", plot=None, name="H"):
-    """MODEL lyzenga_log_linear on the composite; returns the depth grid (positive down, nan
-    where none) and photic's printed fit."""
+def run_photic(rundir, soundings, bands, lsm, radius, extra="", plot=None, name="H", inputs="composite"):
+    """MODEL lyzenga_log_linear on the composite, or on every scene's bands jointly; returns the
+    depth grid (positive down, nan where none) and photic's printed fit."""
     shutil.rmtree(rundir, ignore_errors=True)
     os.makedirs(rundir)
-    names = ["b%d" % b for b in bands]
+    if inputs == "joint":
+        n_scenes = json.load(open(os.path.join(OUT, "meta.json")))["n_scenes"]
+        names = ["s%d_b%d" % (k + 1, b) for k in range(n_scenes) for b in bands]
+    else:
+        names = ["b%d" % b for b in bands]
     lines = ["READ GRID %s %s" % (n, os.path.join(OUT, n + ".asc")) for n in names]
     lines.append("READ SOUNDINGS %s" % soundings)
-    words = "LSM " + " ".join("0" for _ in bands) if lsm == "none" else "PERCENTILE 1"
+    words = "LSM " + " ".join("0" for _ in names) if lsm == "none" else "PERCENTILE 1"
     lines.append("MODEL lyzenga_log_linear GRIDS %s BATHYMETRY %s %s RADIUS %d DEPTHS 0 30%s"
                  % (" ".join(names), name, words, radius, extra))
     lines.append("WRITE GRID %s H.nc" % name)
@@ -221,18 +239,26 @@ def cv():
         test[~water | train_occupied] = np.nan
         path = os.path.join(OUT, "cv_train_%d.xyz" % f)
         write_xyz(path, train, lon, lat, meta["mean_tide"])
+        write_xyz(path.replace(".xyz", "_msl.xyz"), train, lon, lat, 0.0)
         folds.append((path, test))
-    configs = [(b, l, r, pw) for b in BAND_SETS for l in LSM_CHOICES for r in RADII for pw in POWER_CHOICES]
+    # The joint model has many predictors (up to all four bands of each of six scenes, 24): only
+    # ln L (Lsm per scene and band is not estimated), radius 2 or 3; the composite keeps the full search.
+    configs = [(b, l, r, pw, "composite") for b in BAND_SETS for l in LSM_CHOICES for r in RADII for pw in POWER_CHOICES]
+    configs += [(b, "none", r, pw, "joint") for b in BAND_SETS for r in (2, 3) for pw in POWER_CHOICES]
 
     def one(job):
-        (bands, lsm, radius, pw), f = job
-        H, _ = run_photic(os.path.join(WORK, "cv", "%s_%s_r%d%s_f%d" % ("-".join(map(str, bands)), lsm, radius,
-                                                                         "_power" if pw else "", f)),
-                          folds[f][0], bands, lsm, radius, " TIDE %.4f%s" % (meta["mean_tide"], " POWER" if pw else ""))
+        (bands, lsm, radius, pw, inputs), f = job
+        # The joint model's target is depth below MSL (the tides are in its intercept).
+        tide = meta["mean_tide"] if inputs == "composite" else 0.0
+        soundings = folds[f][0] if inputs == "composite" else folds[f][0].replace(".xyz", "_msl.xyz")
+        H, _ = run_photic(os.path.join(WORK, "cv", "%s_%s_%s_r%d%s_f%d" % (inputs, "-".join(map(str, bands)), lsm,
+                                                                            radius, "_power" if pw else "", f)),
+                          soundings, bands, lsm, radius, " TIDE %.4f%s" % (tide, " POWER" if pw else ""),
+                          inputs=inputs)
         test = folds[f][1]
         m = np.isfinite(test) & np.isfinite(H)
         e = H[m] - test[m]
-        return (bands, lsm, radius, pw), dict(n=int(np.isfinite(test).sum()), got=int(m.sum()), sse=float(np.sum(e**2)),
+        return (bands, lsm, radius, pw, inputs), dict(n=int(np.isfinite(test).sum()), got=int(m.sum()), sse=float(np.sum(e**2)),
                                           hits=int(np.sum(np.abs(e) <= 0.5 + 0.1*test[m])))
     jobs = [(c, f) for c in configs for f in range(FOLDS)]
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -241,12 +267,13 @@ def cv():
     for c in configs:
         r = [x for k, x in results if k == c]
         n, got = sum(x["n"] for x in r), sum(x["got"] for x in r)
-        table.append(dict(bands=list(c[0]), lsm=c[1], radius=c[2], power=c[3], hits=sum(x["hits"] for x in r)/n,
+        table.append(dict(bands=list(c[0]), lsm=c[1], radius=c[2], power=c[3], inputs=c[4], hits=sum(x["hits"] for x in r)/n,
                           with_depth=got/n, rmse=float(np.sqrt(sum(x["sse"] for x in r)/max(got, 1)))))
     table.sort(key=lambda t: -t["hits"])
     for t in table:
-        print("%-22s %-10s r%d %-5s  hits %.3f  with depth %.3f  rmse %.2f" % (
-            t["bands"], t["lsm"], t["radius"], "power" if t["power"] else "", t["hits"], t["with_depth"], t["rmse"]))
+        print("%-9s %-22s %-10s r%d %-5s  hits %.3f  with depth %.3f  rmse %.2f" % (
+            t["inputs"], t["bands"], t["lsm"], t["radius"], "power" if t["power"] else "", t["hits"], t["with_depth"],
+            t["rmse"]))
     json.dump(dict(folds=FOLDS, configs=table, chosen=table[0]), open(os.path.join(OUT, "cv.json"), "w"), indent=1)
 
 
@@ -282,18 +309,32 @@ def drop_on_cells(lon, lat, cells):
     return out
 
 
-def fit():
+def fit(override=None):
+    """The chosen settings (cv.json), or override = (inputs, bands, radius, power) for a named
+    alternative, written to runs/gulf_lyzenga/<inputs>_<bands>_r<radius>[_power]/ and
+    score_<same>.json."""
     lon, lat = grid()
     meta = json.load(open(os.path.join(OUT, "meta.json")))
     ref = np.load(os.path.join(OUT, "reference.npz"))
     c = json.load(open(os.path.join(OUT, "cv.json")))["chosen"]
-    rundir = os.path.join(WORK, "final")
+    rundir, score_file = os.path.join(WORK, "final"), os.path.join(OUT, "score.json")
+    if override:
+        inputs, bands, radius, power = override
+        c = dict(inputs=inputs, bands=bands, lsm="none", radius=radius, power=power, override=True)
+        tag = "%s_%s_r%d%s" % (inputs, "-".join(map(str, bands)), radius, "_power" if power else "")
+        rundir, score_file = os.path.join(WORK, tag), os.path.join(OUT, "score_%s.json" % tag)
     # As the 2019 product's figure (dubai_to_abu_dhabi_gmt.png): photic's own plot.
     plot = ["SET BACKGROUND WHITE", "SET PAGESIZE 100", "SET LINEWIDTH 20",
             "PLOT GRID Dubai_to_Abu_Dhabi PALETTE gmt MIN %g MAX %g" % COLOUR_RANGE]
-    H, fit_log = run_photic(rundir, os.path.join(OUT, "calibration.xyz"), c["bands"], c["lsm"], c["radius"],
-                            " TIDE %.4f%s ERROR H_error" % (meta["mean_tide"], " POWER" if c.get("power") else ""), plot,
-                            name="Dubai_to_Abu_Dhabi")
+    joint = c.get("inputs") == "joint"
+    soundings = os.path.join(OUT, "calibration.xyz")
+    if joint:
+        soundings = os.path.join(OUT, "calibration_msl.xyz")
+        write_xyz(soundings, ref["calibration"], lon, lat, 0.0)
+    H, fit_log = run_photic(rundir, soundings, c["bands"], c["lsm"], c["radius"],
+                            " TIDE %.4f%s ERROR H_error" % (0.0 if joint else meta["mean_tide"],
+                                                           " POWER" if c.get("power") else ""), plot,
+                            name="Dubai_to_Abu_Dhabi", inputs=c.get("inputs", "composite"))
     test = ref["test"]
     result = dict(settings=c, fit=fit_log, lyzenga=scores(test, H))
     if os.path.exists(PRODUCT_2019):
@@ -310,7 +351,7 @@ def fit():
     result["tiles"] = dict(lyzenga=scores(T, H), drop=scores(T, D))
     if os.path.exists(PRODUCT_2019):
         result["tiles"]["product_2019"] = scores(T, on_cells(PRODUCT_2019, lon, lat, T))
-    json.dump(result, open(os.path.join(OUT, "score.json"), "w"), indent=1)
+    json.dump(result, open(score_file, "w"), indent=1)
     print("\n".join(fit_log))
     print(json.dumps({k: v for k, v in result.items() if k not in ("fit",)}, indent=1))
 
@@ -397,7 +438,10 @@ def points():
 
 if __name__ == "__main__":
     commands = {"prepare": prepare, "cv": cv, "fit": fit, "correlation": correlation, "points": points}
-    if len(sys.argv) == 2 and sys.argv[1] in commands:
+    if len(sys.argv) == 6 and sys.argv[1] == "fit":
+        # fit composite|joint 443,483,561,655 /radius/ power|nopower
+        fit((sys.argv[2], [int(b) for b in sys.argv[3].split(",")], int(sys.argv[4]), sys.argv[5] == "power"))
+    elif len(sys.argv) == 2 and sys.argv[1] in commands:
         commands[sys.argv[1]]()
     else:
         raise SystemExit(__doc__)

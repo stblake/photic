@@ -59,7 +59,7 @@
 
 #include "lyzenga.h"
 
-#define LYZ_MAX_BANDS 16
+#define LYZ_MAX_BANDS 32  // e.g. 3 bands of each of 6 scenes, fitted jointly
 #define LYZ_MAX_ITER 100
 
 static int compare_doubles(const void *a, const void *b) {
