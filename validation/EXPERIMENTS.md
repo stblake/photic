@@ -168,6 +168,51 @@ Tier 3, moderate water, 2 scenes, noise 0.0005, by depth: 0–2 m RMSE 0.08 m; 2
 **Regression: the `DEPTHS` prior scenarios, 2.9 → 9.4 m.** With LM the prior is only a starting point, and the fit leaves it where depth is unidentifiable.
 - **B17:** fit the prior as a residual, (H − H_prior)/σ_prior, so it weighs in where the data say little.
 
+### Candidates 1 and 2 (2026-10-14)
+
+- **Candidate 1, `044db48`** (branch `b12-geometry`): B6 + C2 (optically deep test) + B7 metadata + B15 glint offset.
+- **Candidate 2, `a54973d`** (branch `candidate2`): candidate 1 + Y_MODEL 2 + BOTTOM_BOUNDS.
+
+Both were run on tiers 1–4 and on the 5-band tier 4 sites (`sites5`, with Sentinel-2 B5). Baseline is `baseline_v2` (3aceb7a with the current benchmark).
+
+**Tier 3** (median over scenarios of RMSE m / within tolerance / fraction modelled):
+
+| Scenarios | baseline_v2 | B6 `a6d4847` | Cand. 1 | Cand. 2 |
+|---|---|---|---|---|
+| control (photic forward) | 37.6 / 0.00 / 1.00 | 1.82 / 0.87 / 1.00 | 0.09 / 1.00 / 0.46 | 1.93 / 0.68 / 0.45 |
+| noise-free | 30.4 / 0.02 / 1.00 | 4.08 / 0.37 / 1.00 | 1.72 / 0.59 / 0.46 | 2.43 / 0.71 / 0.49 |
+| noisy | 16.5 / 0.08 / 0.99 | 11.1 / 0.28 / 0.99 | 1.33 / 0.68 / 0.37 | 2.75 / 0.63 / 0.37 |
+| `DEPTHS` prior | 2.88 / 0.60 / 1.00 | 9.41 / 0.37 / 1.00 | 4.65 / 0.64 / 0.47 | 9.64 / 0.44 / 0.29 |
+| realistic bottoms, noise-free | 23.2 / 0.02 / 1.00 | – | 1.50 / 0.68 / 0.32 | **1.06 / 0.86** / 0.32 |
+| realistic bottoms, noisy | 17.9 / 0.11 / 0.99 | – | 1.28 / 0.75 / 0.22 | **1.29 / 0.84** / 0.21 |
+
+**The fraction modelled is the catch.** C2 drops every pixel it calls optically deep, and RMSE is scored only on the pixels kept. Most of the "gain" over B6 is that the worst pixels are no longer scored.
+- Turbid scenes keep 20–25% of pixels; realistic-bottom scenes keep 11–35%.
+- The default tier 3 bottoms (albedo 0.6 for every class) are outside candidate 2's class bounds, so its loss on the control and default scenarios is expected. On realistic bottoms, candidate 2 is the best version.
+
+**Tier 4, on the pixels both versions report** (RMSE m, within tolerance):
+
+| Site | Pixels: B6 → C1 → C2 | B6 | Cand. 1 | Cand. 2 (common with B6) |
+|---|---|---|---|---|
+| Marina | 6020 → 3640 → 3658 | 2.27, 0.16 | 2.46, 0.17 | 2.41, 0.16 |
+| Tantabiddi | 10607 → 2725 → 5480 | 2.62, 0.65 | 3.11, 0.62 | 2.51, 0.48 |
+| Bundegi | 1509 → 468 → 498 | 2.93, 0.15 | 3.03, 0.26 | 2.39, 0.42 |
+| Gulf entrance | 2427 → 86 → 85 | 5.57, 0.14 | 5.22, 0.36 | 4.26, 0.31 |
+
+- **Same pixels, similar depths.** Against B6, candidate 1 is slightly worse at Marina and Tantabiddi. Candidate 2 is equal or better everywhere and keeps twice as many Tantabiddi pixels as candidate 1.
+- On the pixels both candidates report, candidate 2 beats candidate 1 at every site. For example, Tantabiddi is 2.20 vs 3.02 m and Bundegi 2.11 vs 2.54 m.
+- **Pixels dropped are not deep.** Their surveyed depths are mostly 4–15 m. B6 got them badly wrong: 7–13 m too shallow, with almost none within tolerance at Marina, Bundegi and the gulf entrance. So the deep test works as a good "depth not resolvable" mask there.
+- **It over-rejects at Tantabiddi.** Candidate 1 drops 80% of the 2–5 m pixels, and B6 had 38% of those within tolerance. Candidate 2 drops 48%. The deep fit matches about as well because of the dark-bottom ambiguity, not because the water is deep.
+- **5 bands** (candidate 1, `sites5`): RMSE 2.31 / 3.28 / 2.57 / 8.06 m, with 4–52% more pixels kept than with 4 bands. Candidate 2's `sites5` run is pending.
+- **Run time:** candidate 2 takes 3–3.5× longer than candidate 1 per tier 4 site (Marina 99 vs 28 min). Y_MODEL 2's self-consistent Y and the bounded bottom need more LM iterations.
+
+**Verdict: neither candidate passes the acceptance rule as it stands.** Coverage loss reads as accuracy gain, so the benchmark needs:
+1. **A coverage-aware score:** report flagged pixels as a separate class, and score depth on a fixed pixel set (the pixels the reference version models), plus the coverage at each depth bin.
+2. **A deep test that flags only the unresolvable:** reject only when the shallow fit's depth is uncertain (its profile is flat across 5–30 m), not whenever the deep model fits about as well. Emit the flag as an output grid rather than dropping the depth.
+3. **B17** for the `DEPTHS` prior regression, which both candidates still have.
+
+Candidate 2 is the better base for that work: it is equal to or better than candidate 1 on every like-for-like tier 4 comparison and on realistic tier 3 bottoms.
+
 ### Initial depth from physics (2026-10-13, `h0_estimate.py`)
 
 The bottom signal D_i = rrs_i − rrs_dp,i = (ρ_i/π − rrs_dp,i) exp(−M κ_i H). For the red–green pair, the bottom brightness cancels:
