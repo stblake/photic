@@ -1923,6 +1923,8 @@ photic's `MODEL lyzenga_log_linear` was rewritten as a least-squares fit (REVIEW
 | Test half (5,695 cells) | Hits % | RMSE m | Bias m | r | Slope |
 |---|---|---|---|---|---|
 | Lyzenga + `POWER`, fitted to ICESat-2 | **79.6** | **1.46** | +0.21 | 0.935 | 0.87 |
+
+These composite numbers were made with the mean tide counted twice, so the depths read about 0.12 m too deep (fixed on 2026-10-20; see the end of the attenuation entry below). The corrected four-band composite is in the joint model's test table below.
 | 2019 photic product | 58.8 | 1.88 | −0.84 | | |
 
 | Hits % by depth (m) | 0–2 | 2–5 | 5–10 | 10–20 |
@@ -1946,8 +1948,8 @@ photic's `MODEL lyzenga_log_linear` was rewritten as a least-squares fit (REVIEW
 
 | Cross-validation (calibration half) | Hits % | With a depth |
 |---|---|---|
-| Composite, best (443 + 561, r3, `POWER`) | 74.5 | 100% |
-| Composite, four bands (r3, `POWER`) | 73.7 | 100% |
+| Composite, best (443 + 561, r3, `POWER`) | 74.3 | 100% |
+| Composite, four bands (r3, `POWER`) | 73.6 | 100% |
 | **Joint, four bands per scene (r2, `POWER`)** | **83.9** | 96.3% |
 | Joint, 483 + 561 + 655 | 83.3 | 96.3% |
 | Joint, 443 + 561 | 79.4 | 96.3% |
@@ -1957,10 +1959,10 @@ Test half (5,695 cells; scored for the chosen joint model, and for the four-band
 | | With a depth | Hits % | RMSE m | Bias m | 0–2 | 2–5 | 5–10 | 10–20 |
 |---|---|---|---|---|---|---|---|---|
 | **Joint, four bands, `POWER`** | 97.3% | **90.0** | **1.21** | −0.02 | 66 | 86 | 92 | 94 |
-| Composite, four bands, `POWER` | 100% | 79.8 | 1.47 | +0.16 | 46 | 81 | 79 | 84 |
+| Composite, four bands, `POWER` | 100% | 80.3 | 1.46 | +0.05 | 49 | 78 | 83 | 83 |
 | 2019 photic product | 100% | 58.8 | 1.88 | −0.84 | 13 | 76 | 87 | 23 |
 
-- **Modelling the scenes jointly is worth 10 points of hits** over the composite: r 0.954, slope 0.90. The gain holds at every depth, most at 0–2 m (46 → 66%) and 5–10 m (79 → 92%). The scenes differ in tide, glint and noise, and a median composite throws that away; the joint fit weights each scene's bands by what they add.
+- **Modelling the scenes jointly is worth 10 points of hits** over the composite: r 0.954, slope 0.90. The gain holds at every depth, most at 0–2 m (49 → 66%) and 5–10 m (83 → 92%). The scenes differ in tide, glint and noise, and a median composite throws that away; the joint fit weights each scene's bands by what they add.
 - **Fit:** in-sample R² 0.78, robust σ 0.70 m. The power law is now mild (exponent 0.96, from 6.9 m).
 - **Limits:**
   - it still saturates near 16 m (20–30 m: no hits);
@@ -2014,7 +2016,11 @@ Test half (5,695 cells; scored for the chosen joint model, and for the four-band
   - fit the deep-water level per grid in stage 1, and bound K below by pure water;
   - two bottom classes in stage 2;
   - check K against QAA on rrs∞ − δ and against an ocean-colour Kd(490).
-- **Found on the way:** the composite runs appear to count the mean tide twice. `calibration.xyz` holds depth + mean tide, and photic adds `TIDE` (the mean tide) again. The composite's depths would then be about 0.12 m too deep, which is consistent with its +0.16 to +0.21 m test bias. This is not fixed; the joint model (TIDE 0, depths below MSL) is unaffected.
+- **Found on the way, and fixed: the composite runs counted the mean tide twice.**
+  - **Cause:** `calibration.xyz` and the cross-validation files held depth + mean tide (0.118 m), and `TIDE` (the mean tide) made photic add it again. The fit's target was depth + 2 × tide, and only one tide was removed from the output, so the composite read 0.12 m too deep.
+  - **Fix:** `gulf_lyzenga.py` now writes every soundings file below MSL (`write_xyz`), and photic's `TIDE` adds the tide; the separate `_msl.xyz` files are gone, because they were now the same.
+  - **Effect on the four-band composite (test half):** bias +0.16 → +0.05 m, hits 79.8 → 80.3%, RMSE 1.47 → 1.46 m. The shift, 0.11 m, is the mean tide, less a little from `POWER`'s curvature. In cross-validation the composites move by at most 0.2 points (best 74.5 → 74.3%), so the choice is unchanged.
+  - **The joint model is unaffected** (TIDE 0, soundings below MSL): test-half hits are still 90.0%, RMSE 1.21 m, bias −0.02 m, identical to the last digit.
 
 ### Phase B order (from Phase A)
 

@@ -33,9 +33,9 @@ the target is depth below MSL (TIDE 0). A cell needs every scene.
 The split is by ICESat-2 pass (granule), alternating by date after a seeded shuffle, so the two
 halves are separate tracks rather than neighbouring photons of one track. A cell is the median of
 at least 3 photons spreading at most 0.5 m (tier4_gulf.binned); a test cell that also holds
-calibration photons is dropped. Depths are below MSL; the composite is at the scenes' mean tide,
-which is added to the calibration depths (the depth the light saw) and removed again from the
-modelled depths before scoring.
+calibration photons is dropped. Depths are below MSL, and so are the soundings files; the composite
+is at the scenes' mean tide, which photic's TIDE adds to the soundings (the depth the light saw) and
+removes again from the modelled depths.
 """
 
 import glob
@@ -215,11 +215,7 @@ def prepare():
     test_depth, _ = bin_cells(test, lon, lat)
     cal_depth[~water] = np.nan
     test_depth[~water | cal_occupied] = np.nan
-    i, j = np.nonzero(np.isfinite(cal_depth))
-    with open(os.path.join(OUT, "calibration.xyz"), "w") as f:
-        for a, b in zip(i, j):
-            # photic's soundings: lon lat depth (positive down), here at the composite's mean tide.
-            f.write("%.7f %.7f %.3f\n" % (lon[b], lat[a], cal_depth[a, b] + mean_tide))
+    write_xyz(os.path.join(OUT, "calibration.xyz"), cal_depth, lon, lat)
     np.savez(os.path.join(OUT, "reference.npz"), lon=lon, lat=lat, calibration=cal_depth, test=test_depth,
              mean_tide=mean_tide)
     meta = dict(cell=CELL, shape=[len(lat), len(lon)], bands=names, scene_tides=tides, mean_tide=mean_tide,
@@ -230,11 +226,13 @@ def prepare():
     print(json.dumps(meta, indent=1))
 
 
-def write_xyz(path, depth, lon, lat, tide):
+def write_xyz(path, depth, lon, lat):
+    """photic's soundings: lon lat depth below MSL (positive down). The tide at the imagery's time
+    is photic's TIDE, which adds it; adding it here as well would count it twice."""
     i, j = np.nonzero(np.isfinite(depth))
     with open(path, "w") as f:
         for a, b in zip(i, j):
-            f.write("%.7f %.7f %.3f\n" % (lon[b], lat[a], depth[a, b] + tide))
+            f.write("%.7f %.7f %.3f\n" % (lon[b], lat[a], depth[a, b]))
 
 
 def scene_geometry():
@@ -320,7 +318,7 @@ def scores(ref, H):
 
 def cv_folds(lon, lat, meta):
     """The cross-validation folds by pass within the calibration half: each fold's training
-    soundings (cv_train_<f>.xyz at the mean tide, and _msl.xyz) and its held-out cells."""
+    soundings (cv_train_<f>.xyz, below MSL) and its held-out cells."""
     water = water_mask()
     cal, _, _, _ = split_photons()
     passes = np.random.default_rng(SEED + 1).permutation(np.unique(cal["granule"]))
@@ -332,8 +330,7 @@ def cv_folds(lon, lat, meta):
         train[~water] = np.nan
         test[~water | train_occupied] = np.nan
         path = os.path.join(OUT, "cv_train_%d.xyz" % f)
-        write_xyz(path, train, lon, lat, meta["mean_tide"])
-        write_xyz(path.replace(".xyz", "_msl.xyz"), train, lon, lat, 0.0)
+        write_xyz(path, train, lon, lat)
         folds.append((path, test))
     return folds
 
@@ -351,7 +348,7 @@ def cv():
         (bands, lsm, radius, pw, inputs), f = job
         # The joint model's target is depth below MSL (the tides are in its intercept).
         tide = meta["mean_tide"] if inputs == "composite" else 0.0
-        soundings = folds[f][0] if inputs == "composite" else folds[f][0].replace(".xyz", "_msl.xyz")
+        soundings = folds[f][0]
         H, _ = run_photic(os.path.join(WORK, "cv", "%s_%s_%s_r%d%s_f%d" % (inputs, "-".join(map(str, bands)), lsm,
                                                                             radius, "_power" if pw else "", f)),
                           soundings, bands, lsm, radius, " TIDE %.4f%s" % (tide, " POWER" if pw else ""),
@@ -402,7 +399,7 @@ def attenuation(bands=None):
 
     def one(f):
         rundir = os.path.join(work, "fold%d" % f)
-        H, _ = run_photic(rundir, folds[f][0].replace(".xyz", "_msl.xyz"), c["bands"], c["lsm"], c["radius"], extra,
+        H, _ = run_photic(rundir, folds[f][0], c["bands"], c["lsm"], c["radius"], extra,
                           inputs="joint", writes=[("K_depth", "K_depth.nc"), ("K_depth_sigma", "K_depth_sigma.nc")])
         with NC_LOCK:
             A = -tier3_scenes.read_nc(os.path.join(rundir, "K_depth.nc"))
@@ -421,7 +418,7 @@ def attenuation(bands=None):
     rundir = os.path.join(work, "final")
     names = ["s%d_b%d" % (k + 1, b) for k in range(meta["n_scenes"]) for b in c["bands"]]
     outs = ["K_" + n for n in names] + ["K_depth", "K_depth_sigma", "K_bottom"]
-    _, fit_log = run_photic(rundir, os.path.join(OUT, "calibration_msl.xyz"), c["bands"], c["lsm"], c["radius"], extra,
+    _, fit_log = run_photic(rundir, os.path.join(OUT, "calibration.xyz"), c["bands"], c["lsm"], c["radius"], extra,
                             inputs="joint", writes=[(o, o + ".nc") for o in outs])
     result["fit"] = fit_log
     json.dump(result, open(os.path.join(OUT, "attenuation%s.json" % tag), "w"), indent=1)
@@ -513,9 +510,6 @@ def fit(override=None):
             "PLOT GRID Dubai_to_Abu_Dhabi PALETTE gmt MIN %g MAX %g" % COLOUR_RANGE]
     joint = c.get("inputs") == "joint"
     soundings = os.path.join(OUT, "calibration.xyz")
-    if joint:
-        soundings = os.path.join(OUT, "calibration_msl.xyz")
-        write_xyz(soundings, ref["calibration"], lon, lat, 0.0)
     grids = ["s%d_b%d" % (k + 1, b) for k in range(meta["n_scenes"]) for b in c["bands"]] if joint else \
         ["b%d" % b for b in c["bands"]]
     H, fit_log = run_photic(rundir, soundings, c["bands"], c["lsm"], c["radius"],
