@@ -2002,6 +2002,15 @@ Test half (5,695 cells; scored for the chosen joint model, and for the four-band
 - **K(655) is not physical:** 0.085–0.19 m⁻¹, against pure water's absorption alone of about 0.35–0.4 m⁻¹.
   - The red sees the bottom only to a few metres. Its deep-water signal varies (turbidity, adjacency, the atmospheric residual) by far more than the darkest cells' spread, which sets the threshold. So nearly every sounding stays "active", and the slope is flattened.
   - The fix would be a deep-water level fitted per grid (or as a field), or a floor at pure water's K. Neither is built.
+- **Figures** (`runs/gulf_lyzenga/attenuation[_443-483-561]/final/`):
+  - `attenuation.png`: K of each band (the median over the scenes), the attenuation's depth and its σ;
+  - `k_maps.png`: K of every scene and band, one colour scale per band;
+  - `k_spectra.png`: each scene's K against wavelength at the 60 nodes with soundings (median and 10th to 90th percentiles), with pure water's absorption a_w (Pope and Fry 1997), below which K cannot physically fall.
+  - **What the spectra show:**
+    - at 443 and 483 nm, K is 4–15× a_w, as expected when coloured dissolved matter and particles dominate;
+    - at 561 nm, K is barely above a_w (0.065–0.105 against 0.062), and 6% of the node values fall below it, most on the clearest scene (2019-03-13);
+    - every K(655) is below a_w (0.08–0.19 against about 0.37).
+    - So the flattening seen in the red already reaches the green on clear scenes. A pure-water floor would bind at 561 nm too, not only at 655.
 - **The depth from the attenuation does not compete with Lyzenga** (57–61% against 78–84% hits):
   - It comes from how K differs between bands and scenes, which is only 0.01–0.03 m⁻¹ at 443–561 nm. A change of bottom type (seagrass against sand) moves the log band ratio by about 0.5, that is by metres of depth.
   - The red's biased K wrecked 0–2 m (5% hits; 34% without the red).

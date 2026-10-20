@@ -12,14 +12,16 @@ ICESat-2 on a split reference.
             photic's MODEL lyzenga_log_linear with the chosen settings (or those given) on the whole calibration
             half, scored once on the test half, with DROP and the 2019 product on the same cells
             (score.json), and the map in the style of photic's PLOT GRID ... PALETTE gmt
-  correlation  the fitted depths against ICESat-2, test and calibration halves, as density plots
-            (runs/gulf_lyzenga/final/correlation.png)
+  correlation [/run/]  the fitted depths against ICESat-2, test and calibration halves, as density
+            plots (runs/gulf_lyzenga/final/correlation.png, or a fit's run, e.g.
+            composite_443-483-561-655_r3_power)
   points    the ICESat-2 reference itself as coloured points, in the same format and colour scale as
             the bathymetry map (runs/gulf_lyzenga/final/icesat2.png)
   attenuation [/bands/]  MODEL lyzenga_log_linear's ATTENUATION with the chosen joint model: K of every scene
             and band over the box, and the depth from it, scored against Lyzenga's out of fold on
             cv's folds (the calibration half only; attenuation.json), then the maps from the whole
-            calibration half (runs/gulf_lyzenga/attenuation/)
+            calibration half (runs/gulf_lyzenga/attenuation/: attenuation.png, and K of every scene and band
+            as maps, k_maps.png, and spectra against pure water, k_spectra.png)
 
 Every run passes ATTENUATION (each scene's tide and ACOLITE's sun and view zeniths), so photic
 also writes K and the attenuation's depth alongside Lyzenga's.
@@ -423,6 +425,7 @@ def attenuation(bands=None):
     result["fit"] = fit_log
     json.dump(result, open(os.path.join(OUT, "attenuation%s.json" % tag), "w"), indent=1)
     attenuation_maps(rundir, lon, lat, meta, c, names)
+    attenuation_k_plots(rundir, lon, lat, meta, c, names)
     print("\n".join(l for l in fit_log if "soundings, c" in l or "attenuation" in l or "Attenuation" in l))
     print(json.dumps(result["out_of_fold"], indent=1))
 
@@ -456,6 +459,80 @@ def attenuation_maps(rundir, lon, lat, meta, c, names):
     out = os.path.join(rundir, "attenuation.png")
     fig.savefig(out, dpi=110)
     print(out)
+
+
+def scene_dates():
+    """Each scene's date (ACOLITE's L2W isodate), in the composite's order."""
+    import netCDF4
+    files = projected_l2w() if g.REGION != "palm" else \
+        sorted(glob.glob(os.path.join(DATA, "derived", "tier4", g.ACOLITE, "*", "*L2W.nc")))
+    with NC_LOCK:
+        out = []
+        for f in files:
+            with netCDF4.Dataset(f) as d:
+                out.append(d.getncattr("isodate")[:10])
+    return out
+
+
+def attenuation_k_plots(rundir, lon, lat, meta, c, names):
+    """K of every scene and band as maps (k_maps.png, one colour scale per band) and as spectra
+    (k_spectra.png: each scene's median over the nodes with soundings, the bars their 10th to 90th
+    percentiles), with pure water's absorption, below which K cannot physically fall."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import tier3_scenes
+    nb, ns = len(c["bands"]), meta["n_scenes"]
+    dates, geo = scene_dates(), scene_geometry()
+    K = np.array([tier3_scenes.read_nc(os.path.join(rundir, "K_%s.nc" % n)) for n in names])
+    K[:, ~water_mask()] = np.nan
+    fig, axes = plt.subplots(ns, nb, figsize=(3.6*nb + 1, 2.5*ns + 0.8), constrained_layout=True, squeeze=False)
+    extent = (lon[0], lon[-1], lat[0], lat[-1])
+    for k, b in enumerate(c["bands"]):
+        lim = np.nanpercentile(K[k::nb], [2, 98])
+        for s in range(ns):
+            ax = axes[s, k]
+            im = ax.imshow(K[s*nb + k], origin="lower", extent=extent, cmap="viridis", vmin=lim[0], vmax=lim[1],
+                           interpolation="nearest")
+            ax.set_aspect(1.0/np.cos(np.radians(np.mean(lat))))
+            ax.tick_params(labelsize=7)
+            if s == 0:
+                ax.set_title("%d nm" % b, fontsize=11)
+            if k == 0:
+                ax.set_ylabel("%s\nsun %.0f\u00b0" % (dates[s], geo[s][0]), fontsize=9)
+        fig.colorbar(im, ax=axes[:, k], location="bottom", shrink=0.8, aspect=30, label="K, m$^{-1}$")
+    fig.suptitle("Dubai to Abu Dhabi: diffuse attenuation K of every scene and band (ATTENUATION, nodes %g deg)"
+                 % ATT_NODES, fontsize=12)
+    fig.savefig(os.path.join(rundir, "k_maps.png"), dpi=100)
+    plt.close(fig)
+
+    # The spectra at the nodes the soundings support (elsewhere K is the smoothing's extrapolation).
+    nodes = np.genfromtxt(os.path.join(rundir, "attenuation.csv"), delimiter=",", names=True)
+    held = nodes["SOUNDINGS"] > 0
+    aw = np.loadtxt([l for l in open(os.path.join(os.path.dirname(PHOTIC), "data", "aw_pope_fry_1997.csv"))
+                     if l[0].isdigit()], delimiter=",")
+    wl = np.array(c["bands"], dtype=float)
+    fig, ax = plt.subplots(figsize=(8, 5.5), constrained_layout=True)
+    for s in range(ns):
+        v = np.array([nodes[n][held] for n in names[s*nb:(s + 1)*nb]])
+        mid, lo, hi = np.median(v, axis=1), np.percentile(v, 10, axis=1), np.percentile(v, 90, axis=1)
+        x = wl + 2.0*(s - (ns - 1)/2.0)
+        ax.errorbar(x, mid, yerr=[mid - lo, hi - mid], marker="o", ms=5, capsize=3, lw=1.2,
+                    label="%s (sun %.0f\u00b0)" % (dates[s], geo[s][0]))
+    t = np.linspace(wl.min() - 15, wl.max() + 15, 200)
+    ax.plot(t, np.interp(t, aw[:, 0], aw[:, 1]), color="k", ls="--", lw=1.2,
+            label="pure water absorption $a_w$ (Pope and Fry 1997): K cannot be lower")
+    ax.set_xlabel("Wavelength (nm)")
+    ax.set_ylabel("K (m$^{-1}$)")
+    ax.set_yscale("log")
+    ax.set_xticks(wl)
+    ax.grid(alpha=0.3, which="both")
+    ax.legend(fontsize=8, loc="upper left")
+    ax.set_title("K at the %d nodes with soundings: median and 10th to 90th percentiles, by scene" % held.sum(),
+                 fontsize=10)
+    fig.savefig(os.path.join(rundir, "k_spectra.png"), dpi=130)
+    plt.close(fig)
+    print(os.path.join(rundir, "k_maps.png"), os.path.join(rundir, "k_spectra.png"))
 
 
 def on_cells(path, lon, lat, cells):
@@ -538,13 +615,14 @@ def fit(override=None):
     print(json.dumps({k: v for k, v in result.items() if k not in ("fit",)}, indent=1))
 
 
-def correlation():
+def correlation(run="final"):
+    """The run's depths (runs/gulf_lyzenga/<run>/, default the chosen model's) against ICESat-2."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.colors import LogNorm
     import tier3_scenes
-    rundir = os.path.join(WORK, "final")
+    rundir = os.path.join(WORK, run)
     H = -tier3_scenes.read_nc(os.path.join(rundir, "H.nc"))
     ref = np.load(os.path.join(OUT, "reference.npz"))
     top = 26.0
@@ -574,9 +652,14 @@ def correlation():
                 transform=ax.transAxes, va="top", fontsize=9, bbox=dict(facecolor="white", alpha=0.85, lw=0))
         ax.legend(loc="lower right", fontsize=8)
         fig.colorbar(hb, ax=ax, shrink=0.8, label="cells")
-    c = json.load(open(os.path.join(OUT, "cv.json") if os.path.exists(os.path.join(OUT, "cv.json")) else CV_PALM))["chosen"]
-    fig.suptitle("Dubai to Abu Dhabi: Lyzenga SDB (Landsat 8%s) against ICESat-2"
-                 % (", power-law rescaled beyond the crossover" if c.get("power") else ""), fontsize=12)
+    if run == "final":
+        c = json.load(open(os.path.join(OUT, "cv.json") if os.path.exists(os.path.join(OUT, "cv.json")) else CV_PALM))["chosen"]
+    else:
+        c = json.load(open(os.path.join(OUT, "score_%s.json" % run)))["settings"]
+    fig.suptitle("Dubai to Abu Dhabi: Lyzenga SDB against ICESat-2\n(Landsat 8, %s, %s nm%s)"
+                 % ("all scenes jointly" if c.get("inputs") == "joint" else "median composite",
+                    "/".join(map(str, c["bands"])), ", power-law rescaled beyond the crossover" if c.get("power") else ""),
+                 fontsize=12)
     out = os.path.join(rundir, "correlation.png")
     fig.savefig(out, dpi=150)
     print(out)
@@ -627,6 +710,8 @@ if __name__ == "__main__":
     elif len(sys.argv) == 6 and sys.argv[1] == "fit":
         # fit composite|joint 443,483,561,655 /radius/ power|nopower
         fit((sys.argv[2], [int(b) for b in sys.argv[3].split(",")], int(sys.argv[4]), sys.argv[5] == "power"))
+    elif len(sys.argv) == 3 and sys.argv[1] == "correlation":
+        correlation(sys.argv[2])
     elif len(sys.argv) == 2 and sys.argv[1] in commands:
         commands[sys.argv[1]]()
     else:
