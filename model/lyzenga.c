@@ -82,6 +82,12 @@
 //   ATTENUATION /prefix/ SCENES /n/ [TIDES /h_1/ ... /h_n/] [SUNZENITH /theta_1/ ... /theta_n/]
 //     [VIEWZENITH /theta_1/ ... /theta_n/] [NODES /deg/] [SMOOTHING /w/]   (SCENES before the
 //     per-scene lists)
+//
+// With ATTENUATION, stage 1 runs before Lyzenga's fit, and two options use it (see "The
+// attenuation at the soundings" below): CONSTRAIN GAIN [BRIGHTNESS] imposes Lyzenga et al. 2006's
+// calibration condition (eq. 12) on the fit, and NORMALISE divides each predictor by the local
+// two-way attenuation. Both want a deep-water signal (PERCENTILE or LSM > 0), not ln L. At the
+// Arabian Gulf neither beat the free fit on ln L with POWER (validation/EXPERIMENTS.md).
 
 #include <math.h>
 #include <stdio.h>
@@ -331,24 +337,46 @@ static bool store_grid(const char *name, float **array, const geogrid *g0) {
   return true;
 }
 
-// ATTENUATION: the two-way attenuation of every grid over the whole grid, from the soundings
-// (stage 1), then a depth at every cell from it (stage 2); see the header.
-static void attenuation(const char *prefix, int nb, const int *bands, float ***Lbar, const geogrid *g0,
-    const double *lsm, const double *sigma, double deep_k, int n_scenes, const double *tides, const double *path,
-    double spacing, double smooth, double huber, double dmin, double dmax, double sign, const int *cell_i,
-    const int *cell_j, const int *status) {
+// ATTENUATION stage 1, from the soundings: each grid's c_m and two-way attenuation g_m(x) as a
+// field on the nodes (see the header).
+typedef struct {
+  att_nodes nodes;
+  int nq;
+  double *theta, *c, *support;  // theta[m*nq + q]: g_m at node q
+  bool *fitted;
+} att_field;
+
+static void att_free(att_field *af) {
+  free(af->theta);
+  free(af->c);
+  free(af->support);
+  free(af->fitted);
+  af->theta = af->c = af->support = NULL;
+  af->fitted = NULL;
+}
+
+// g_m at cell (i, j).
+static double att_g(const att_field *af, int m, int i, int j) {
+  int q[4], l;
+  double f[4], g = 0.0;
+  node_weights(&af->nodes, i, j, q, f);
+  for (l = 0; l < 4; l++) g += f[l]*af->theta[m*af->nq + q[l]];
+  return g;
+}
+
+static void att_stage1(att_field *af, const char *prefix, int nb, const int *bands, float ***Lbar,
+    const geogrid *g0, const double *lsm, const double *sigma, double deep_k, int n_scenes, const double *tides,
+    const double *path, double spacing, double smooth, double huber, double dmin, double dmax, double sign,
+    const int *cell_i, const int *cell_j, const int *status) {
 
   int nr = g0->nrows, nc = g0->ncols, nbs = nb/n_scenes, m, s, n, i, j, l, q[4], nq, P, it, rows,
-    *row_cell = NULL, n_depth = 0, n_few = 0, *iters = NULL;
+    *row_cell = NULL, *iters = NULL;
   double f[4], *N = NULL, *rhs = NULL, *theta = NULL, *c = NULL, *X = NULL, *Z = NULL, *w0 = NULL, *w = NULL,
     *res = NULL, *absr = NULL, *support = NULL, *scatter = NULL, lambda, sc, v, wzz, change, g, *Xc = NULL,
     *Zc = NULL, *vc = NULL, *vhat = NULL;
   bool *fitted = NULL, *active = NULL;
   int *cand_cell = NULL;
-  float **out = NULL, **depth = NULL, **dsig = NULL, **bottom = NULL, nodata = g0->nodata_value;
-  char name[MAX_ARG_SIZE];
   att_nodes nodes;
-  FILE *fp;
 
   nodes.nx = MAX(2, (int) ceil((nc - 1)*g0->cellsize/spacing - 1.0e-9) + 1);
   nodes.ny = MAX(2, (int) ceil((nr - 1)*g0->cellsize/spacing - 1.0e-9) + 1);
@@ -513,6 +541,48 @@ static void attenuation(const char *prefix, int nb, const int *bands, float ***L
     free(kv);
   }
 
+  af->nodes = nodes;
+  af->nq = nq;
+  af->theta = theta;
+  af->c = c;
+  af->support = support;
+  af->fitted = fitted;
+  free(N);
+  free(rhs);
+  free(scatter);
+  free(iters);
+  free(X);
+  free(Z);
+  free(w0);
+  free(w);
+  free(res);
+  free(absr);
+  free(row_cell);
+  free(Xc);
+  free(Zc);
+  free(vc);
+  free(vhat);
+  free(active);
+  free(cand_cell);
+}
+
+// ATTENUATION's outputs from stage 1's field: K of every grid, then a depth at every cell from it
+// (stage 2), and attenuation.csv; see the header.
+static void att_outputs(const att_field *af, const char *prefix, int nb, const int *bands, float ***Lbar,
+    const geogrid *g0, const double *lsm, const double *sigma, double deep_k, int n_scenes, const double *tides,
+    const double *path, double dmin, double dmax, double sign, const int *cell_i, const int *cell_j,
+    const int *status) {
+
+  int nr = g0->nrows, nc = g0->ncols, nbs = nb/n_scenes, nq = af->nq, m, s, n, i, j, l, q[4], n_depth = 0,
+    n_few = 0;
+  double f[4], v, g;
+  const double *theta = af->theta, *c = af->c, *support = af->support;
+  const bool *fitted = af->fitted;
+  const att_nodes nodes = af->nodes;
+  float **out = NULL, **depth = NULL, **dsig = NULL, **bottom = NULL, nodata = g0->nodata_value;
+  char name[MAX_ARG_SIZE];
+  FILE *fp;
+
 // The attenuation grids, K = g/M.
 
   for (m = 0; m < nb; m++) {
@@ -656,27 +726,6 @@ done:
   if (depth != NULL) free_float_array_2d(depth, nr);
   if (dsig != NULL) free_float_array_2d(dsig, nr);
   if (bottom != NULL) free_float_array_2d(bottom, nr);
-  free(N);
-  free(rhs);
-  free(theta);
-  free(c);
-  free(scatter);
-  free(iters);
-  free(fitted);
-  free(support);
-  free(X);
-  free(Z);
-  free(w0);
-  free(w);
-  free(res);
-  free(absr);
-  free(row_cell);
-  free(Xc);
-  free(Zc);
-  free(vc);
-  free(vhat);
-  free(active);
-  free(cand_cell);
 }
 
 static void usage(void) {
@@ -684,7 +733,7 @@ static void usage(void) {
     "  LAND /grid/ SHALLOW /grid/ LSM /Lsm 1/ ... /Lsm n/ PERCENTILE /p/ DEEP /k/ RADIUS /r/\n"
     "  DEPTHS /min/ /max/ TIDE /h/ HUBER /k/ BALANCE /bin (m)/ POWER ERROR /output/\n"
     "  ATTENUATION /prefix/ SCENES /n/ TIDES /h_1/ ... SUNZENITH /theta_1/ ... VIEWZENITH /theta_1/ ...\n"
-    "  NODES /deg/ SMOOTHING /w/\n");
+    "  NODES /deg/ SMOOTHING /w/  CONSTRAIN GAIN [BRIGHTNESS]  NORMALISE (with ATTENUATION)\n");
 }
 
 static bool parse_number(int *k, double *v) {
@@ -708,7 +757,10 @@ void run_model_lyzenga(void) {
     *w0 = NULL, *w = NULL, *res = NULL, *tmp = NULL, s, s2, rss, sw, sign = 1.0, mae, bias, ss_tot, mean_y,
     xrow[LYZ_MAX_BANDS + 1], pw_a = 0.0, pw_d = 1.0;
   bool lsm_given = false, error_wanted = false, power = false, power_all = false, ok, scenes_given = false,
-    tides_given = false;
+    tides_given = false, con_gain = false, con_bright = false, normalise = false;
+  att_field af = {0};
+  int n_con = 0, piv[2] = {0, 0}, p_r = 0, freec[LYZ_MAX_BANDS + 1];
+  double E[2][LYZ_MAX_BANDS + 1], dcon[2] = {0.0, 0.0}, gbar[LYZ_MAX_BANDS] = {0.0};
   int n_scenes = 1, k_att = -1;
   double pct_lsm[LYZ_MAX_BANDS], att_lsm[LYZ_MAX_BANDS], tides[LYZ_MAX_BANDS], sunz[LYZ_MAX_BANDS] = {0.0},
     viewz[LYZ_MAX_BANDS] = {0.0}, path[LYZ_MAX_BANDS], spacing = 0.05, smooth = 1.0;
@@ -833,6 +885,19 @@ void run_model_lyzenga(void) {
         printf("\nERROR: SMOOTHING /w/ with w >= 0.\n");
         return ;
       }
+    } else if (strcmp(parsed[k], "CONSTRAIN") == 0) {
+      if (k + 1 >= MAX_ARGS || strcmp(parsed[k + 1], "GAIN") != 0) {
+        printf("\nERROR: CONSTRAIN GAIN [BRIGHTNESS]\n");
+        return ;
+      }
+      con_gain = true;
+      k++;
+      if (k + 1 < MAX_ARGS && strcmp(parsed[k + 1], "BRIGHTNESS") == 0) {
+        con_bright = true;
+        k++;
+      }
+    } else if (strcmp(parsed[k], "NORMALISE") == 0) {
+      normalise = true;
     } else if (strcmp(parsed[k], "ERROR") == 0) {
       if (k + 1 >= MAX_ARGS || parsed[k + 1][0] == '\0') {
         usage();
@@ -873,6 +938,10 @@ void run_model_lyzenga(void) {
   }
   if (error_wanted && strcmp(parsed[k_out], parsed[k_error]) == 0) {
     printf("\nERROR: the bathymetry and error grids need different names.\n");
+    return ;
+  }
+  if ((con_gain || normalise) && k_att < 0) {
+    printf("\nERROR: CONSTRAIN and NORMALISE need ATTENUATION (the attenuation at the soundings).\n");
     return ;
   }
   if (k_att >= 0) {
@@ -1020,6 +1089,87 @@ void run_model_lyzenga(void) {
     goto done;
   }
 
+// The attenuation at the soundings (ATTENUATION stage 1), before the fit: CONSTRAIN and NORMALISE
+// use it. Lyzenga's model is the linearised X_m = B + c_m - g_m Z (see the header), so its depth
+// is a0 + sum a_m (B + c_m) - (sum a_m g_m) Z: unbiased (Lyzenga et al. 2006, eq. 12) only where
+// the gain -sum a_m g_m is 1. Least squares meets that only on average over the soundings, and
+// less than 1 for noisy bands (regression dilution). CONSTRAIN GAIN imposes it at the soundings'
+// mean attenuation, -sum a_m gbar_m = 1, and BRIGHTNESS adds sum a_m = 0, so that a spectrally
+// flat change of B leaves the depth unchanged. NORMALISE divides each predictor by the local
+// g_m(x), so the gain is -sum a_m at every cell, whatever the attenuation there; CONSTRAIN GAIN
+// then imposes sum a_m = -1 (and BRIGHTNESS sum a_m/gbar_m = 0). The constraints are linear
+// equalities, solved exactly by eliminating one coefficient each.
+
+  if (k_att >= 0) {
+    for (ks = 0; ks < n_scenes; ks++) {
+      if (! tides_given) tides[ks] = tide;
+      path[ks] = 1.0/cos(asin(sin(sunz[ks]*M_PI/180.0)/N_WATER)) + 1.0/cos(asin(sin(viewz[ks]*M_PI/180.0)/N_WATER));
+    }
+    for (m = 0; m < nb; m++) att_lsm[m] = lsm_given && lsm[m] > 0.0 ? lsm[m] : pct_lsm[m];
+    att_stage1(&af, parsed[k_att], nb, bands, Lbar, g0, att_lsm, sigma, deep_k, n_scenes, tides, path, spacing,
+      smooth, huber, dmin, dmax, sign, cell_i, cell_j, status);
+  }
+  if (con_gain || normalise) {
+    for (m = 0; m < nb; m++) {
+      if (! af.fitted[m]) {
+        printf("\nERROR: CONSTRAIN/NORMALISE: no attenuation for grid '%s'.\n", grid_names[bands[m]]);
+        goto done;
+      }
+      for (n = 0; n < n_fit; n++) {
+        v = att_g(&af, m, cell_i[(int) tmp[n]], cell_j[(int) tmp[n]]);
+        if (v <= 0.0) {
+          printf("\nERROR: NORMALISE: the attenuation of grid '%s' is not positive at a sounding.\n",
+            grid_names[bands[m]]);
+          goto done;
+        }
+        gbar[m] += v/n_fit;
+        if (normalise) A[n*p + m + 1] /= v;
+      }
+    }
+  }
+  if (con_gain) {
+    double Cc[2][LYZ_MAX_BANDS + 1] = {{0.0}};
+    // Row 0, the gain; row 1, the brightness (no constraint touches the intercept).
+    for (m = 0; m < nb; m++) {
+      Cc[0][m + 1] = normalise ? 1.0 : -gbar[m];
+      Cc[1][m + 1] = normalise ? 1.0/gbar[m] : 1.0;
+    }
+    dcon[0] = normalise ? -1.0 : 1.0;
+    dcon[1] = 0.0;
+    n_con = con_bright ? 2 : 1;
+    // Reduced row echelon form, pivoting on the largest entry.
+    for (ks = 0; ks < n_con; ks++) {
+      int best = 1, r2;
+      for (m = 1; m < p; m++) if (fabs(Cc[ks][m]) > fabs(Cc[ks][best])) best = m;
+      if (fabs(Cc[ks][best]) < 1.0e-12) {
+        printf("\nERROR: CONSTRAIN: the constraints are degenerate.\n");
+        goto done;
+      }
+      piv[ks] = best;
+      s = Cc[ks][best];
+      for (m = 0; m < p; m++) Cc[ks][m] /= s;
+      dcon[ks] /= s;
+      for (r2 = 0; r2 < n_con; r2++) {
+        if (r2 == ks) continue ;
+        s = Cc[r2][best];
+        for (m = 0; m < p; m++) Cc[r2][m] -= s*Cc[ks][m];
+        dcon[r2] -= s*dcon[ks];
+      }
+    }
+    for (ks = 0; ks < n_con; ks++) {
+      for (m = 0; m < p; m++) E[ks][m] = Cc[ks][m];
+    }
+    // a_piv = d - sum over the free columns of E a: the reduced design and target.
+    p_r = 0;
+    for (m = 0; m < p; m++) {
+      if (m != piv[0] && (n_con < 2 || m != piv[1])) freec[p_r++] = m;
+    }
+    printf("  constrained: %s%s%s, at the soundings' mean attenuation\n", normalise ? "sum a = -1" : "-sum a gbar = 1",
+      con_bright ? (normalise ? ", sum a/gbar = 0" : ", sum a = 0") : "", normalise ? " (predictors / g(x))" : "");
+  } else if (normalise) {
+    printf("  normalised: predictors divided by the local two-way attenuation g(x)\n");
+  }
+
 // Weights: equal, or 1/count in depth bins (BALANCE).
 
   for (n = 0; n < n_fit; n++) w0[n] = 1.0;
@@ -1035,7 +1185,32 @@ void run_model_lyzenga(void) {
 
 // Iteratively reweighted least squares (Huber), from the least-squares solution.
 
-  if ((it = huber_irls(A, y, w0, n_fit, p, huber, coef, R, w, res)) < 0) {
+  if (n_con == 0) {
+    it = huber_irls(A, y, w0, n_fit, p, huber, coef, R, w, res);
+  } else {
+    double *Ar = malloc((size_t) n_fit*p_r*sizeof(double)), *yr = malloc((size_t) n_fit*sizeof(double)), cr[LYZ_MAX_BANDS + 1];
+    for (n = 0; n < n_fit; n++) {
+      yr[n] = y[n];
+      for (ks = 0; ks < n_con; ks++) yr[n] -= A[n*p + piv[ks]]*dcon[ks];
+      for (j = 0; j < p_r; j++) {
+        s = A[n*p + freec[j]];
+        for (ks = 0; ks < n_con; ks++) s -= A[n*p + piv[ks]]*E[ks][freec[j]];
+        Ar[n*p_r + j] = s;
+      }
+    }
+    it = huber_irls(Ar, yr, w0, n_fit, p_r, huber, cr, R, w, res);
+    free(Ar);
+    free(yr);
+    if (it >= 0) {
+      for (j = 0; j < p_r; j++) coef[freec[j]] = cr[j];
+      for (ks = 0; ks < n_con; ks++) {
+        s = dcon[ks];
+        for (j = 0; j < p_r; j++) s -= E[ks][freec[j]]*cr[j];
+        coef[piv[ks]] = s;
+      }
+    }
+  }
+  if (it < 0) {
     printf("\nERROR: the bands are collinear at the soundings; use fewer bands.\n");
     goto done;
   }
@@ -1056,14 +1231,33 @@ void run_model_lyzenga(void) {
     ss_tot += (y[n] - mean_y)*(y[n] - mean_y);
   }
   // Scale the weights to sum to n, so s2 is a variance of one sounding of average weight.
-  s2 = rss*n_fit/sw/(n_fit - p);
-  covariance_factor(R, p, C);
-  for (m = 0; m < p*p; m++) C[m] *= s2*sw/n_fit;
+  int p_fit = n_con ? p_r : p;
+  s2 = rss*n_fit/sw/(n_fit - p_fit);
+  covariance_factor(R, p_fit, C);
+  for (m = 0; m < p_fit*p_fit; m++) C[m] *= s2*sw/n_fit;
+  if (n_con) {
+    // a = T a_r + t, with T[free_j][j] = 1 and T[piv_k][j] = -E[k][free_j]: C = T C_r T'.
+    double T[LYZ_MAX_BANDS + 1][LYZ_MAX_BANDS + 1] = {{0.0}}, Cr[(LYZ_MAX_BANDS + 1)*(LYZ_MAX_BANDS + 1)];
+    for (m = 0; m < p_r*p_r; m++) Cr[m] = C[m];
+    for (j = 0; j < p_r; j++) {
+      T[freec[j]][j] = 1.0;
+      for (ks = 0; ks < n_con; ks++) T[piv[ks]][j] = -E[ks][freec[j]];
+    }
+    for (ii = 0; ii < p; ii++) {
+      for (jj = 0; jj < p; jj++) {
+        s = 0.0;
+        for (i = 0; i < p_r; i++) {
+          for (j = 0; j < p_r; j++) s += T[ii][i]*Cr[i*p_r + j]*T[jj][j];
+        }
+        C[ii*p + jj] = s;
+      }
+    }
+  }
   double rms = 0.0, rmin = INFINITY, rmax = 0.0;
   for (n = 0; n < n_fit; n++) rms += res[n]*res[n]/n_fit;
-  for (m = 0; m < p; m++) {
-    rmin = MIN(rmin, fabs(R[m*p + m]));
-    rmax = MAX(rmax, fabs(R[m*p + m]));
+  for (m = 0; m < p_fit; m++) {
+    rmin = MIN(rmin, fabs(R[m*p_fit + m]));
+    rmax = MAX(rmax, fabs(R[m*p_fit + m]));
   }
 
   printf("  fit: H = %.4f", coef[0]);
@@ -1073,6 +1267,17 @@ void run_model_lyzenga(void) {
   printf("\n  %s, %d iterations; rms %.3f m, mae %.3f m, bias %+.3f m, R2 %.3f, robust sigma %.3f m; "
     "|R| diagonal ratio %.3g\n", huber > 0.0 ? "Huber IRLS" : "least squares", it, sqrt(rms), mae, bias,
     1.0 - rms*n_fit/MAX(ss_tot, 1.0e-30), sqrt(s2), rmax/rmin);
+  if (af.fitted != NULL) {
+    // The gain of eq. 12 at the soundings' mean attenuation, and the response to a flat brightness.
+    double gain = 0.0, bright = 0.0;
+    ok = true;
+    for (m = 0; m < nb; m++) {
+      if (! af.fitted[m]) ok = false;
+      gain -= coef[m + 1]*(normalise ? 1.0 : gbar[m]);
+      bright += coef[m + 1]/(normalise ? gbar[m] : 1.0);
+    }
+    if (ok && (con_gain || normalise)) printf("  gain %.4f (1 is unbiased), brightness response %.4f m per unit ln B\n", gain, bright);
+  }
 
 // The power-law rescaling (POWER): ln h = a + d ln z, robustly, over the soundings with h > 0.
 
@@ -1130,6 +1335,11 @@ void run_model_lyzenga(void) {
         v = Lbar[m][i][j] - lsm[m];
         if (v <= 0.0 || v < deep_k*sigma[m]) break;
         xrow[m + 1] = log(v);
+        if (normalise) {
+          double gm = att_g(&af, m, i, j);
+          if (gm <= 0.0) break;
+          xrow[m + 1] /= gm;
+        }
       }
       if (m < nb) {
         n_deep++;
@@ -1182,6 +1392,8 @@ void run_model_lyzenga(void) {
     } else {
       fprintf(fp, "POWER=none\n");
     }
+    fprintf(fp, "CONSTRAIN=%s\nNORMALISE=%s\n", con_gain ? (con_bright ? "GAIN,BRIGHTNESS" : "GAIN") : "none",
+      normalise ? "yes" : "no");
     fprintf(fp, "RADIUS=%d\nDEEP=%g\nTIDE=%g\nDEPTHS=%g,%g\nHUBER=%g\nBALANCE=%g\nNSOUNDINGS=%d\nRMS=%.4f\n",
       radius, deep_k, tide, dmin, dmax, huber, balance, n_fit, sqrt(rms));
     fclose(fp);
@@ -1212,17 +1424,13 @@ void run_model_lyzenga(void) {
 
 // The attenuation over the whole grid, and the depth from it (ATTENUATION).
 
-  if (k_att >= 0) {
-    for (ks = 0; ks < n_scenes; ks++) {
-      if (! tides_given) tides[ks] = tide;
-      path[ks] = 1.0/cos(asin(sin(sunz[ks]*M_PI/180.0)/N_WATER)) + 1.0/cos(asin(sin(viewz[ks]*M_PI/180.0)/N_WATER));
-    }
-    for (m = 0; m < nb; m++) att_lsm[m] = lsm_given && lsm[m] > 0.0 ? lsm[m] : pct_lsm[m];
-    attenuation(parsed[k_att], nb, bands, Lbar, g0, att_lsm, sigma, deep_k, n_scenes, tides, path, spacing, smooth,
-      huber, dmin, dmax, sign, cell_i, cell_j, status);
+  if (k_att >= 0 && af.fitted != NULL) {
+    att_outputs(&af, parsed[k_att], nb, bands, Lbar, g0, att_lsm, sigma, deep_k, n_scenes, tides, path, dmin, dmax,
+      sign, cell_i, cell_j, status);
   }
 
 done:
+  att_free(&af);
   if (Lbar != NULL) {
     for (m = 0; m < nb; m++) free_float_array_2d(Lbar[m], nr);
     free(Lbar);

@@ -51,6 +51,13 @@ holds 80\% of the errors within $\pm1\sigma$, but its tails are heavier than Gau
 443--561\,nm is plausible and spatially coherent. $K$ at 655\,nm falls below pure water's
 absorption, so it is not physical. The depth from the attenuation is a diagnostic, not a
 product, and its error estimate is too small by a factor of about two to three.
+
+Lyzenga et al.'s calibration condition (their eq.~12) explains where the fit is unbiased. The
+stage-1 attenuation shows that the free fit meets it only at 5--10\,m, and that the saturation
+near 16\,m is the condition failing as $\ln L$ flattens. Imposing it on the fit changes almost
+nothing. Dividing each predictor by the local attenuation (\code{NORMALISE}) gains about
+3 points of hits on the same cells, nearly all at 10--20\,m, but loses coverage, so the chosen
+model is unchanged.
 \end{abstract}
 
 \tableofcontents
@@ -521,6 +528,143 @@ So \code{ATTENUATION} is kept, off unless asked, with no effect on Lyzenga's fit
 443--561\,nm is the usable product. The attenuation depth is a diagnostic.
 
 %============================================================================================
+\section{Lyzenga's calibration condition}
+\label{sec:calibration}
+
+\subsection{The condition}
+
+Substituting the physical model~\eqref{eq:logmodel} into the regression~\eqref{eq:lyzenga} gives
+(Lyzenga et al.\ 2006, eq.~11, in our signs)
+\begin{equation}
+  \hat Z = \Bigl(a_0 + \sum_m a_m (B + c_m)\Bigr) - \Bigl(\sum_m a_m g_m\Bigr) Z .
+  \label{eq:gain}
+\end{equation}
+The estimate is unbiased when the offset vanishes and the \emph{gain} $G = -\sum_m a_m g_m$ is 1
+(their eq.~12). With $N$ bands there are $N+1$ coefficients, so the fit has $N-1$ degrees of
+freedom to spare; it can stay calibrated across several bottoms or waters. A change of a
+spectrally flat bottom brightness $B$ leaves the depth unchanged if $\sum_m a_m = 0$ (their
+eq.~13, with the same specific attenuation in every band).
+
+Lyzenga et al.\ do not impose eq.~12. They fit by unconstrained least squares (their eqs.~14 and 15),
+as \textit{photic} does, and least squares meets it only on average over the soundings.
+
+\paragraph{With $\ln L$.} \code{LSM 0} uses $X_m = \ln L_m$, not $\ln(L_m - \Lsm{m})$. Its
+derivative with depth is $-g_m (L_m - \Lsm{m})/L_m$, which falls to zero as the signal approaches
+deep water. The local gain is then
+\begin{equation}
+  G_{\mathrm{eff}}(\bx, Z) = -\sum_m a_m\, g_m(\bx)\, \frac{L_m - \Lsm{m}}{L_m},
+\end{equation}
+and it falls with depth whatever the coefficients.
+
+\subsection{What the chosen fit does}
+
+For the joint model ($\ln L$, four bands, \code{POWER}), the stage-1 attenuation gives the gain
+directly (Table~\ref{tab:gain}).
+
+\begin{table}[h]
+\centering
+\caption{The gain of eq.~\eqref{eq:gain} predicted from the stage-1 attenuation, and the observed
+slope of the fitted depth against ICESat-2 (test half, by depth bin).}
+\label{tab:gain}
+\begin{tabular}{lrrrrr}
+\toprule
+ & 0--2\,m & 2--5\,m & 5--10\,m & 10--15\,m & 15--20\,m \\
+\midrule
+Predicted gain $G_{\mathrm{eff}}$ & 1.32 & 1.08 & \textbf{1.00} & 0.77 & 0.27 \\
+Observed slope & 0.05 & 0.65 & \textbf{1.00} & 0.90 & 0.18 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+\item \textbf{The fit is calibrated only where the soundings are dense (5--10\,m).}
+\item \textbf{The saturation near 16\,m is eq.~12 failing:} the predicted gain falls to 0.27 at
+  15--20\,m, against an observed slope of 0.18. The K maps predict it with no reference to the
+  test depths.
+\item \textbf{Two departures are explained:} \code{POWER} stretches the depths beyond 6.9\,m, which
+  is why 10--15\,m is observed above the prediction. Over a 2\,m bin, the reference's own scatter
+  dilutes the observed slope, so the shallow bins are not comparable.
+\item \textbf{The gain also varies across the box,} from 1.30 to 1.84 (10th to 90th percentile)
+  with the nominal attenuation, because $K$ varies 1.5--2$\times$ and one set of coefficients
+  cannot follow it. At 10\,m, a gain off by 15\% is a 1.5\,m error.
+\item \textbf{The fit is nearly invariant to a flat brightness change:} $\sum_m a_m = -1.27$, so a
+  10\% brighter bottom moves the depth by 0.12\,m. It works through large opposing blue and green
+  coefficients (band sums $+25.6$ and $-21.7$), as Lyzenga et al.'s (their $h_1 \approx -h_2$),
+  at the cost of noise amplification ($\sum|a_m| = 102$).
+\end{itemize}
+
+\subsection{Imposing it}
+
+Two options use the stage-1 attenuation, which now runs before the fit.
+\begin{itemize}
+\item \textbf{\code{CONSTRAIN GAIN}} imposes $-\sum_m a_m \bar g_m = 1$, where $\bar g_m$ is the
+  mean attenuation over the fit's soundings. \code{BRIGHTNESS} adds $\sum_m a_m = 0$.
+\item \textbf{\code{NORMALISE}} divides each predictor by the local $g_m(\bx)$. Then
+  $X_m/g_m = (B + c_m)/g_m - Z$, so the gain is $-\sum_m a_m$ at \emph{every} cell, whatever the
+  attenuation there. With \code{CONSTRAIN GAIN} the condition becomes $\sum_m a_m = -1$, and
+  \code{BRIGHTNESS} adds $\sum_m a_m/\bar g_m = 0$.
+\end{itemize}
+The constraints are linear equalities $C\mathbf{a} = \mathbf{d}$, none involving $a_0$. They are
+solved exactly: the constraint matrix is reduced to row echelon form, one coefficient per
+constraint is eliminated, and the reduced problem is fitted with the same Householder QR and
+Huber weights. With $\mathbf{a} = T\mathbf{a}_r + \mathbf{t}$, the covariance for \code{ERROR} is
+$C = T C_r T^{\mathsf T}$. \code{make test} checks that both constraints hold to four decimals.
+
+Both options want $\ln(L - L_{\infty})$: with $\ln L$, the effective attenuation changes with depth,
+so a fixed constraint is mis-specified.
+
+\subsection{Results}
+
+Out of fold on the Gulf's calibration half (the same four folds that chose the model;
+Table~\ref{tab:calib}). Subtracting $L_{\infty}$ turns the optically-deep test on, which removes
+4--7\% of the cells. Nearly all are deeper than 10\,m, and with four bands it is mostly the red's
+doing. A missing cell counts as a miss, so the table also scores every variant on the cells where
+all of them have a depth.
+
+\begin{table}[h]
+\centering
+\caption{Lyzenga's calibration condition imposed on the joint fit, four bands, out of fold
+(5,833 cells; ``same cells'': the 5,201 where every variant has a depth).}
+\label{tab:calib}
+\begin{tabular}{lrrrrr}
+\toprule
+ & Hits & With a depth & Same cells & RMSE (m) & 10--20\,m \\
+\midrule
+$\ln L$, \code{POWER} (chosen)        & \textbf{83.9\%} & 96.3\% & 89.2\% & 1.60 & 92\% \\
+$\ln L$, \code{CONSTRAIN GAIN}        & 83.1\% & 96.3\% & 88.5\% & 1.59 & 90\% \\
+$\ln(L - L_{\infty})$, free               & 77.5\% & 89.2\% & 86.9\% & 1.95 & 79\% \\
+$\ln(L - L_{\infty})$, \code{POWER}       & 77.6\% & 89.2\% & 87.0\% & 1.99 & 80\% \\
+$\ln(L - L_{\infty})$, \code{CONSTRAIN GAIN} & 77.9\% & 89.2\% & 87.4\% & 1.90 & 83\% \\
+\quad with \code{BRIGHTNESS}          & 76.2\% & 89.2\% & 85.4\% & 1.94 & 81\% \\
+\code{NORMALISE}                      & 79.9\% & 89.2\% & \textbf{89.6\%} & 1.78 & 91\% \\
+\code{NORMALISE CONSTRAIN GAIN}       & 79.5\% & 89.2\% & 89.2\% & 1.79 & 91\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+\item \textbf{Imposing eq.~12 changes almost nothing} ($-1.4$ to $+0.4$ points). Once $L_{\infty}$ is
+  subtracted, the free fit already meets it on average (with \code{NORMALISE}, the free
+  fit's gain at the soundings is 0.92--1.01), and the constraint does as well as \code{POWER}. Regression dilution is not the
+  main error.
+\item \textbf{\code{BRIGHTNESS} hurts every time,} by 1.5--5 points. The bottom is not spectrally
+  flat, and the free fit uses how bottom colour changes with depth at this site.
+\item \textbf{\code{NORMALISE} is the real effect.} On the same cells it gains 2.7 points over the
+  same $\ln(L - L_{\infty})$ fit with four bands, and 3.0 with 443/483/561\,nm, nearly all at
+  10--20\,m (79 $\to$ 91\% and 80 $\to$ 93\%). So the spatial variation of $K$ is the dominant
+  error at depth. With 443/483/561\,nm it is the best fit overall: 82.2\% against $\ln L$'s
+  78.4\%.
+\item \textbf{With four bands it only ties the chosen model} on the same cells (89.6 against
+  89.2\%), and loses overall on coverage. Loosening the deep test (\code{DEEP 1}, \code{DEEP 0})
+  recovers coverage but costs more accuracy than it gains.
+\end{itemize}
+
+So the chosen model is unchanged, and \code{CONSTRAIN} and \code{NORMALISE} are kept as options,
+off by default. \code{NORMALISE} is how per-site $K$ maps enter an empirical depth. Two next
+steps are possible: normalise $\ln L$ by its effective attenuation $g_m(L_m - \Lsm{m})/L_m$,
+which keeps $\ln L$'s coverage; or fill the optically deep cells from the $\ln L$ fit.
+
+%============================================================================================
 \section{Usage}
 \label{sec:usage}
 
@@ -530,6 +674,7 @@ MODEL lyzenga_log_linear GRIDS g1 ... gn BATHYMETRY H [options, any order]
   TIDE h    HUBER k    BALANCE bin    POWER [ALL]    ERROR H_error
   ATTENUATION K SCENES S [TIDES h1 ... hS] [SUNZENITH t1 ... tS]
                          [VIEWZENITH t1 ... tS] [NODES deg] [SMOOTHING w]
+  CONSTRAIN GAIN [BRIGHTNESS]    NORMALISE         (both need ATTENUATION)
 \end{verbatim}
 
 \code{SCENES} must come before the per-scene lists, and the grids are scene-major. The outputs are:

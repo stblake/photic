@@ -65,7 +65,8 @@ tests/lyz_run: photic tests/lyz_gen
 	cd tests/lyz_run && ../../photic lyz.bam < /dev/null > photic.log 2>&1
 
 # MODEL lyzenga_log_linear ... ATTENUATION on two scenes of three bands that follow its model
-# exactly: K at every node and the depth at every cell must be recovered (tests/att_check).
+# exactly: K at every node and the depth at every cell must be recovered (tests/att_check). Then
+# with NORMALISE CONSTRAIN GAIN BRIGHTNESS, whose two constraints must hold exactly.
 tests/att_gen: tests/att_gen.o
 	$(CC) $(CFLAGS) $^ -lm -o $@
 
@@ -77,6 +78,9 @@ tests/att_run: photic tests/att_gen
 	tests/att_gen tests/att_run
 	cp tests/att.bam tests/att_run/
 	cd tests/att_run && ../../photic att.bam < /dev/null > photic.log 2>&1
+	mkdir -p tests/att_run/con && cp tests/att_run/*.asc tests/att_run/*.xyz tests/att_run/con/
+	sed 's/SMOOTHING 0/SMOOTHING 0 NORMALISE CONSTRAIN GAIN BRIGHTNESS/' tests/att.bam > tests/att_run/con/att.bam
+	cd tests/att_run/con && ../../../photic att.bam < /dev/null > photic.log 2>&1
 
 tests/run: photic tests/synth_gen
 	rm -rf tests/run && mkdir -p tests/run
@@ -93,6 +97,8 @@ test: tests/run tests/synth_check tests/lyz_run tests/lyz_check tests/att_run te
 	tests/synth_check truth tests/run/modelled_H.nc tests/run/truth_H.asc; \
 	tests/lyz_check tests/lyz_run || fail=1; \
 	tests/att_check tests/att_run || fail=1; \
+	if grep -q "gain 1.0000 .*brightness response -*0.0000 " tests/att_run/con/photic.log; then \
+	  echo "constraints: ok"; else echo "constraints: FAIL, CONSTRAIN GAIN BRIGHTNESS does not hold"; fail=1; fi; \
 	if [ $$fail = 0 ]; then echo "\nPASS"; else echo "\nFAIL (see tests/run/photic.log)"; exit 1; fi
 
 test-baseline: tests/run

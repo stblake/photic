@@ -17,6 +17,9 @@ ICESat-2 on a split reference.
             composite_443-483-561-655_r3_power)
   points    the ICESat-2 reference itself as coloured points, in the same format and colour scale as
             the bathymetry map (runs/gulf_lyzenga/final/icesat2.png)
+  calibrate  Lyzenga et al. 2006's calibration condition (eq. 12) imposed on the joint fit
+            (CONSTRAIN GAIN [BRIGHTNESS], NORMALISE), against the free fit, out of fold on cv's
+            folds (calibrate.json)
   attenuation [/bands/]  MODEL lyzenga_log_linear's ATTENUATION with the chosen joint model: K of every scene
             and band over the box, and the depth from it, scored against Lyzenga's out of fold on
             cv's folds (the calibration half only; attenuation.json), then the maps from the whole
@@ -377,6 +380,73 @@ def cv():
     json.dump(dict(folds=FOLDS, configs=table, chosen=table[0]), open(os.path.join(OUT, "cv.json"), "w"), indent=1)
 
 
+# Lyzenga et al. 2006, eq. 12: the variants of calibrate(), (name, deep-water signal, options).
+CALIBRATE_VARIANTS = [
+    ("lnL_power", "none", " POWER"),
+    ("lnL", "none", ""),
+    ("lnL_gain", "none", " CONSTRAIN GAIN"),
+    ("sub_power", "percentile", " POWER"),
+    ("sub", "percentile", ""),
+    ("sub_gain", "percentile", " CONSTRAIN GAIN"),
+    ("sub_gain_bright", "percentile", " CONSTRAIN GAIN BRIGHTNESS"),
+    ("norm", "percentile", " NORMALISE"),
+    ("norm_gain", "percentile", " NORMALISE CONSTRAIN GAIN"),
+    ("norm_gain_bright", "percentile", " NORMALISE CONSTRAIN GAIN BRIGHTNESS"),
+    ("norm_gain_power", "percentile", " NORMALISE CONSTRAIN GAIN POWER"),
+    ("norm_deep1", "percentile", " NORMALISE DEEP 1"),
+    ("norm_deep0", "percentile", " NORMALISE DEEP 0"),
+]
+
+
+def calibrate():
+    """Lyzenga's calibration condition (eq. 12) imposed on the joint fit (CONSTRAIN GAIN
+    [BRIGHTNESS], NORMALISE), against the free fit with and without POWER: out of fold on cv's
+    folds (the calibration half only), for four bands and for 443/483/561 (calibrate.json)."""
+    lon, lat = grid()
+    meta = json.load(open(os.path.join(OUT, "meta.json")))
+    ref = np.load(os.path.join(OUT, "reference.npz"))
+    c = json.load(open(os.path.join(OUT, "cv.json") if os.path.exists(os.path.join(OUT, "cv.json")) else CV_PALM))["chosen"]
+    folds = cv_folds(lon, lat, meta)
+    jobs = [(bands, v, f) for bands in ([443, 483, 561, 655], [443, 483, 561]) for v in CALIBRATE_VARIANTS
+            for f in range(FOLDS)]
+
+    def one(job):
+        bands, (name, lsm, words), f = job
+        rundir = os.path.join(WORK, "calibrate", "%s_%s_f%d" % ("-".join(map(str, bands)), name, f))
+        H, log = run_photic(rundir, folds[f][0], bands, lsm, c["radius"], " TIDE 0" + words, inputs="joint")
+        gain = [l for l in log if l.startswith("  gain ")]
+        return job, H, float(gain[0].split()[1]) if gain else None
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(one, jobs))
+    table = []
+    for bands in ([443, 483, 561, 655], [443, 483, 561]):
+        maps = {}
+        for name, lsm, words in CALIBRATE_VARIANTS:
+            held = np.full(ref["calibration"].shape, np.nan)
+            Hf = held.copy()
+            gains = []
+            for (b, v, f), H, gain in results:
+                if b != bands or v[0] != name:
+                    continue
+                m = np.isfinite(folds[f][1])
+                held[m], Hf[m] = folds[f][1][m], H[m]
+                gains.append(gain)
+            maps[name] = (held, Hf, gains)
+        # ln(L - Lsm) loses the optically deep cells, which count as misses: also score every
+        # variant on the cells where all of them have a depth.
+        common = np.all([np.isfinite(Hf) for _, Hf, _ in maps.values()], axis=0)
+        for name, lsm, words in CALIBRATE_VARIANTS:
+            held, Hf, gains = maps[name]
+            r, rc = scores(held, Hf), scores(np.where(common, held, np.nan), Hf)
+            table.append(dict(bands=bands, variant=name, options=words.strip(), lsm=lsm, gain=gains, **r,
+                              common=rc))
+            print("%-16s %-17s hits %.3f  with depth %.3f  rmse %.2f | common %d: hits %.3f rmse %.2f bias %+.2f  %s" % (
+                "-".join(map(str, bands)), name, r["hits"], r["with_depth"], r["rmse"], rc["n_reference"], rc["hits"],
+                rc["rmse"], rc["bias"], " ".join("%s %2.0f" % (k, 100*x["hits"]) for k, x in rc["by_depth"].items())))
+    json.dump(dict(radius=c["radius"], folds=FOLDS, variants=table), open(os.path.join(OUT, "calibrate.json"), "w"),
+              indent=1)
+
+
 def attenuation(bands=None):
     """ATTENUATION with the chosen joint model (or other bands, e.g. 443,483,561). Out of fold on
     cv's folds (the calibration half only), Lyzenga's depth and the attenuation's depth (stage 2)
@@ -703,7 +773,7 @@ def points():
 
 
 if __name__ == "__main__":
-    commands = {"prepare": prepare, "cv": cv, "fit": fit, "correlation": correlation, "points": points,
+    commands = {"prepare": prepare, "cv": cv, "fit": fit, "correlation": correlation, "points": points, "calibrate": calibrate,
                 "attenuation": attenuation}
     if len(sys.argv) == 3 and sys.argv[1] == "attenuation":
         attenuation([int(b) for b in sys.argv[2].split(",")])

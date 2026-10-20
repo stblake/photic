@@ -2031,6 +2031,66 @@ Test half (5,695 cells; scored for the chosen joint model, and for the four-band
   - **Effect on the four-band composite (test half):** bias +0.16 → +0.05 m, hits 79.8 → 80.3%, RMSE 1.47 → 1.46 m. The shift, 0.11 m, is the mean tide, less a little from `POWER`'s curvature. In cross-validation the composites move by at most 0.2 points (best 74.5 → 74.3%), so the choice is unchanged.
   - **The joint model is unaffected** (TIDE 0, soundings below MSL): test-half hits are still 90.0%, RMSE 1.21 m, bias −0.02 m, identical to the last digit.
 
+### Lyzenga's calibration condition imposed on the fit (2026-10-20, `CONSTRAIN`, `NORMALISE`, `gulf_lyzenga.py calibrate`)
+
+Lyzenga et al. (2006) substitute the physical model, X_m = ln(L_m − L∞) = B + c_m − g_m Z, into the regression and get depth = a₀ + Σ a_m(B + c_m) − (Σ a_m g_m) Z (their eq. 11). The estimate is unbiased only where the gain −Σ a_m g_m is 1 (eq. 12). They do not impose this; they fit by unconstrained least squares, as photic does.
+
+- **Diagnosis, from the stage-1 K maps and the chosen joint fit (ln L, four bands, `POWER`):**
+  - With ln L, the local gain is −Σ a_m g_m (L − L∞)/L, which falls with depth: 1.32, 1.08, **1.00**, 0.77 and 0.27 over 0–2, 2–5, 5–10, 10–15 and 15–20 m (test half).
+  - The observed slope of the fit's depth against ICESat-2 is 0.05, 0.65, **1.00**, 0.90 and 0.18 over the same bins (`POWER` stretches beyond 6.9 m; the shallow bins are diluted by the reference's own scatter).
+  - So least squares meets eq. 12 only where most soundings lie, and the saturation near 16 m is the gain falling as ln L flattens.
+  - Across the box the nominal gain varies 1.30–1.84 (10th–90th percentile), because K varies 1.5–2× and the coefficients cannot follow it.
+  - Σ a_m = −1.27: the fit is already nearly invariant to a flat brightness change (0.12 m for a 10% brighter bottom).
+- **Variants** (`MODEL lyzenga_log_linear` with `ATTENUATION`; stage 1 now runs before the fit):
+  - `CONSTRAIN GAIN`: −Σ a_m ḡ_m = 1 at the soundings' mean attenuation; `BRIGHTNESS` adds Σ a_m = 0.
+  - `NORMALISE`: each predictor divided by the local g_m(x), so the gain is −Σ a_m at every cell; with `CONSTRAIN GAIN`, Σ a_m = −1 (and Σ a_m/ḡ_m = 0 with `BRIGHTNESS`).
+  - Solved exactly by eliminating one coefficient per constraint (the Householder QR, Huber and `ERROR` are kept); `make test` checks that both constraints hold.
+- **Hypothesis:** imposing eq. 12 removes regression dilution with physics instead of `POWER`'s fitted power law, and `NORMALISE` removes the depth error from K's spatial variation.
+- **Design:** the joint model, radius 2, out of fold on cv's four folds (calibration half only), bands 443/483/561/655 and 443/483/561. The constraint needs ln(L − L∞) (with ln L the effective attenuation varies with depth), so the variants use `PERCENTILE 1`; ln L with the constraint is a mis-specified control. The test half is scored only if a variant beats the chosen model's 83.9% out of fold.
+- **Predictions:**
+  1. ln(L − L∞) without a constraint: fewer cells with a depth (the deep test now bites), and hits below ln L's.
+  2. `CONSTRAIN GAIN`: better at 10–20 m than without `POWER`, worse at 0–2 m; overall within a point of `POWER`.
+  3. `BRIGHTNESS`: little change, as the free fit is already nearly brightness-invariant.
+  4. `NORMALISE` (+ `CONSTRAIN GAIN`): the largest gain at 10–20 m, where the gain's spread across the box costs the most; +1 to +3 points overall.
+  5. The control (ln L + `CONSTRAIN GAIN`): worse than ln L + `POWER`.
+- **Gate:** adopt a variant only if it beats 83.9% out of fold, with no depth bin worse by more than 3 points.
+
+**Result** (out of fold, calibration half: 5,833 cells; `calibrate.json`). The "same cells" columns score only the cells where every variant of that band set has a depth (5,201 with four bands, 5,396 with three), because ln(L − L∞) loses the optically deep cells, which count as misses in the full score.
+
+| Four bands | Hits % | With a depth | Same cells: hits % | RMSE m | 0–2 | 2–5 | 5–10 | 10–20 |
+|---|---|---|---|---|---|---|---|---|
+| **ln L, `POWER` (chosen)** | **83.9** | 96.3% | 89.2 | 1.60 | 70 | 88 | 93 | 92 |
+| ln L, free | 83.3 | 96.3% | 88.7 | 1.59 | 70 | 88 | 93 | 90 |
+| ln L, `CONSTRAIN GAIN` (control) | 83.1 | 96.3% | 88.5 | 1.59 | 69 | 87 | 93 | 90 |
+| ln(L − L∞), free | 77.5 | 89.2% | 86.9 | 1.95 | 71 | 89 | 93 | 79 |
+| ln(L − L∞), `POWER` | 77.6 | 89.2% | 87.0 | 1.99 | 71 | 89 | 93 | 80 |
+| ln(L − L∞), `CONSTRAIN GAIN` | 77.9 | 89.2% | 87.4 | 1.90 | 73 | 89 | 92 | 83 |
+| ln(L − L∞), `CONSTRAIN GAIN BRIGHTNESS` | 76.2 | 89.2% | 85.4 | 1.94 | 74 | 85 | 92 | 81 |
+| `NORMALISE` | 79.9 | 89.2% | **89.6** | 1.78 | 66 | 87 | 96 | 91 |
+| `NORMALISE CONSTRAIN GAIN` | 79.5 | 89.2% | 89.2 | 1.79 | 65 | 87 | 95 | 91 |
+| `NORMALISE CONSTRAIN GAIN BRIGHTNESS` | 78.0 | 89.2% | 87.5 | 1.88 | 68 | 85 | 94 | 86 |
+| `NORMALISE`, `DEEP 1` | 79.4 | 91.5% | 87.4 | 1.78 | 65 | 85 | 95 | 87 |
+| `NORMALISE`, `DEEP 0` | 79.2 | 93.3% | 86.4 | 1.77 | 68 | 84 | 92 | 88 |
+
+| 443/483/561 nm | Hits % | With a depth | Same cells: hits % | RMSE m | 0–2 | 2–5 | 5–10 | 10–20 |
+|---|---|---|---|---|---|---|---|---|
+| ln L, `POWER` | 78.4 | 96.3% | 83.2 | 1.75 | 69 | 83 | 88 | 82 |
+| ln(L − L∞), free | 79.3 | 92.5% | 85.8 | 1.90 | 72 | 88 | 90 | 80 |
+| ln(L − L∞), `CONSTRAIN GAIN` | 79.5 | 92.5% | 85.9 | 1.91 | 73 | 85 | 90 | 85 |
+| `NORMALISE` | **82.2** | 92.5% | **88.8** | 1.73 | 68 | 85 | 93 | 93 |
+| `NORMALISE CONSTRAIN GAIN` | 80.8 | 92.5% | 87.4 | 1.73 | 65 | 83 | 92 | 93 |
+| `NORMALISE CONSTRAIN GAIN BRIGHTNESS` | 76.0 | 92.5% | 82.1 | 1.90 | 62 | 78 | 88 | 84 |
+
+- **Gate: failed.** No variant beats 83.9%. The chosen model stays: ln L, joint, four bands, `POWER`.
+- **Imposing eq. 12 changes almost nothing** (−1.4 to +0.4 points). The free fit already meets it on average: with `NORMALISE`, the free fit's gain at the soundings is 0.92–1.01 across the folds. The constraint matches `POWER` on ln(L − L∞) (87.4 against 87.0% on the same cells, 10–20 m 83 against 80%), as predicted (2), and is no worse at 0–2 m (73 against 71%), against the prediction. So regression dilution is not the main error once L∞ is subtracted. The control (ln L + constraint) equals the free ln L fit, rather than doing worse.
+- **`BRIGHTNESS` hurts every time,** by 1.5–5 points, against prediction 3 ("little change"). The bottom is not spectrally flat. Forcing Σ a_m = 0 takes away the fit's use of how bottom colour changes with depth at this site.
+- **`NORMALISE` is the real effect.** On the same cells it adds 2.7 points over the same ln(L − L∞) fit with four bands and 3.0 with three, nearly all at 10–20 m (79 → 91% and 80 → 93%). That is prediction 4, and it confirms that the spatial variation of K (gain 1.30–1.84 across the box) is the dominant error at depth.
+  - With three bands it is the best fit by 3.8 points overall (82.2 against 78.4%), and 5.6 on the same cells.
+  - With four bands it ties the chosen model on the same cells (89.6 against 89.2%, too small to call), with a higher RMSE (1.78 against 1.60 m), and loses overall on coverage.
+- **Coverage is the obstacle.** The deep test on ln(L − L∞) drops 4–7% of the cells, nearly all deeper than 10 m: with four bands, 17% of the 10–15 m cells and 50% of the 15–20 m cells; without the red, 5% and 40%. The red, within 2σ of L∞ beyond about 10 m, causes most of the 10–15 m loss. Loosening it (`DEEP 1`, `DEEP 0`) recovers coverage but costs more accuracy than it gains: the extra cells are noisy, and stage 1's attenuation changes with the threshold.
+- **Decision:** keep `CONSTRAIN` and `NORMALISE` as options, off by default. `NORMALISE` is worth keeping for the relocatable model: it is how per-site K maps enter an empirical depth (`FUTURE_EXPERIMENTS.md`, H4(c)).
+- **Next, if pursued:** `NORMALISE` on ln L with the effective attenuation g(L − L∞)/L, which keeps ln L's coverage; or fill the optically deep cells from the ln L fit.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.
