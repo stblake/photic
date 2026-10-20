@@ -213,7 +213,7 @@ The goal is the joint Lyzenga model, and later DROP, over the whole scene's wate
 - **Held-out discipline:** the palm's test half has been scored five times (below). The scene's cells outside the palm box have never been looked at, so score them separately. They are the cleanest held-out test available.
 
 **Moving to the new machine.**
-- **Repository:** push `profile-data`, and the parked branches `iterative`, `profile-ratio` and `b7-physics`, before cloning there. `origin/main` is at bdbd6b6, and nothing after it is pushed.
+- **Repository:** `profile-data` and the parked branches `iterative`, `profile-ratio` and `b7-physics` are pushed to `origin` (2026-10-20). `origin/main` is still at bdbd6b6; clone and check out `profile-data`.
 - **Data:** copy `~/photic_dev/validation_data` (13 GB after the clean-up below), or set `$PHOTIC_VALIDATION_DATA` to wherever it goes.
   - **`.venv`:** do not copy it. Rebuild it from the package list in the README.
   - **`tools/OSOAA*`:** x86_64 Mach-O builds. On another architecture, rebuild them with gfortran and the README's patches. The tier 2 and tier 3 caches (`runs/tier2*`, `runs/tier3/{lut,lut_sky,osoaa*}`) mean OSOAA only reruns for new cases.
