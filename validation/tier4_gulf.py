@@ -16,7 +16,8 @@ Scene selection, in order: haze first (the six clearest by SWIR surface reflecta
 water), among scenes with the sun at 38-56 deg (lower: little light reaches depth; higher: sun
 glint) and a tide changing by at most 0.2 m/h over the hour around the overpass.
 
-Photons: class 40 (seabed), not low_confidence_flag and not sensor_depth_exceeded. ATL24's
+Photons: class 40 (seabed), not low_confidence_flag and not sensor_depth_exceeded, and consistent
+with the other passes nearby (consistent(): some passes classify a near-surface layer as seabed). ATL24's
 ortho_h is refraction-corrected and relative to the EGM2008 geoid. Mean sea level is found from
 the passes themselves: each pass's sea surface (surface_h, median over its seabed photons) minus
 the GOT4.10 tide at that time, averaged over all passes (GOT4.10 follows the passes' surface with
@@ -59,6 +60,41 @@ def got_tide(lon, lat, seconds_since_2000):
                                                     extrapolate=True, cutoff=50)).ravel()
 
 
+CONSISTENCY_RADIUS = 0.003  # deg (~300 m): other passes' cells compared with each pass's cell
+CONSISTENCY_CELL = 0.0003    # deg: cells of one pass (median depth) for the comparison
+CONSISTENCY_MIN = 5          # fewest neighbouring cells of other passes for a comparison
+CONSISTENCY_TOL = (3.0, 0.3)  # m and fraction: a cell disagreeing by more than max of these is dropped
+
+
+def consistent(lon, lat, depth, granule):
+    """Photons whose pass agrees with the other passes nearby. Some ATL24 passes classify a layer
+    about 2 m below the surface as seabed across deep water (passes 6-7.5 m shallower than every
+    pass crossing them, with normal confidence, by night and by day). Each pass's cells (median
+    depth) are compared with the median of other passes' cells within CONSISTENCY_RADIUS; a cell
+    disagreeing by more than CONSISTENCY_TOL is dropped. Cells without enough neighbours are kept."""
+    from scipy.spatial import cKDTree
+    key = (np.rint(lon/CONSISTENCY_CELL).astype(np.int64)*1000000 + np.rint(lat/CONSISTENCY_CELL).astype(np.int64))*1000 + granule
+    u, inv = np.unique(key, return_inverse=True)
+    order = np.argsort(inv, kind="stable")
+    starts = np.flatnonzero(np.r_[True, inv[order][1:] != inv[order][:-1]])
+    ends = np.r_[starts[1:], len(order)]
+    D = np.array([np.median(depth[order[a:b]]) for a, b in zip(starts, ends)])
+    X = np.array([lon[order[a]] for a in starts])
+    Y = np.array([lat[order[a]] for a in starts])
+    G = np.array([granule[order[a]] for a in starts])
+    tree = cKDTree(np.column_stack([X, Y]))
+    bad = np.zeros(len(D), dtype=bool)
+    for c, nb in enumerate(tree.query_ball_point(np.column_stack([X, Y]), CONSISTENCY_RADIUS)):
+        nb = [n for n in nb if G[n] != G[c]]
+        if len(nb) >= CONSISTENCY_MIN:
+            ref = np.median(D[nb])
+            bad[c] = abs(D[c] - ref) > max(CONSISTENCY_TOL[0], CONSISTENCY_TOL[1]*ref)
+    keep = np.ones(len(depth), dtype=bool)
+    for c in np.flatnonzero(bad):
+        keep[order[starts[c]:ends[c]]] = False
+    return keep, int(bad.sum()), len(D)
+
+
 def reference():
     offset = (ATLAS_EPOCH - EPOCH_2000).total_seconds()
     passes, photons, granules = [], [], []
@@ -79,11 +115,19 @@ def reference():
     msl = float(np.mean(P[:, 3] - tide))
     r = float(np.corrcoef(P[:, 3], tide)[0, 1])
     X = np.concatenate(photons)
-    np.savez(REFERENCE, lon=X[:, 0], lat=X[:, 1], depth=msl - X[:, 2], year=X[:, 3].astype(int),
-             granule=np.concatenate(granules),
-             msl_above_geoid=msl, n_passes=len(P), tide_r=r, nontidal_sd=float(np.std(P[:, 3] - tide)))
+    G = np.concatenate(granules)
+    keep, n_bad, n_cells = consistent(X[:, 0], X[:, 1], msl - X[:, 2], G)
+    np.savez(REFERENCE, lon=X[keep, 0], lat=X[keep, 1], depth=msl - X[keep, 2], year=X[keep, 3].astype(int),
+             granule=G[keep], msl_above_geoid=msl, n_passes=len(P), tide_r=r,
+             nontidal_sd=float(np.std(P[:, 3] - tide)), dropped_inconsistent=int((~keep).sum()))
     print("%d passes, %d photons; MSL %.3f m above EGM2008; GOT4.10 r %.2f, non-tidal sd %.3f m"
           % (len(P), len(X), msl, r, np.std(P[:, 3] - tide)))
+    print("consistency with other passes: %d of %d pass cells dropped (%d photons, %.1f%%)"
+          % (n_bad, n_cells, (~keep).sum(), 100.0*(~keep).mean()))
+    for gnum in np.unique(G):
+        f = np.mean(~keep[G == gnum])
+        if f > 0.2:
+            print("  pass %d: %.0f%% of its photons dropped" % (gnum, 100*f))
 
 
 def tiles():

@@ -12,6 +12,8 @@ ICESat-2 on a split reference.
             (score.json), and the map in the style of photic's PLOT GRID ... PALETTE gmt
   correlation  the fitted depths against ICESat-2, test and calibration halves, as density plots
             (runs/gulf_lyzenga/final/correlation.png)
+  points    the ICESat-2 reference itself as coloured points, in the same format and colour scale as
+            the bathymetry map (runs/gulf_lyzenga/final/icesat2.png)
 
 The split is by ICESat-2 pass (granule), alternating by date after a seeded shuffle, so the two
 halves are separate tracks rather than neighbouring photons of one track. A cell is the median of
@@ -27,6 +29,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -48,6 +51,10 @@ FOLDS = 4
 BAND_SETS = [(443, 483, 561), (483, 561), (443, 483, 561, 655), (483, 561, 655), (443, 561)]
 LSM_CHOICES = ["percentile", "none"]
 RADII = [1, 2, 3]
+POWER_CHOICES = [False, True]  # MODEL lyzenga_log_linear ... POWER: the inverted power law, deep side
+COLOUR_RANGE = (-25.0, 0.0)  # m, the maps' colour scale (PLOT GRID ... MIN MAX), shared by both maps
+NC_LOCK = threading.Lock()  # netCDF4 is not thread-safe
+POINTS_CELL = 0.0006  # deg, the ICESat-2 points map's cells: each a visible dot
 
 
 def grid():
@@ -76,6 +83,12 @@ def composite(lon, lat):
             stacks[wl].append(band)
         tides.append(tide_at(attrs["isodate"]))
     return {wl: np.nanmedian(np.array(v), axis=0) for wl, v in stacks.items()}, float(np.mean(tides)), tides
+
+
+def water_mask():
+    """Cells of the composite where every band has data (the .asc files' nodata is -9999)."""
+    return np.all([np.loadtxt(os.path.join(OUT, "b%d.asc" % b), skiprows=6, ndmin=2)[::-1] != -9999.0
+                   for b in tp.L8_BANDS], axis=0)
 
 
 def split_photons():
@@ -166,7 +179,8 @@ def run_photic(rundir, soundings, bands, lsm, radius, extra="", plot=None, name=
         subprocess.run([PHOTIC, "run.bam"], cwd=rundir, input=b"lyzenga.png/PNG\n" if plot else None,
                        stdin=None if plot else subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
     import tier3_scenes
-    H = -tier3_scenes.read_nc(os.path.join(rundir, "H.nc"))
+    with NC_LOCK:
+        H = -tier3_scenes.read_nc(os.path.join(rundir, "H.nc"))
     fit = [l.rstrip() for l in open(os.path.join(rundir, "photic.log")) if l.startswith("  ")]
     return H, fit
 
@@ -195,7 +209,7 @@ def cv():
     lon, lat = grid()
     meta = json.load(open(os.path.join(OUT, "meta.json")))
     ref = np.load(os.path.join(OUT, "reference.npz"))
-    water = np.isfinite(np.loadtxt(os.path.join(OUT, "b561.asc"), skiprows=6)[::-1])
+    water = water_mask()
     cal, _, _, _ = split_photons()
     passes = np.random.default_rng(SEED + 1).permutation(np.unique(cal["granule"]))
     folds = []
@@ -208,16 +222,17 @@ def cv():
         path = os.path.join(OUT, "cv_train_%d.xyz" % f)
         write_xyz(path, train, lon, lat, meta["mean_tide"])
         folds.append((path, test))
-    configs = [(b, l, r) for b in BAND_SETS for l in LSM_CHOICES for r in RADII]
+    configs = [(b, l, r, pw) for b in BAND_SETS for l in LSM_CHOICES for r in RADII for pw in POWER_CHOICES]
 
     def one(job):
-        (bands, lsm, radius), f = job
-        H, _ = run_photic(os.path.join(WORK, "cv", "%s_%s_r%d_f%d" % ("-".join(map(str, bands)), lsm, radius, f)),
-                          folds[f][0], bands, lsm, radius, " TIDE %.4f" % meta["mean_tide"])
+        (bands, lsm, radius, pw), f = job
+        H, _ = run_photic(os.path.join(WORK, "cv", "%s_%s_r%d%s_f%d" % ("-".join(map(str, bands)), lsm, radius,
+                                                                         "_power" if pw else "", f)),
+                          folds[f][0], bands, lsm, radius, " TIDE %.4f%s" % (meta["mean_tide"], " POWER" if pw else ""))
         test = folds[f][1]
         m = np.isfinite(test) & np.isfinite(H)
         e = H[m] - test[m]
-        return (bands, lsm, radius), dict(n=int(np.isfinite(test).sum()), got=int(m.sum()), sse=float(np.sum(e**2)),
+        return (bands, lsm, radius, pw), dict(n=int(np.isfinite(test).sum()), got=int(m.sum()), sse=float(np.sum(e**2)),
                                           hits=int(np.sum(np.abs(e) <= 0.5 + 0.1*test[m])))
     jobs = [(c, f) for c in configs for f in range(FOLDS)]
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -226,12 +241,12 @@ def cv():
     for c in configs:
         r = [x for k, x in results if k == c]
         n, got = sum(x["n"] for x in r), sum(x["got"] for x in r)
-        table.append(dict(bands=list(c[0]), lsm=c[1], radius=c[2], hits=sum(x["hits"] for x in r)/n,
+        table.append(dict(bands=list(c[0]), lsm=c[1], radius=c[2], power=c[3], hits=sum(x["hits"] for x in r)/n,
                           with_depth=got/n, rmse=float(np.sqrt(sum(x["sse"] for x in r)/max(got, 1)))))
     table.sort(key=lambda t: -t["hits"])
     for t in table:
-        print("%-22s %-10s r%d  hits %.3f  with depth %.3f  rmse %.2f" % (t["bands"], t["lsm"], t["radius"], t["hits"],
-                                                                          t["with_depth"], t["rmse"]))
+        print("%-22s %-10s r%d %-5s  hits %.3f  with depth %.3f  rmse %.2f" % (
+            t["bands"], t["lsm"], t["radius"], "power" if t["power"] else "", t["hits"], t["with_depth"], t["rmse"]))
     json.dump(dict(folds=FOLDS, configs=table, chosen=table[0]), open(os.path.join(OUT, "cv.json"), "w"), indent=1)
 
 
@@ -274,9 +289,11 @@ def fit():
     c = json.load(open(os.path.join(OUT, "cv.json")))["chosen"]
     rundir = os.path.join(WORK, "final")
     # As the 2019 product's figure (dubai_to_abu_dhabi_gmt.png): photic's own plot.
-    plot = ["SET BACKGROUND WHITE", "SET PAGESIZE 100", "SET LINEWIDTH 20", "PLOT GRID Dubai_to_Abu_Dhabi PALETTE gmt"]
+    plot = ["SET BACKGROUND WHITE", "SET PAGESIZE 100", "SET LINEWIDTH 20",
+            "PLOT GRID Dubai_to_Abu_Dhabi PALETTE gmt MIN %g MAX %g" % COLOUR_RANGE]
     H, fit_log = run_photic(rundir, os.path.join(OUT, "calibration.xyz"), c["bands"], c["lsm"], c["radius"],
-                            " TIDE %.4f ERROR H_error" % meta["mean_tide"], plot, name="Dubai_to_Abu_Dhabi")
+                            " TIDE %.4f%s ERROR H_error" % (meta["mean_tide"], " POWER" if c.get("power") else ""), plot,
+                            name="Dubai_to_Abu_Dhabi")
     test = ref["test"]
     result = dict(settings=c, fit=fit_log, lyzenga=scores(test, H))
     if os.path.exists(PRODUCT_2019):
@@ -334,14 +351,52 @@ def correlation():
                 transform=ax.transAxes, va="top", fontsize=9, bbox=dict(facecolor="white", alpha=0.85, lw=0))
         ax.legend(loc="lower right", fontsize=8)
         fig.colorbar(hb, ax=ax, shrink=0.8, label="cells")
-    fig.suptitle("Dubai to Abu Dhabi: Lyzenga SDB (Landsat 8) against ICESat-2", fontsize=12)
+    c = json.load(open(os.path.join(OUT, "cv.json")))["chosen"]
+    fig.suptitle("Dubai to Abu Dhabi: Lyzenga SDB (Landsat 8%s) against ICESat-2"
+                 % (", power-law rescaled beyond the crossover" if c.get("power") else ""), fontsize=12)
     out = os.path.join(rundir, "correlation.png")
     fig.savefig(out, dpi=150)
     print(out)
 
 
+def points():
+    """Every ICESat-2 reference photon (both halves), binned to POINTS_CELL cells (the median of at
+    least 3 photons spreading at most 0.5 m), drawn by photic as the bathymetry map is."""
+    rundir = os.path.join(WORK, "final")
+    s, w, n, e = g.LIMIT
+    lon = w + POINTS_CELL*np.arange(int(round((e - w)/POINTS_CELL)) + 1)
+    lat = s + POINTS_CELL*np.arange(int(round((n - s)/POINTS_CELL)) + 1)
+    R = np.load(g.REFERENCE)
+    j = np.rint((R["lon"] - lon[0])/POINTS_CELL).astype(int)
+    i = np.rint((R["lat"] - lat[0])/POINTS_CELL).astype(int)
+    m = (i >= 0) & (i < len(lat)) & (j >= 0) & (j < len(lon))
+    key, z = i[m]*len(lon) + j[m], R["depth"][m]
+    order = np.argsort(key, kind="stable")
+    key, z = key[order], z[order]
+    starts = np.flatnonzero(np.r_[True, key[1:] != key[:-1]])
+    depth = np.full(len(lat)*len(lon), np.nan)
+    for a, b in zip(starts, np.r_[starts[1:], len(key)]):
+        sel = z[a:b]
+        if len(sel) >= 3 and np.std(sel) <= 0.5 and np.median(sel) > 0:
+            depth[key[a]] = -np.median(sel)  # negative down, as photic's bathymetry
+    depth = depth.reshape(len(lat), len(lon))
+    # Only over water in the imagery, as the reference used for scoring (land photons are misclassified).
+    water = water_mask()
+    wi = np.clip(np.rint((lat - lat[0])/CELL).astype(int), 0, water.shape[0] - 1)
+    wj = np.clip(np.rint((lon - lon[0])/CELL).astype(int), 0, water.shape[1] - 1)
+    depth[~water[np.ix_(wi, wj)]] = np.nan
+    tp.write_asc(os.path.join(rundir, "icesat2.asc"), depth, lon, lat, POINTS_CELL)
+    lines = ["READ GRID ICESat-2_ATL24 icesat2.asc", "SET BACKGROUND WHITE", "SET PAGESIZE 100", "SET LINEWIDTH 20",
+             "PLOT GRID ICESat-2_ATL24 PALETTE gmt MIN %g MAX %g" % COLOUR_RANGE, "EXIT"]
+    open(os.path.join(rundir, "points.bam"), "w").write("\n".join(lines) + "\n")
+    with open(os.path.join(rundir, "points.log"), "w") as log:
+        subprocess.run([PHOTIC, "points.bam"], cwd=rundir, input=b"icesat2.png/PNG\n", stdout=log,
+                       stderr=subprocess.STDOUT)
+    print(os.path.join(rundir, "icesat2.png"), int(np.isfinite(depth).sum()), "cells")
+
+
 if __name__ == "__main__":
-    commands = {"prepare": prepare, "cv": cv, "fit": fit, "correlation": correlation}
+    commands = {"prepare": prepare, "cv": cv, "fit": fit, "correlation": correlation, "points": points}
     if len(sys.argv) == 2 and sys.argv[1] in commands:
         commands[sys.argv[1]]()
     else:
