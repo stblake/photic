@@ -10,6 +10,8 @@ ICESat-2 on a split reference.
   fit       photic's MODEL lyzenga_log_linear with the chosen settings on the whole calibration
             half, scored once on the test half, with DROP and the 2019 product on the same cells
             (score.json), and the map in the style of photic's PLOT GRID ... PALETTE gmt
+  correlation  the fitted depths against ICESat-2, test and calibration halves, as density plots
+            (runs/gulf_lyzenga/final/correlation.png)
 
 The split is by ICESat-2 pass (granule), alternating by date after a seeded shuffle, so the two
 halves are separate tracks rather than neighbouring photons of one track. A cell is the median of
@@ -296,8 +298,50 @@ def fit():
     print(json.dumps({k: v for k, v in result.items() if k not in ("fit",)}, indent=1))
 
 
+def correlation():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LogNorm
+    import tier3_scenes
+    rundir = os.path.join(WORK, "final")
+    H = -tier3_scenes.read_nc(os.path.join(rundir, "H.nc"))
+    ref = np.load(os.path.join(OUT, "reference.npz"))
+    top = 26.0
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5.8), constrained_layout=True)
+    for ax, name, title in zip(axes, ("test", "calibration"), ("Test half (held out)", "Calibration half (fitted)")):
+        R = ref[name]
+        m = np.isfinite(R) & np.isfinite(H)
+        x, y = R[m], H[m]
+        e = y - x
+        hits = np.mean(np.abs(e) <= 0.5 + 0.1*x)
+        r = np.corrcoef(x, y)[0, 1]
+        slope, icpt = np.polyfit(x, y, 1)
+        hb = ax.hexbin(x, y, gridsize=70, extent=(0, top, 0, top), mincnt=1, cmap="viridis", norm=LogNorm())
+        t = np.array([0.0, top])
+        ax.plot(t, t, color="k", lw=1.2, label="1:1")
+        ax.fill_between(t, t - (0.5 + 0.1*t), t + (0.5 + 0.1*t), color="k", alpha=0.08, lw=0,
+                        label="hit tolerance (0.5 m + 10%)")
+        ax.plot(t, icpt + slope*t, color="tab:red", lw=1.2, ls="--", label="least-squares line")
+        ax.set_xlim(0, top)
+        ax.set_ylim(0, top)
+        ax.set_aspect("equal")
+        ax.set_xlabel("ICESat-2 ATL24 depth below MSL (m)")
+        ax.set_ylabel("SDB depth below MSL (m)")
+        ax.set_title(title)
+        ax.text(0.03, 0.97, "n = %d cells\nhits = %.1f%%\nRMSE = %.2f m\nbias = %+.2f m\nr = %.3f\nslope = %.2f, intercept = %.2f m"
+                % (m.sum(), 100*hits, np.sqrt(np.mean(e**2)), e.mean(), r, slope, icpt),
+                transform=ax.transAxes, va="top", fontsize=9, bbox=dict(facecolor="white", alpha=0.85, lw=0))
+        ax.legend(loc="lower right", fontsize=8)
+        fig.colorbar(hb, ax=ax, shrink=0.8, label="cells")
+    fig.suptitle("Dubai to Abu Dhabi: Lyzenga SDB (Landsat 8) against ICESat-2", fontsize=12)
+    out = os.path.join(rundir, "correlation.png")
+    fig.savefig(out, dpi=150)
+    print(out)
+
+
 if __name__ == "__main__":
-    commands = {"prepare": prepare, "cv": cv, "fit": fit}
+    commands = {"prepare": prepare, "cv": cv, "fit": fit, "correlation": correlation}
     if len(sys.argv) == 2 and sys.argv[1] in commands:
         commands[sys.argv[1]]()
     else:
