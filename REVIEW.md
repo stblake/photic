@@ -195,8 +195,6 @@ New finding:
 - the depth-coherence term penalises real slopes;
 - **high: photic's χ → Y relation gives Y = 0 in moderate and turbid water** (true Y = 1), so the forward model cannot fit the true state (12–21% reflectance error at the truth). Tier 2 missed this because it passed the true Y.
 
----
-
 ## 2d. Audit of the model's spectral data (October 2026)
 
 The SA model's data were checked against their sources. All of it now lives in `model/data/*.csv`, read by `spectra.c` (`READ WATER`, `READ BOTTOM`, `SCENE ... SRF`; see `model/data/README.md`).
@@ -214,6 +212,39 @@ The SA model's data were checked against their sources. All of it now lives in `
 | 9 | low | Albedo > 1 is possible for types 3–7. | Bounded by 1/max shape under `BOTTOM_BOUNDS`. Every type in `bottom_measured.csv` has bounds. |
 | 10 | low | `spectral_weights` is unused; `bottom_coral_dekker` is malformed; `samodel_h0` hard-codes Lee's constants. | **[fixed]** |
 | 11 | low | a_w beyond 700 nm has no recorded source; Pope & Fry is only sampled every 10 nm. | **[data]** `aw_pope_fry_1997_full.csv` holds the full 2.5 nm table. The values beyond 727.5 nm are still unsourced and flagged. |
+
+---
+
+## 2e. The empirical Lyzenga model (`MODEL lyzenga_log_linear`, October 2026)
+
+A line-by-line review with synthetic tests found 8 high, 15 medium and 7 low defects. The headline is that with reflectance input (ACOLITE Rrs) the model could not fit: on an exact two-band Lyzenga scene, every sounding from 2 to 16 m came out at 2.9 m. Ordinary least squares on the same data fits to 0.04 m.
+
+The model is linear in its coefficients, so it has been **replaced** by `model/lyzenga.c`, a weighted least-squares fit (Householder QR) with Huber IRLS. The old code (`lyzenga_log_linear`, `zdepth_lyzenga_log_linear`, `model_error`, `simulated_annealing`, `compute_weights`, `pertubate_vec*`) and the SET keys that tuned it (REGRESSIONWEIGHT, PARAMBOUNDWEIGHT, COEFFSIZEWEIGHT, CONSTRAINTSWEIGHT, SOUNDINGSWEIGHT, RELATIVEERROR, SAMAXITERATIONS, SAINITIALTEMPERATURE, SACOOLINGRATE, SAPARAMRANGE) are removed. `make test` now checks the new fit on an exact two-band scene.
+
+Findings, and what happened to each:
+
+1. **[fixed by the rewrite] high:** `log_epsilon = 1`, so ln(L − Lsm + 1) ≈ L − Lsm, and the "log-linear" model was linear. The coefficients it needed were clamped to ±1.5·DEPTHMAX, and `fabs(mparams[0])` forced a non-negative intercept. Now X = ln(L̄ − Lsm), with the optically-deep test below.
+2. **[fixed by the rewrite] high:** soundings were mapped to cells by scaling with `nrows`/`ncols` instead of `nrows − 1`/`ncols − 1`. Soundings north or east of the middle landed one cell off, and those on the last row or column were dropped. Now the nearest node: i = round((lat − slat)/cellsize). (The same bug remains in the empirical handler's BOUNDARY option, which now serves no fit.)
+3. **[fixed by the rewrite] high:** with 2 bands the coefficients were forced to −(1+|p₀|) and +(1+|p₁|). That excluded better solutions, and the printed equation, `model.bam` and the error grid used the raw parameters rather than the applied ones.
+4. **[fixed] high:** `Lsm_shallow` (common.c) inverted its land test and took Lsm from land. Polcyn still uses it.
+5. **[fixed by removal] high:** `MODEL polcyn_log_ratio ... BOTTOM|ERROR` with soundings loaded segfaulted in `model_error()`.
+6. **[fixed by the rewrite] high:** the error grid summed absolute values under a square root (units √m) and was all zeros when Lsm came from the LSM option. It is now the 1σ prediction error from the coefficients' covariance and the residual variance.
+7. **[fixed by the rewrite] high:** the annealing temperature sat far above the cost scale, a random walk of a fixed 1.46 M evaluations, and `srand(time(NULL))` made runs irreproducible. The fit is now exact and deterministic.
+8. **[fixed by the rewrite] medium:**
+   - the "EXPERIMENTAL" cube of the error for z < 0;
+   - a cost term rewarding large coefficients;
+   - Lyzenga's Σh·g = 1 constraint with one-way K;
+   - sounding weights from a hard-coded 1 m kernel over all soundings (O(N²));
+   - negative-down soundings giving a NaN fit (now detected from the median and negated);
+   - no tide (now TIDE);
+   - out-of-order options silently ignored (now any order, and unknown words are errors);
+   - optically deep cells given the intercept depth (now nodata);
+   - the correlation plot's `cpgopen("?")` blocking a command file (removed).
+9. **Open:**
+   - the remaining empirical handler (Polcyn) keeps §3 #21 (stale land/shallow indices), #22 (BOUNDARY loops forever with no valid pixels) and the BOUNDARY indexing above;
+   - its `REGION` option was always a no-op and now says so.
+
+---
 
 ## 3. Interpreter (`bam.c`)
 
@@ -239,7 +270,7 @@ The SA model's data were checked against their sources. All of it now lives in `
 ### Medium
 16. **[fixed]** A NULL return from `linenoise` on EOF (Ctrl-D) leads to `strlen(NULL)`. The `> MAX_LINE` check is off by one, and `raw_line` leaks (L344-354).
 17. `COMBINE` resets `Rinf_mean`/`nobs` inside the scene loop, and averages `ps_in[0]` instead of `ps_in[m]` (L580-598).
-18. `model_error()` divides the global `weight_local_constraints` by `n_model_bands` on every call, so the weight decays towards 0 (L5355).
+18. **[fixed by removal]** `model_error()` divides the global `weight_local_constraints` by `n_model_bands` on every call, so the weight decays towards 0 (L5355). The function went with the old Lyzenga fit (§2e).
 19. `COMPUTE PERCENTILE 100` reads `vec[k]`, one past the end (L1922).
 20. `COMPUTE K REGION` leaves the tail of `Ri`/`Rj` uninitialised (L2203-2295).
 21. The empirical models use stale global `land_index`/`shallow_index` when LAND/SHALLOW are omitted (L4079-4423).

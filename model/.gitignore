@@ -12,3 +12,6 @@ filllakes
 tests/run/
 tests/synth_gen
 tests/synth_check
+tests/lyz_run/
+tests/lyz_gen
+tests/lyz_check

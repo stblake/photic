@@ -1073,8 +1073,9 @@ float Lsm_shallow(float **array, int nrows, int ncols, float arr_spval,
 
   for (i = 0; i < nrows; i++) {
     for (j = 0; j < ncols; j++) {
+      // Land cells are those where the land grid has data.
       if (array[i][j] == arr_spval || shallow[i][j] == shallow_spval || 
-          land[i][j] == land_spval)
+          land[i][j] != land_spval)
         continue ;
       if (array[i][j] < min)
         min = array[i][j];

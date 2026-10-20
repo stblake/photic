@@ -128,6 +128,9 @@
             the depth, z, the one sigma depth error, z_sigma, and the bottom type. 
 
     1.95, 26/6/2019 - Greatly rewritten and designed the semi-analytical model. 
+
+    1.96, 20/10/2026 - MODEL lyzenga_log_linear is a weighted least-squares fit with Huber 
+            weights (lyzenga.c), replacing simulated annealing. REVIEW.md 2e.
 */
 
 /*
@@ -150,8 +153,9 @@
 
 #include "bam.h"
 #include "spectra.h"
+#include "lyzenga.h"
 
-#define BAM_VERSION "1.95"
+#define BAM_VERSION "1.96"
 
 // Return codes of parse_input().
 
@@ -190,17 +194,10 @@ void run_model_lee_semi_analytical(bool profile);
 void run_model_morel();
 void run_model_lee_kd();
 void run_model_lee_zsd();
-void random_search();
 void copy_vec(float *source, float *dest, int len);
-void pertubate_vec(float *vec, int len, float scale, float scale0);
-float model_error();
-void pertubate_vec2(float *vec, int len, float scale);
 int run_input_command_file();
 void run_empirical_model();
-void simulated_annealing(int nparams);
 float zdepth_polcyn_log_ratio(int i, int j);
-void lyzenga_log_linear();
-float zdepth_lyzenga_log_linear(int i, int j);
 void polcyn_log_ratio();
 float bottom_type(int i, int j);
 float geodistance(float lon1, float lat1, float lon2, float lat2);
@@ -213,7 +210,6 @@ void run_compute_lsb();
 void run_compute_bottom();
 void run_compute_k();
 void run_compute_percentile();
-void compute_weights(float **weights, float **soundings, int nsoundings);
 void run_compare();
 void run_combine();
 
@@ -3019,8 +3015,9 @@ void run_history() {
 //    BOUNDARY /boundary grid/
 
 void run_model() {
-  if (strcmp(parsed[1], "lyzenga_log_linear") == 0 || 
-      strcmp(parsed[1], "polcyn_log_ratio") == 0 || 
+  if (strcmp(parsed[1], "lyzenga_log_linear") == 0) {
+    run_model_lyzenga();
+  } else if (strcmp(parsed[1], "polcyn_log_ratio") == 0 || 
       strcmp(parsed[1], "stumpf_log_ratio") == 0) {
     run_empirical_model();
   } else if (strcmp(parsed[1], "Kd_490_Mueller") == 0) {
@@ -4070,19 +4067,16 @@ void run_model_mueller() {
 
 void run_empirical_model() {
 	
-	int i, j, n, m, k, ps_out, ps_bottom, ps_error, ps_boundary, nrows, ncols, n_valid_soundings, 
+	int i, j, n, m, k, ps_out, ps_bottom, ps_error, ps_boundary, nrows, ncols, 
     shallow_i, shallow_j, boundary_i, boundary_j, ns, nsamples; 
-	float **bathymetry, **bottom, **error_estimate, depth, xmin, ymin, xmax, ymax, 
-    err, L_sk, L_k, bk, si, lon, lat, mean_rel_error = 0.0, mean_abs_error = 0.0, nobs = 0.0, 
-    *valid_model_depths, *valid_sounding_depths, a, b, r, error, Xmin, Xmax, Ymin, Ymax, sigma,
+	float **bathymetry, **bottom, **error_estimate, depth, err, L_sk, L_k, bk, si, sigma,
     shallow_lat, shallow_lon;
 	bool present, land_present = false, shallow_present = false, 
-    return_bottom_type = false, return_error_estimate = false, success;
+    return_bottom_type = false, return_error_estimate = false;
   FILE *fp;
-  char model_file_name[] = "model.bam", error_file_name[] = "output.csv";
+  char model_file_name[] = "model.bam";
 
 	line_xa = 0.0; line_ya = 0.0; line_xb = 0.0; line_yb = 0.0; // Global.
-	xmin = 0.0; ymin = 0.0; xmax = 0.0; ymax = 0.0;
 
 // Has the model been previously run?
 
@@ -4110,8 +4104,7 @@ void run_empirical_model() {
 
 // Read model name. 
 
-	if (! (strcmp(parsed[1], "lyzenga_log_linear") == 0 || 
-			strcmp(parsed[1], "polcyn_log_ratio") == 0 || 
+	if (! (strcmp(parsed[1], "polcyn_log_ratio") == 0 || 
 			strcmp(parsed[1], "stumpf_log_ratio") == 0) ) {
 		printf("\nERROR: unknown model name '%s'.\n", parsed[1]);
 		return ; 
@@ -4224,14 +4217,6 @@ WEIGHTS /sounding weight/ /line weight/ BOTTOM /output bottom type grid name/ ER
       printf("\nERROR: unknown grid '%s'.\n", parsed[k]);
       return ;
     }
-    k++;
-  }
-
-// Weights. 
-
-  if (strcmp(parsed[k], "WEIGHTS") == 0) {
-  	weight_soundings = atof(parsed[++k]);
-  	weight_constraints = atof(parsed[++k]);
     k++;
   }
 
@@ -4393,11 +4378,8 @@ WEIGHTS /sounding weight/ /line weight/ BOTTOM /output bottom type grid name/ ER
 // Read REGION. 
 
   if (strcmp(parsed[k], "REGION") == 0) {
-  	xmin = atof(parsed[++k]);
-  	ymin = atof(parsed[++k]);
-  	xmax = atof(parsed[++k]);
-  	ymax = atof(parsed[++k]);
-    k++;
+    printf("\nWARNING: REGION is not implemented and is ignored.\n");
+    k += 5;
   }
 
 // Read BOUNDARY grid. 
@@ -4535,24 +4517,9 @@ WEIGHTS /sounding weight/ /line weight/ BOTTOM /output bottom type grid name/ ER
     return ;
   }
 
-  if (nsoundings != 0) {
-
-    // Allocate memory for storing the radiance of each spectral 
-    // band at each of the soundings and the sounding weights. 
-
-    allocate_float_array_2d(&radiance_at_soundings, nsoundings, n_model_bands);
-    sounding_weights = malloc(nsoundings*sizeof(float));
-
-    // Compute the sounding weights. 
-
-    compute_weights(&sounding_weights, soundings, nsoundings);
-  }
-
 // Run the model. 
 
-  if (strcmp(model_name, "lyzenga_log_linear") == 0) {
-  	lyzenga_log_linear();
-  } else if (strcmp(model_name, "polcyn_log_ratio") == 0) {
+  if (strcmp(model_name, "polcyn_log_ratio") == 0) {
 		polcyn_log_ratio();
   } else if (strcmp(model_name, "stumpf_log_ratio") == 0) {
   	printf("\nERROR: model 'stumpf_log_ratio' is not implemented.\n");
@@ -4622,9 +4589,6 @@ prefer to keep them as no data values.
 
   if (return_bottom_type) {
 
-    if (nsoundings != 0)
-      model_error();
-
     // Allocate memory for the bottom type grid. 
 
     allocate_float_array_2d(&bottom, nrows, ncols);
@@ -4658,9 +4622,6 @@ prefer to keep them as no data values.
 // Create error estimate grid. 
 
   if (return_error_estimate) {
-
-    if (nsoundings != 0)
-      model_error();
 
     // Check that the standard deviation of the deep water (Lsm) signal has been computed. 
 
@@ -4728,147 +4689,13 @@ prefer to keep them as no data values.
 
     meminuse += 1.0e-6*((float) nrows*ncols)*((float) sizeof(float));  
 
-    // Compute dz at the soundings. 
-
-    if (nsoundings != 0) {
-
-      dz_at_soundings = malloc(nsoundings*sizeof(float)); // Global. 
-
-//      printf("\nncols,nrows = %d, %d", ncols, nrows);
-//      printf("\nwlon,slat   = %f, %f", gridded_data[ps_error].wlon, gridded_data[ps_error].slat);
-//      printf("\ncellsize    = %f", gridded_data[ps_error].cellsize);
-
-      for (n = 0; n < nsoundings; n++) {
-        lon = soundings[n][0];
-        lat = soundings[n][1];
-        if (lon > gridded_data[ps_error].wlon && lon < gridded_data[ps_error].elon && 
-            lat > gridded_data[ps_error].slat && lat < gridded_data[ps_error].nlat) {
-          dz_at_soundings[n] = interp_bicubic(
-              error_estimate, 
-              ncols,
-              nrows,  
-              gridded_data[ps_error].wlon, 
-              gridded_data[ps_error].slat, 
-              gridded_data[ps_error].cellsize, 
-              gridded_data[ps_error].nodata_value, 
-              lon, 
-              lat);
-        } else {
-          dz_at_soundings[n] = 0.0;
-        }
-      }
-    }
-  }
-
-// Display model. (model_error() needs the fitted parameters of the Lyzenga model.) 
-
-  if (nsoundings != 0 && mparams != NULL) {
-	  model_error();
-
-	  printf("\n");
-    if (return_error_estimate) {
-      printf("\n         LON         |          LAT        |         WEIGHT      |  SOUNDING DEPTH  |    MODEL DEPTH   |    ABS ERROR (m)    |    REL %% ERROR      |      DZ (m)         |        RADIANCE ");
-      printf("\n---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------");
-      for (n = 0; n < nsoundings; n++) {
-          if (approx_equal(model_depths[n], 0.0, 1e-3)) {
-            continue ;
-          }
-        printf("\n %14.6f      | %14.6f      | %14.6f      |    %8.2f      |    %8.2f      |    %8.2f         |    %8.2f         |    %8.2f         |   ", 
-          soundings[n][0], soundings[n][1], sounding_weights[n], soundings[n][2], model_depths[n], 
-          fabs(model_depths[n] - soundings[n][2]), 100.0*fabs(model_depths[n] - soundings[n][2])/fabs(soundings[n][2]), dz_at_soundings[n]);
-        for (m = 0; m < n_model_bands; m++)
-          printf(" %8.2f,", radiance_at_soundings[n][m]);
-
-        if (model_depths[n] != bathy_spv) {
-          if (! approx_equal(fabs(soundings[n][2]), 0.0, 1e-3)) {
-            mean_rel_error += 100.0*fabs(model_depths[n] - soundings[n][2])/fabs(soundings[n][2]);
-          }
-          mean_abs_error += fabs(model_depths[n] - soundings[n][2]);
-          nobs += 1.0;
-        }
-      }
-    } else {
-      printf("\n         LON         |          LAT        |         WEIGHT      |  SOUNDING DEPTH  |    MODEL DEPTH   |    ABS ERROR (m)    |    REL %% ERROR      |        RADIANCE ");
-      printf("\n-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------");
-      for (n = 0; n < nsoundings; n++) {
-        if (approx_equal(model_depths[n], 0.0, 1e-3)) 
-          continue ;
-        printf("\n %14.6f      | %14.6f      | %14.6f      |    %8.2f      |    %8.2f      |    %8.2f         |    %8.2f         |   ", 
-          soundings[n][0], soundings[n][1], sounding_weights[n], soundings[n][2], model_depths[n], 
-          model_depths[n] - soundings[n][2], 100.0*fabs(model_depths[n] - soundings[n][2])/fabs(soundings[n][2]));
-        for (m = 0; m < n_model_bands; m++)
-          printf(" %8.2f,", radiance_at_soundings[n][m]);
-
-        if (model_depths[n] != bathy_spv) {
-          mean_rel_error += 100.0*fabs(model_depths[n] - soundings[n][2])/fabs(soundings[n][2]);
-          mean_abs_error += fabs(model_depths[n] - soundings[n][2]);
-          nobs += 1.0;
-        }
-      }
-    }
-
-    mean_rel_error /= nobs;
-    mean_abs_error /= nobs;
-
-    printf("\n\nMEAN ABSOLUTE ERROR = %.2f  (m)", mean_abs_error);
-    printf("\nMEAN RELATIVE ERROR = %.2f (%%)\n\n", mean_rel_error);
-
-    fp = fopen(error_file_name, "w");
-
-    if (return_error_estimate) {
-      fprintf(fp, "LON,LAT,WEIGHT,SOUNDING DEPTH,MODEL DEPTH,ABS ERROR (m),REL %% ERROR,DZ (m),RADIANCE");
-      for (n = 0; n < nsoundings; n++) {
-        if (approx_equal(model_depths[n], 0.0, 1e-3)) {
-          continue ;
-        }
-        fprintf(fp, "\n%14.6f,%14.6f,%14.6f,%8.2f,%8.2f,%8.2f,%8.2f,%8.2f,", 
-          soundings[n][0], 
-          soundings[n][1],
-          sounding_weights[n],
-          soundings[n][2],
-          model_depths[n], 
-          fabs(model_depths[n] - soundings[n][2]), 
-          100.0*fabs(model_depths[n] - soundings[n][2])/fabs(soundings[n][2]), 
-          dz_at_soundings[n]);
-        for (m = 0; m < n_model_bands - 1; m++) {
-          fprintf(fp, "%8.2f,", radiance_at_soundings[n][m]);
-        }
-        fprintf(fp, "%8.2f", radiance_at_soundings[n][n_model_bands - 1]);
-      }
-    } else {
-      fprintf(fp, "LON,LAT,WEIGHT,SOUNDING DEPTH,MODEL DEPTH,ABS ERROR (m),REL %% ERROR,RADIANCE");
-      for (n = 0; n < nsoundings; n++) {
-        if (approx_equal(model_depths[n], 0.0, 1e-3)) {
-          continue ;
-        }
-        fprintf(fp, "\n%14.6f,%14.6f,%14.6f,%8.2f,%8.2f,%8.2f,%8.2f,", 
-          soundings[n][0], 
-          soundings[n][1], 
-          sounding_weights[n], 
-          soundings[n][2], 
-          model_depths[n], 
-          fabs(model_depths[n] - soundings[n][2]), 
-          100.0*fabs(model_depths[n] - soundings[n][2])/fabs(soundings[n][2]));
-        for (m = 0; m < n_model_bands - 1; m++) {
-          fprintf(fp, "%8.2f,", radiance_at_soundings[n][m]);
-          }
-        fprintf(fp, "%8.2f", radiance_at_soundings[n][n_model_bands - 1]);
-      }
-    }  
-
-    fprintf(fp, "\n\nMEAN ABSOLUTE ERROR,%.2f,(m)", mean_abs_error);
-    fprintf(fp, "\nMEAN RELATIVE ERROR,%.2f,(%%)", mean_rel_error);
-
-    fclose(fp);
   }
 
   // Write model to file. 
 
   fp = fopen(model_file_name, "w");
 
-  if (strcmp(model_name, "lyzenga_log_linear") == 0)
-    fprintf(fp, "MODEL=LYZENGA2005\n");
-  else if (strcmp(model_name, "polcyn_log_ratio") == 0)
+  if (strcmp(model_name, "polcyn_log_ratio") == 0)
     fprintf(fp, "MODEL=POLCYN1972\n");
   else 
     fprintf(fp, "MODEL=BAM2017\n");
@@ -4895,154 +4722,9 @@ prefer to keep them as no data values.
     fprintf(fp, "%.6f,", Alpha[bands_indexes[m]]);
   fprintf(fp, "%.6f\n", Alpha[bands_indexes[n_model_bands - 1]]);
 
-  if (strcmp(model_name, "lyzenga_log_linear") == 0) {
-    fprintf(fp, "H=%.3f,", mparams[0]);
-    for (m = 0; m < n_model_bands - 1; m++)
-      fprintf(fp, "%.3f,", Hj[bands_indexes[m]]);
-    fprintf(fp, "%.3f\n\n", Hj[bands_indexes[n_model_bands - 1]]);
-  } else {
-    fprintf(fp, "H=%.3f,%.3f,%.3f\n", H0, Hj[bands_indexes[0]], Hj[bands_indexes[1]]);
-  }
+  fprintf(fp, "H=%.3f,%.3f,%.3f\n", H0, Hj[bands_indexes[0]], Hj[bands_indexes[1]]);
 
   fclose(fp);
-
-  // Correlation plot of model depth vs sounding depth. 
-
-#if PGPLOT
-  if (nsoundings != 0) {
-
-    char plot_title[] = "BAM Depth Correlation Plot", xlabel[] = "sounding depths (m)", ylabel[] = "model depths (m)";
-
-    valid_model_depths = malloc(nsoundings*sizeof(float));
-    valid_sounding_depths = malloc(nsoundings*sizeof(float));
-
-    n_valid_soundings = 0;
-
-    for (n = 0; n < nsoundings; n++) {
-      if (model_depths[n] != bathy_spv && soundings[n][2] < depthmax) {
-        valid_model_depths[n_valid_soundings]    = model_depths[n];
-        valid_sounding_depths[n_valid_soundings] = soundings[n][2];
-        n_valid_soundings++;
-      }
-    }
-
-    error = cpgopen("?");
-    if (error < 1) {
-      printf("\nERROR: cannot load graphics library.\n");
-      return ;
-    }
-
-    // Set the page size and aspect ratio to 1.0. 
-
-    cpgpap(pagesize, 1.0);
-
-    // Background and text colours. 
-
-    if (background == BLACK) {
-      cpgscr(0, 0.0, 0.0, 0.0);
-      cpgscr(1, 1.0, 1.0, 1.0);
-    } else {
-      cpgscr(0, 1.0, 1.0, 1.0);
-      cpgscr(1, 0.0, 0.0, 0.0);
-    }
-
-    // Plot the line of best fit.
-
-    Xmin = vec_min(valid_sounding_depths, n_valid_soundings);
-    Xmax = vec_max(valid_sounding_depths, n_valid_soundings);
-    // Ymin = vec_min(valid_model_depths, n_valid_soundings);
-    // Ymax = vec_max(valid_model_depths, n_valid_soundings);
-    Ymin = Xmin; 
-    Ymax = Xmax;
-
-    plot_scatter(plot_title, xlabel, ylabel, 2, 16, 
-      n_valid_soundings, valid_sounding_depths, valid_model_depths, line_width,
-      Xmin, Xmax, Xmin, Xmax, true);
-
-    // Compute the lines of best fit and correlation coefficient.
-
-    success = linear_fit(valid_sounding_depths, valid_model_depths, n_valid_soundings, &a, &b, &r);
-
-    printf("\nm, b, r, r^2 = %.3f, %.3f, %.3f, %.3f\n", a, b, r, pow(r, 2));
-
-    cpgsls(2);
-    cpgsci(8);
-    cpgmove(Xmin, a*Xmin + b);
-    cpgdraw(Xmax, a*Xmax + b);
-    cpgsls(1);
-
-    // Plot the line y == x.
-
-    cpgsls(1);
-    cpgsci(15);
-    cpgmove(Xmin, Xmin);
-    cpgdraw(Xmax, Xmax);
-        
-    cpgsci(1);
-
-    // Write r^2, slope, mean and relative error to screen. 
-
-    char r_label[64], slope_label[64], abs_err_label[64], rel_err_label[64];
-    sprintf(r_label,       "R\\u2\\d              = %.2f", pow(r, 2));
-    sprintf(slope_label,   "slope           = %.2f", a);
-    sprintf(abs_err_label, "mean abs error = %.2f (m)",  mean_abs_error);
-    sprintf(rel_err_label, "mean rel error  = %.2f (%%)", mean_rel_error);
-
-    cpgslw(line_width);
-    cpgtext(Xmin + 0.025*(Xmax - Xmin), Ymax - 0.025*(Ymax - Ymin), r_label);
-    cpgtext(Xmin + 0.025*(Xmax - Xmin), Ymax - 0.075*(Ymax - Ymin), slope_label);
-    cpgtext(Xmin + 0.025*(Xmax - Xmin), Ymax - 0.125*(Ymax - Ymin), abs_err_label);
-    cpgtext(Xmin + 0.025*(Xmax - Xmin), Ymax - 0.175*(Ymax - Ymin), rel_err_label);
-
-    free(valid_model_depths);
-    free(valid_sounding_depths);
-
-    // Close the graphics device. 
-
-    cpgclos();
-  }
-#endif
-
-  // Free memory. 
-
-  if (return_error_estimate && nsoundings != 0)
-    free(dz_at_soundings);
-
-  if (nsoundings != 0)
-    free_float_array_2d(radiance_at_soundings, nsoundings);
-}
-
-
-/* Compute a weight for each sounding. This prevents bias towards commonly charted depths. (Usually shoal depths.) */
-
-/* The weighting scheme used is a decreasing exponential. The weight, W, associated with a depth, d, from N depths, D is 
-given by: 
-
-  w = sum(exp((d - D_i)^2), i=0,N-1)
-
-  W = 1 - w/(ws*w_max)
-
-  where the weight scale, ws, used is usually around 5% (1.05). 
- */
-
-void compute_weights(float **weights, float **soundings, int nsoundings) {
-
-  int n, k; 
-  float weight_scale = 1.05, sum, max;
-
-  for (n = 0; n < nsoundings; n++) {
-    sum = 0.0; 
-    for (k = 0; k < nsoundings; k++) {
-      sum += exp(-pow(soundings[n][2] - soundings[k][2], 2));
-    }
-    (*weights)[n] = sum;
-  }
-
-  max = vec_max(*weights, nsoundings);
-
-  for (n = 0; n < nsoundings; n++) {
-    (*weights)[n] = 1.0 - ((*weights)[n])/(weight_scale*max); 
-  }
 
 }
 
@@ -5133,524 +4815,6 @@ float bottom_type(int i, int j) {
   Yij /= sqrt(Ki*Ki + Kj*Kj);
 
   return Yij;
-}
-
-
-void lyzenga_log_linear() {
-
-	int i, k = 1, n, nparams, lsb_sigma_present, linear_present;
-
-	zdepth = &zdepth_lyzenga_log_linear;
-	n_local_models = 1;
-
-#if LINEAR
-	linear_present = 2;
-#else
-  linear_present = 0;
-#endif
-
-#if LSB_SIGMA
-  lsb_sigma_present = 2;
-#else
-  lsb_sigma_present = 1;
-#endif
-
-  nparams = 1 + lsb_sigma_present*n_model_bands + linear_present;
-
-	mparams = (float*) malloc(nparams*sizeof(float));
-
-	simulated_annealing(nparams);
-
-  for (i = 0; i < n_model_bands; i++)
-    Hj[bands_indexes[i]] = mparams[i + 1];
-
-  printf("\n Z = %8.4f", mparams[0]);
-
-	for (n = 0; n < n_model_bands; n++) {
-		if (mparams[k] > 0.0) {	
-      // Signs correctly reversed below. See eqn. 9, pp. 2253 Lyzenga 2005. 
-			printf(" - %8.4f log(L_%d - %8.4f)",  mparams[k], n, Lsm[bands_indexes[n]]);
-		} else { 
-			printf(" + %8.4f log(L_%d - %8.4f)", -mparams[k], n, Lsm[bands_indexes[n]]);
-		}
-		k++;
-	}
-
-#if LINEAR
-  printf("\n a*z^b: a,b = %.3f, %.3f\n", mparams[k], mparams[k + 1]);
-#endif
-}
-
-// zdepth_lyzenga_log_linear computes the bathy model depth at the grid position i, j, 
-// for a n-banded model using Lyzenga's log-linear aproximation. 
-
-float zdepth_lyzenga_log_linear(int i, int j) {
-
-	int k, m, ii, jj, iii, jjj, nobs, nrows, ncols;
-	float rad, Lm, depth = mparams[0], a, b, X, h0, h1, h2; 
-
-	nrows = gridded_data[bands_indexes[0]].nrows;
-	ncols = gridded_data[bands_indexes[0]].ncols;
-
-	k = 1;
-
-	for (m = 0; m < n_model_bands; m++) {
-
-		nobs = 0;
-		Lm = 0.0;
-		for (ii = 1 - depth_radius; ii < depth_radius; ii++) {
-
-			if (i + ii < 0)
-				iii = 0;
-			else if (i + ii > nrows - 1)
-				iii = nrows - 1;
-			else 
-				iii = i + ii;
-
-			for (jj = 1 - depth_radius; jj < depth_radius; jj++) {
-
-				if (j + jj < 0)
-					jjj = 0;
-				else if (j + jj > ncols - 1)
-					jjj = ncols - 1;
-				else 
-					jjj = j + jj;
-
-				rad = gridded_data[bands_indexes[m]].array[iii][jjj];
-
-				if (rad != gridded_data[bands_indexes[m]].nodata_value) {
-					Lm += rad;
-					nobs++;
-				}
-			}
-		}
-		
-		if (nobs != 0)
-			Lm /= (float) nobs;
-
-    if (n_model_bands == 2) {
-      if (m == 1) {
-        h0 = 1.0 + fabs(mparams[k++]);
-      } else {
-        h0 = -1.0 - fabs(mparams[k++]);
-      }
-    } else {
-      h0 = mparams[k++];
-    }
-    
-		if (Lm > Lsm[bands_indexes[m]]) {
-      X = log(Lm - Lsm[bands_indexes[m]] + log_epsilon);
-			depth -= h0*X;
-		}
-	}
-
-#if LINEAR
-  a = mparams[k];
-  b = mparams[++k];
-  return a*depth + b;
-#else
-  return depth;
-#endif
-}
-
-
-// RMS relative error of the model at the depth soundings and constraints from Lyzenga, 2005. 
-
-float model_error() {
-
-	int n, m, i, j, nobs = 0, nsoundings_inside_shallow = 0, n_shallow_soundings;
-	float c, m_fit, c_fit, r_fit, slope_error, del, xpts, ypts, slope_depth,
-		lon, lat, dep, z, sum_of_weights = 0.0, sum, lsb, cost, ws;
-	bool zero_radiance, success;
-
-	int ncols = gridded_data[bands_indexes[0]].ncols;
-	int nrows = gridded_data[bands_indexes[0]].nrows;
-
-// Check model parameter bounds. 
-
-  bound_error = 0.0;
-
-  for (i = 0; i <= n_model_bands; i++) {
-    if (mparams[i] > 1.5*depthmax) {
-      bound_error += fabs(mparams[i] - 1.5*depthmax); 
-      mparams[i] = 1.5*depthmax;
-    } else if (mparams[i] < -1.5*depthmax) {
-      bound_error += fabs(1.5*depthmax - mparams[i]);
-      mparams[i] = -1.5*depthmax;
-    }
-  }
-
-  bound_error /= (float) 2*n_model_bands;
-
-  if (bound_error > 2.0*depthmax) {
-    return 6.0*bound_error;
-  }
-
-// Larger coefficients are preferable. 
-
-  coeff_size_preference = 0.0;
-
-  for (i = 0; i < n_model_bands; i++) {
-    coeff_size_preference += (fabs(depthmax) - fabs(mparams[i]))/fabs(depthmax);  
-  }
-
-// Store the model coefficients. 
-
-  for (i = 0; i < n_model_bands; i++)
-    Hj[bands_indexes[i]] = mparams[i + 1];
-
-// Compute the corrected value of h_0 = mparams[0] per Lyzenga 2005: sum(h_j*log(Lsb[j]), j=1,N)
-
-#if 0
-  mparams[0] = 0.0; 
-
-  for (i = 0; i < n_model_bands; i++) {
-//    printf("\n %d, %d, %.2f, %.2f", n_model_bands, bands_indexes[i], Lsb[bands_indexes[i]], Hj[bands_indexes[i]]);
-
-#if LSB_SIGMA
-    if (mparams[1 + n_model_bands + i] > 2.0)
-      mparams[1 + n_model_bands + i] = 2.0;
-    else if (mparams[1 + n_model_bands + i] < -2.0)
-      mparams[1 + n_model_bands + i] = -2.0;
-
-    c = mparams[1 + n_model_bands + i];
-#else
-    c = 0.0;
-#endif
-    if (Lsb[bands_indexes[i]] > 0.0) {
-      lsb = Lsb[bands_indexes[i]] + c*Lsb_sigma[bands_indexes[i]];
-      if (lsb > log_epsilon) {
-        mparams[0] += Hj[bands_indexes[i]]*log(lsb);
-      }
-    }
-  }
-#else 
-  mparams[0] = fabs(mparams[0]);
-#endif
-
-// Sounding errors. 
-
-  sounding_error = 0.0; // Global.
-
-	if (weight_soundings != 0.0) {
-
-		for (n = 0; n < nsoundings; n++) {
-
-			model_depths[n] = 0.0;
-			sounding_errors[n] = 0.0;
-      sounding_depths[n] = soundings[n][2];
-
-			for (m = 0; m < n_model_bands; m++)
-				radiance_at_soundings[n][m] = 0.0;
-
-			// Position of sounding. 
-
-			lon = soundings[n][0];
-			lat = soundings[n][1];
-			dep = soundings[n][2];
-
-			if (dep < depthmin || dep > depthmax)
-				continue ;
-
-			// Grid coordinates of sounding. 
-
-			i = round( ((float) nrows)*(lat - gridded_data[bands_indexes[0]].slat)/
-				(gridded_data[bands_indexes[0]].nlat - gridded_data[bands_indexes[0]].slat) );
-
-			j = round( ((float) ncols)*(lon - gridded_data[bands_indexes[0]].wlon)/
-				(gridded_data[bands_indexes[0]].elon - gridded_data[bands_indexes[0]].wlon) );
-
-			// Check sounding is within the domain of the grid. 
-
-			if (i < 0 || i >= gridded_data[bands_indexes[0]].nrows || j < 0 || j >= gridded_data[bands_indexes[0]].ncols)
-				continue ;
-
-      // Store the radiance at the sounding. 
-
-      zero_radiance = true;
-
-      for (m = 0; m < n_model_bands; m++) {
-        radiance_at_soundings[n][m] += gridded_data[bands_indexes[m]].array[i][j];
-        if (radiance_at_soundings[n][m] > epsilon) {
-          zero_radiance = false;
-        }
-      }
-
-      if (zero_radiance)
-        continue ;
-
-			// Compute model depth. 
-
-			z = zdepth(i, j);
-
-      if (approx_equal(z, mparams[0], 1e-3)) // All radiances are approx Lsm up to log_epsilon. 
-        continue ;
-
-			model_depths[n] = z;
-
-      nsoundings_inside_shallow++; // Sounding is in optically shallow water and sufficiently shallow. 
-
-			// Compute error at depth sounding. 
-
-			if (dep == 0.0) {
-				sounding_errors[n] = z;
-			} else {
-        if (relative_error) {
-				  sounding_errors[n] = (z - dep)/dep;
-        } else {
-          sounding_errors[n] = (z - dep);
-        }
-      }
-
-      // EXPERIMENTAL!! 17/12/2018
-      if (z < 0.0) {
-        sounding_errors[n] = pow(sounding_errors[n], 3.0);
-      }
-
-			// Weighted RMS error.
-
-			sounding_error += sounding_weights[n]*pow(sounding_errors[n], 2);
-			nobs++;
-
-      sum_of_weights += sounding_weights[n];
-		}
-
-		sounding_error = sqrt( sounding_error/sum_of_weights );
-
-    if (first_model_error_soundings) {
-      first_model_error_soundings = false; // Global.
-      n_shallow_soundings = (int) 100.0*((float) nsoundings_inside_shallow)/((float) nsoundings);
-      printf("\nPercentage of shallow soundings in optically shallow water = %d%%\n", n_shallow_soundings);
-    }
-	}
-
-// Deviation from constraints from Lyzenga, 2005.
-
-	constraint_error = 0.0; // Global
-  local_constraint_error = 0.0; // Global
-
-	if (weight_constraints != 0.0) {
-
-    // Constraint 2, Lyzenga 2005, pp. 2253, eqn 12: sum(h_j*alpha_j, j=1,N) == 1.0
-
-    for (m = 0; m < n_model_bands; m++) {
-//      printf("\nAlpha, bi = %f, %f", Alpha[bands_indexes[m]], Hj[bands_indexes[m]]);
-      if (Alpha[bands_indexes[m]] > 0.0) {
-        constraint_error += Hj[bands_indexes[m]]*Alpha[bands_indexes[m]];
-        local_constraint_error += fabs(Hj[bands_indexes[m]]*Alpha[bands_indexes[m]] - 1.0);
-      }
-    }
-
-    constraint_error = fabs(constraint_error - 1.0); 
-    // constraint_error = fabs(constraint_error); 
-	}
-
-// Linear regression slope, m x + c. We use the deviation from m = 1 as an indicator of the correct model slope. 
-
-regression_error = 12.0;
-
-#if 1
-  if (weight_regression != 0.0 && ! all_approx_zero(model_depths, nsoundings, epsilon)) {
-    success = linear_fit2(sounding_depths, model_depths, nsoundings, &m_fit, &c_fit, &r_fit, 0.0);
-    if (success) {
-      regression_error = 12.0*fabs(m_fit - 1.0) + 0.5*fabs(c_fit);
-    }
-  }
-#endif
-
-
-//  printf("\nsounding_error         = %.2f", sounding_error);
-//  printf("\nconstraint_error       = %.2f", constraint_error);
-//  printf("\nlocal_constraint_error = %.2f", local_constraint_error);
-//  printf("\ncoeff_size_preference  = %.2f", coeff_size_preference);
-//  printf("\nbound_error            = %.2f", bound_error);
-//  printf("\nregression_error           = %.2f", regression_error);
-
-  weight_local_constraints = weight_local_constraints/((float) n_model_bands);
-  // weight_local_constraints = 0.0;
-
-  cost = weight_soundings*sounding_error;
-  cost += weight_constraints*constraint_error;
-  cost += weight_local_constraints*local_constraint_error;
-  cost += weight_coeff_size_preference*coeff_size_preference;
-  cost += weight_bound_error*bound_error;
-  cost += weight_regression*regression_error;
-
-  ws = weight_soundings + weight_constraints + weight_local_constraints + weight_coeff_size_preference + weight_bound_error + weight_regression;
-  cost /= ws;
-
-//  printf("\ncost                  = %.2f\n", cost);
-
-  return cost;
-
-//  float partial_cost = (weight_soundings*sounding_error + weight_constraints*constraint_error)/(weight_soundings + weight_constraints);
-// 	return (1.0 - main_cost_weight)*(coeff_size_preference + bound_error) + main_cost_weight*partial_cost;
-}
-
-
-void random_search() { }
-
-#define SA_INITIAL_TEMP 1000.0
-#define SA_COOLING_RATE 0.00001
-#define SA_PARAMETER_RANGE 1.0
-#define SA_MAX_ITERATIONS 16384
-
-float initial_temperature = SA_INITIAL_TEMP;
-float cooling_rate = SA_COOLING_RATE;
-float parameter_range = SA_PARAMETER_RANGE;
-int sa_max_iterations = SA_MAX_ITERATIONS;
-
-
-void simulated_annealing(int nparams) {
-
-	int i, n, nsteps = 0, nexplore = 0, niter = 0, nrestarts = 0, n_low = 0, max_low_repeats = 8;
-	float *mparams_best, *mparams_solution, temp, best_cost, neighbour_cost, solution_cost, 
-    sounding_error_best, constraint_error_best, coeff_size_preference_best, bound_error_best, regression_error_best, cast;
-
-	srand(time(NULL));
-
-	mparams_best = (float*) malloc(nparams*sizeof(float));
-	mparams_solution = (float*) malloc(nparams*sizeof(float));
-
-	temp = initial_temperature;
-
-	// Random initial solution. 
-
-	for (i = 0; i < nparams; i++) {
-      mparams_solution[i] = frand2(parameter_range);
-  }
-
-	copy_vec(mparams_solution, mparams_best, nparams);
-	copy_vec(mparams_solution, mparams, nparams);
-
-	best_cost = model_error();
-	solution_cost = best_cost;
-	sounding_error_best = sounding_error;
-  constraint_error_best = constraint_error; 
-  coeff_size_preference_best = coeff_size_preference;
-  bound_error_best = bound_error;
-  regression_error_best = regression_error;
-
-	printf("INITIAL COST = %6.2f (%%)\n", 100*best_cost);
-
-	while (temp > 1.0) {
-
-		copy_vec(mparams_solution, mparams, nparams);
-
-		// 	Pertubate candidate. 
-    if (niter++ > sa_max_iterations) {
-      nrestarts++;
-      niter = 0;
-//      for (i = 0; i < nparams; i++)
-//        mparams[i] = frand2(parameter_range);
-      copy_vec(mparams, mparams_solution, nparams);
-//      copy_vec(mparams_best, mparams, nparams);
-//      copy_vec(mparams_best, mparams_solution, nparams);
-      neighbour_cost = best_cost;
-      solution_cost = neighbour_cost;
-    } else {
-      cast = parameter_range*(1.0 - ((float) niter)/((float) sa_max_iterations));
-		  pertubate_vec(mparams, nparams, cast, parameter_range);
-      neighbour_cost = model_error();
-    }		
-
-		// Display. 
-		if (nsteps++%1000 == 0) {
-			printf("\nITERATION   = %d\n", nsteps);
-			printf("TEMPERATURE = %10.2f\n", temp);
-			printf("COST        = %10.2f\n", best_cost);
-      printf("cast        = %10.2f\n", cast);
-      printf("meanders    = %d\n", nexplore);
-      printf("restarts    = %d\n", nrestarts);
-      if (relative_error)
-			  printf("RMS relative error = %6.2f (%%)\n", 100.0*sounding_error_best);
-      else
-        printf("RMS absolute error = %6.2f (m)\n", sounding_error_best);
-      printf("regression error           = %6.2f\n", regression_error_best);
-      printf("parameter constraint error = %6.2f\n", constraint_error_best); 
-      printf("coeff size preference      = %6.2f\n", coeff_size_preference_best);
-      printf("bound error                = %6.2f\n", bound_error_best);
-#if 1
-      for (i = 0; i < nparams; i++) 
-        printf("%10.3f ", mparams_best[i]);
-      printf("\n");
-      for (i = 0; i < nparams; i++) 
-        printf("%10.3f ", mparams_solution[i]);
-      printf("\n");
-#endif
-		}
-
-		if (neighbour_cost < solution_cost) {
-			solution_cost = neighbour_cost;
-			copy_vec(mparams, mparams_solution, nparams);
-			if (neighbour_cost < best_cost) {
-				best_cost = neighbour_cost;
-				copy_vec(mparams, mparams_best, nparams);
-				sounding_error_best = sounding_error;
-        constraint_error_best = constraint_error;
-        coeff_size_preference_best = coeff_size_preference;
-        bound_error_best = bound_error;
-        regression_error_best = regression_error;
-			}
-		} else if (exp((solution_cost - neighbour_cost)/temp) > frand()) {
-      nexplore++;
-			solution_cost = neighbour_cost; 
-			copy_vec(mparams, mparams_solution, nparams);
-		}
-
-		// Decrease temperature. 
-		temp *= 1.0 - cooling_rate;
-
-    if (temp < 1.0) {
-      if (++n_low < max_low_repeats) {
-        temp = 3.0;
-      }
-    }
-	}
-
-	rms_error = best_cost;
-	copy_vec(mparams_best, mparams, nparams);
-
-	free(mparams_best);
-	free(mparams_solution);
-
-}
-
-void pertubate_vec(float *vec, int len, float scale, float scale0) {
-  int n, discretized_depth;
-#if 0
-  n = random_in_range(0, len);
-	float rndnrm, x1, x2;
-	x1 = frand();
-	x2 = frand();
-	rndnrm = sqrt(-2.0*log(x1))*cos(2.0*PI*x2);
-	vec[n] += rndnrm*scale;
-#else
-  n = random_in_range(0, len);
-  vec[n] += scale*(2.0*frand() - 1.0);
-  
-  // if (n == 1) {
-  // discretized_depth = random_in_range(-40*((int) depthmax), 0); 
-  // } else {
-  // discretized_depth = random_in_range(0, 40*((int) depthmax));
-  // }
-  
-  // discretized_depth = random_in_range(-20*((int) depthmax), 20*((int) depthmax));
-  // vec[n] = 0.05*((float) discretized_depth);
-#endif
-}
-
-void pertubate_vec2(float *vec, int len, float scale) {
-
-	int n = random_in_range(0, len);
-	float rndnrm, x1, x2;
-	x1 = frand();
-	x2 = frand();
-	rndnrm = sqrt(-2.0*log(x1))*cos(2.0*PI*x2);
-	vec[n] += rndnrm*scale;
-	if (vec[n] <= 0.0) {
-		vec[n] = fabs(vec[n]) + 0.0001;
-	}
 }
 
 
@@ -5797,68 +4961,10 @@ void run_set() {
     return ;
   }
 
-// REGRESSIONWEIGHT
-
-  if (strcmp(parsed[1], "REGRESSIONWEIGHT") == 0) {
-    weight_regression = atof(parsed[2]);
-    return ;
-  }
-
-// PARAMBOUNDWEIGHT
-
-  if (strcmp(parsed[1], "PARAMBOUNDWEIGHT") == 0) {
-    weight_bound_error = atof(parsed[2]);
-    return ;
-  }
-
-// COEFFSIZEWEIGHT
-
-  if (strcmp(parsed[1], "COEFFSIZEWEIGHT") == 0) {
-    weight_coeff_size_preference = atof(parsed[2]);
-    return ;
-  }
-
 // NBOUNDARY 
 
   if (strcmp(parsed[1], "NBOUNDARY") == 0) {
     nboundary = atof(parsed[2]);
-    return ;
-  }
-
-// CONSTRAINTSWEIGHT
-
-  if (strcmp(parsed[1], "CONSTRAINTSWEIGHT") == 0) {
-    weight_constraints = atof(parsed[2]);
-    return ;
-  }
-
-// SOUNDINGSWEIGHT
-
-  if (strcmp(parsed[1], "SOUNDINGSWEIGHT") == 0) {
-    weight_soundings = atof(parsed[2]);
-    return ;
-  }
-
-// RELATIVEERROR
-
-  if (strcmp(parsed[1], "RELATIVEERROR") == 0) {
-    if (strcmp(parsed[2], "TRUE") == 0) {
-      relative_error = true;
-      printf("\n    RELATIVEERROR = true\n");
-    } else if (strcmp(parsed[2], "FALSE") == 0) {
-      relative_error = false;
-      printf("\n    RELATIVEERROR = false\n");
-    } else {
-      printf("\nERROR: expected true/false input.\n");
-    }
-    return ;
-  }
-
-// SAMAXITERATIONS
-
-  if (strcmp(parsed[1], "SAMAXITERATIONS") == 0) {
-    sa_max_iterations = atof(parsed[2]);
-    printf("\n    SAMAXITERATIONS = %d\n", sa_max_iterations);
     return ;
   }
 
@@ -5932,30 +5038,6 @@ void run_set() {
 	if (strcmp(parsed[1], "MODELRADIUS") == 0) {
 		depth_radius = atoi(parsed[2]);
 		printf("\n    MODEL RADIUS = %d\n", depth_radius);
-		return ;
-	}
-
-// SATEMP
-
-	if (strcmp(parsed[1], "SAINITIALTEMPERATURE") == 0) {
-		initial_temperature = atof(parsed[2]);
-		printf("\n    SET SA INITIAL TEMPERATURE = %f\n", initial_temperature);
-		return ;
-	}
-
-// COOLINGRATE
-
-	if (strcmp(parsed[1], "SACOOLINGRATE") == 0) {
-		cooling_rate = atof(parsed[2]);
-		printf("\n    SET SA COOLING RATE = %f\n", cooling_rate);
-		return ;
-	}
-
-// SAPARAMRANGE
-
-	if (strcmp(parsed[1], "SAPARAMRANGE") == 0) {
-		parameter_range = atof(parsed[2]);
-		printf("\n    SET SA PARAMETER RANGE = %f\n", parameter_range);
 		return ;
 	}
 
@@ -6061,45 +5143,10 @@ void run_print() {
     return ;
   }
 
-// REGRESSIONWEIGHT
-
-  if (strcmp(parsed[1], "REGRESSIONWEIGHT") == 0) {
-    printf("\n    REGRESSION WEIGHT = %f\n", weight_regression);
-    return ;
-  }
-
-// PARAMBOUNDWEIGHT
-
-  if (strcmp(parsed[1], "PARAMBOUNDWEIGHT") == 0) {
-    printf("\n    PARAMETER BOUND WEIGHT = %f\n", weight_bound_error);
-    return ;
-  }
-
-// COEFFSIZEWEIGHT
-
-  if (strcmp(parsed[1], "COEFFSIZEWEIGHT") == 0) {
-    printf("\n    COEFFICIENT SIZE WEIGHT = %f\n", weight_coeff_size_preference);
-    return ;
-  }
-
 // NBOUNDARY 
 
   if (strcmp(parsed[1], "NBOUNDARY") == 0) {
     printf("\n    N BOUNDARY = %d\n", nboundary);
-    return ;
-  }
-
-// CONSTRAINTSWEIGHT
-
-  if (strcmp(parsed[1], "CONSTRAINTSWEIGHT") == 0) {
-    printf("\n    CONSTRAINTS WEIGHT = %f\n", weight_constraints);
-    return ;
-  }
-
-// SOUNDINGSWEIGHT
-
-  if (strcmp(parsed[1], "SOUNDINGSWEIGHT") == 0) {
-    printf("\n    SOUNDING WEIGHT = %f\n", weight_soundings);
     return ;
   }
 

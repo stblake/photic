@@ -7,7 +7,7 @@ Guidance for working on **photic**, a physics-based, semi-analytical, shallow-wa
 - `model/`: all source code (~26k lines of C, flat directory, single `makefile`).
 - `paper/`: LaTeX source and figures for the paper (`paper/makefile` runs pdflatex).
 - `*.jpg` at the root: preview images of published SDB datasets, referenced from `README.md`.
-- There is no CI, and no real imagery or example command files in the repo. `model/tests/` holds a synthetic regression test (`make test`).
+- There is no CI, and no real imagery or example command files in the repo. `model/tests/` holds synthetic regression tests (`make test`).
 - Commit history is entirely "Add files via upload" (GitHub web uploads), so git history explains nothing; diff between commits to see what changed.
 
 ## Building
@@ -53,7 +53,8 @@ Main commands (dispatch in `bam.c:run_command`):
 | `SCENE NAME s BANDS ... WAVELENGTHS ... THETAVIEW v THETASUN w [HTIDE h] ...` | bam.c | Define a multi-band scene for the SA model |
 | `MODEL Lee_Semi_Analytical IN <scenes> OUT <10 grids> [DEPTHS g]` | bam.c → samodel.c | **The core physics-based model** |
 | `MODEL DROP IN <scenes> OUT <10 grids> [POINTS g]` | bam.c → profile.c | DROP, Deep-water Referenced Optical Profiling (formerly `Lee_Profile`, still accepted), for multispectral imagery: water from the image's deep pixels, exact depth profile (validation/EXPERIMENTS.md, Phase F) |
-| `MODEL lyzenga_log_linear\|polcyn_log_ratio ...` | bam.c | Older empirical models fitted to soundings (simulated annealing) |
+| `MODEL lyzenga_log_linear GRIDS ... BATHYMETRY g [options]` | lyzenga.c | Lyzenga's empirical log-linear model, fitted to soundings by weighted least squares with Huber IRLS (options in any order: LSM/PERCENTILE, DEEP, RADIUS, DEPTHS, TIDE, HUBER, BALANCE, ERROR; writes model.bam and output.csv) |
+| `MODEL polcyn_log_ratio ...` | bam.c | Older empirical two-band log-ratio model (analytic) |
 | `MODEL Lee_Kd_LS8\|Lee_Secchi_LS8\|Kd_490_Mueller\|Chl_Morel ...` | bam.c, secchi.c | Band-ratio water-quality products |
 | `COMPUTE AREA\|LSM\|LSB\|BOTTOM\|K\|PERCENTILE` | bam.c, jerlov.c | Deep-water signal, attenuation (Jerlov), areas, etc. |
 | `COMPARE GRID g SOUNDINGS f` | bam.c | Validation statistics vs soundings |
@@ -114,7 +115,7 @@ Data and tools live outside the repo in `~/photic_dev/validation_data` (override
 ## Verification
 
 To check a change:
-1. **`cd model && make test`** (about 3 s) is the synthetic regression test of the semi-analytical model:
+1. **`cd model && make test`** (about 3 s) runs the synthetic regression tests. The first is of the semi-analytical model:
    - `tests/synth_gen` writes two 16×16 four-band scenes from known depths, using photic's own forward model (`samodel_Rrs`) and tables.
    - `photic` runs `tests/synth.bam` (`MODEL Lee_Semi_Analytical`).
    - `tests/synth_check` compares 13 outputs with `tests/baseline/`, with a tolerance of 1e-4 + 1e-3·|value|.
@@ -122,6 +123,7 @@ To check a change:
    - Any change to the model's numerics will fail this test. If the change is intended, run `make test-baseline` and commit the new baseline with it, explaining why the numbers moved.
    - `tests/synth.bam` pins its spectral data with `READ WATER`/`READ BOTTOM`, so changing photic's defaults does not move the test.
    - Accuracy against the known depths is printed but not checked. The current model does **not** recover them (see REVIEW.md §2b).
+   - It also runs `MODEL lyzenga_log_linear` on two bands that follow Lyzenga's model exactly (`tests/lyz_gen`, `tests/lyz.bam`). `tests/lyz_check` requires the exact coefficients and every sounding's depth.
 2. Build with both compilers and no warnings: `make clean && make all utils`, then `make clean && make CC=gcc-16 all utils`. For a stricter check, use `make WARN="-Wall -Wextra -Wno-unused-parameter"`; the baseline has ~140 unused-variable warnings and some `-Wsometimes-uninitialized`, so don't add to them.
 3. Smoke test: a command file that reads a small `.asc`, runs `PROCESS SMOOTH`, writes and re-reads `.nc`, `PRINT GRIDSTATS`, then `EXIT`. Run it from a scratch directory, because photic writes `history.bam` to the current directory.
 4. For numerical helpers, write a small standalone driver in a scratch directory that links the relevant `.c` files, and run it under `-fsanitize=address,undefined`.

@@ -3,7 +3,7 @@
 #
 #   make                 builds photic and xyz2nc
 #   make utils           builds the standalone grid utilities
-#   make test            runs the synthetic regression test of the semi-analytical model
+#   make test            runs the synthetic regression tests (semi-analytical and Lyzenga models)
 #   make WARN=-Wall      builds with warnings
 #   make PGPLOT_DIR=...  PGPLOT (or giza) installed somewhere other than MacPorts
 #
@@ -50,19 +50,34 @@ tests/synth_gen: $(filter-out bam.o, $(PHOTIC)) tests/synth_gen.o
 tests/synth_check: $(CORE) tests/synth_check.o
 	$(CC) $(CFLAGS) $^ $(NETCDF_LIBS) -lm -o $@
 
+# MODEL lyzenga_log_linear on two bands that follow its model exactly: the coefficients and
+# every sounding's depth must be recovered (tests/lyz_check).
+tests/lyz_gen: tests/lyz_gen.o
+	$(CC) $(CFLAGS) $^ -lm -o $@
+
+tests/lyz_check: tests/lyz_check.o
+	$(CC) $(CFLAGS) $^ -lm -o $@
+
+tests/lyz_run: photic tests/lyz_gen
+	rm -rf tests/lyz_run && mkdir -p tests/lyz_run
+	tests/lyz_gen tests/lyz_run
+	cp tests/lyz.bam tests/lyz_run/
+	cd tests/lyz_run && ../../photic lyz.bam < /dev/null > photic.log 2>&1
+
 tests/run: photic tests/synth_gen
 	rm -rf tests/run && mkdir -p tests/run
 	tests/synth_gen tests/run > /dev/null
 	cp tests/synth.bam tests/run/
 	cd tests/run && ../../photic synth.bam < /dev/null > photic.log 2>&1
 
-.PHONY: tests/run test-baseline
+.PHONY: tests/run tests/lyz_run test-baseline
 
-test: tests/run tests/synth_check
+test: tests/run tests/synth_check tests/lyz_run tests/lyz_check
 	@fail=0; for f in $(TEST_OUTPUTS); do \
 	  tests/synth_check baseline tests/run/$$f.nc tests/baseline/$$f.nc || fail=1; \
 	done; \
 	tests/synth_check truth tests/run/modelled_H.nc tests/run/truth_H.asc; \
+	tests/lyz_check tests/lyz_run || fail=1; \
 	if [ $$fail = 0 ]; then echo "\nPASS"; else echo "\nFAIL (see tests/run/photic.log)"; exit 1; fi
 
 test-baseline: tests/run
@@ -75,7 +90,7 @@ test-baseline: tests/run
 spectra.o: ALL_CFLAGS += -DPHOTIC_DATA_DIR='"$(PHOTIC_DATA_DIR)"'
 
 clean:
-	rm -f *.o *.d tests/*.o tests/*.d photic xyz2nc $(UTILS) tests/synth_gen tests/synth_check
+	rm -f *.o *.d tests/*.o tests/*.d photic xyz2nc $(UTILS) tests/synth_gen tests/synth_check tests/lyz_gen tests/lyz_check
 	rm -rf tests/run
 
 -include $(wildcard *.d tests/*.d)
