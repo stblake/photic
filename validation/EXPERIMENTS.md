@@ -1608,6 +1608,40 @@ By depth, haze-screened scenes:
 - **Clear scenes do not lift the ceiling.** Haze screening raises coverage (23 → 30%) and hits (14.2 → 17.7%) but not the depth reach. The ceiling is not caused by hazy scenes: it is the residual red and NIR offset of ACOLITE's DSF making κ too strong, as diagnosed at Exmouth. That diagnosis now holds out at a second region.
 - **Next:** G6 step 2 (the aerosol where the water is) is the fix to test here, with the reference unchanged.
 
+**An empirical baseline: Lyzenga fitted to ICESat-2 on a split reference** (`gulf_lyzenga.py`, photic 1.96)
+
+photic's `MODEL lyzenga_log_linear` was rewritten as a least-squares fit (REVIEW.md §2e): the old annealing could not fit reflectance at all. Here it is fitted at the gulf, and compared with DROP and with the 2019 photic product. That product is the semi-analytical model started from Lyzenga depths, fitted to depths from elsewhere.
+
+- **Inputs:**
+  - the median composite of the six haze-screened Landsat 8 scenes, at 0.0003°;
+  - the ATL24 reference split by pass: 44 passes calibrate (7,245 cells), 43 others test (6,015 cells). Test cells holding any calibration photon are dropped.
+- **Settings by 4-fold cross-validation by pass, within the calibration half only:**
+  - candidates: 5 band sets, deep-water signal (1st percentile, or none: ln L), radius 1–3;
+  - chosen: 443 and 561 nm, ln L, radius 3 (56% hits out of fold). The deep-water percentile was worse in every band set.
+  - fit: H = 11.65 + 17.00 ln L₄₄₃ − 16.32 ln L₅₆₁; in-sample R² 0.42.
+- **Scored once on the test half:**
+
+| Test half (6,015 cells) | With a depth | Hits % | RMSE m | Bias m |
+|---|---|---|---|---|
+| Lyzenga, fitted to ICESat-2 | 100% | **77.1** | **1.95** | −0.27 |
+| 2019 photic product | 100% | 56.8 | 2.23 | −0.82 |
+
+| Hits % by depth (m) | 0–2 | 2–5 | 5–10 | 10–20 | 20–30 |
+|---|---|---|---|---|---|
+| Lyzenga | 36 | 77 | 89 | 72 | 0 |
+| 2019 product | 11 | 73 | 86 | 22 | 0 |
+| DROP (its nine tiles only) | 64 | 51 | 0 | 0 | 0 |
+
+In the nine tiles (5,810 test cells), Lyzenga scores 79.4% hits (RMSE 1.73 m), the 2019 product 58.3% (2.05 m) and DROP 15.5%. DROP gives a depth in 28% of cells, at RMSE 1.66 m.
+
+- **Lyzenga fitted to ICESat-2 is the strongest map here,** with most of its gain at 10–20 m (72% against 22%). The 2019 product's compression (too deep in the shallows, too shallow beyond 10 m) is mostly Lyzenga's, with a scale set elsewhere.
+- **Lyzenga still compresses:** it saturates near 15 m (20–30 m: bias −10 m), and is too deep at 0–2 m (+1.6 m).
+- **DROP is the most accurate shallower than 2 m** (RMSE 0.59 m against 2.96 m), but has no reach beyond 5 m.
+- **The physics wins on dark shoals.** Six calibration passes over shoals near 54.75 E, 24.92 N and 55.07 E, 25.07 N have photons 5–8 m shallower than both empirical maps. These are real shoals, not bad reference: over the largest (pass 21, 2.2 m), DROP agrees to 0.8 m. A blue/green ratio reads a dark shallow bottom as deep water.
+  - Those passes hold 18% of the calibration photons and 2% of the test photons. That is why cross-validation within the calibration half (56%) is lower than the test score (77%).
+- The map, in the style of the 2019 product's figure (photic's `PLOT GRID … PALETTE gmt`), is `runs/gulf_lyzenga/final/lyzenga.png`.
+- **For the sounding-free goal:** an ICESat-2-fitted empirical model sets a high bar at this site (77% hits). DROP's job is to match its reach without soundings, and keep its own advantage on dark shoals.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

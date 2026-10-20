@@ -7,7 +7,7 @@ sun and tide) were too hazy for ACOLITE's SWIR water mask.
   screen     SWIR over open water for every candidate scene (haze): gulf_screen_l8.json
   select     the scenes, by the rule below, as Collection 1 names for tier4_fetch_l8.GULF_SCENES
   reference  the ATL24 seabed photons (tier4_fetch_atl24.py) as depths below MSL:
-             derived/tier4/atl24_gulf.npz (lon, lat, depth, year)
+             derived/tier4/atl24_gulf.npz (lon, lat, depth, year, granule: the pass index)
   acolite    ACOLITE (as tier4_prepare.py: DSF, fixed AOT, residual glint) on the gulf scenes
              (tier4_fetch_l8.py gulf) over the site's box
   sites      photic inputs on 0.1 deg tiles: sites_gulf_l8
@@ -61,7 +61,7 @@ def got_tide(lon, lat, seconds_since_2000):
 
 def reference():
     offset = (ATLAS_EPOCH - EPOCH_2000).total_seconds()
-    passes, photons = [], []
+    passes, photons, granules = [], [], []
     for f in sorted(glob.glob(os.path.join(ATL24, "*.npz"))):
         d = np.load(f)
         if "class_ph" not in d.files:
@@ -73,12 +73,14 @@ def reference():
         passes.append((np.median(d["lon_ph"][m]), np.median(d["lat_ph"][m]), t, np.median(d["surface_h"][m])))
         year = (ATLAS_EPOCH + datetime.timedelta(seconds=t - offset)).year
         photons.append(np.column_stack([d["lon_ph"][m], d["lat_ph"][m], d["ortho_h"][m], np.full(m.sum(), year)]))
+        granules.append(np.full(m.sum(), len(passes) - 1))
     P = np.array(passes)
     tide = got_tide(P[:, 0], P[:, 1], P[:, 2])
     msl = float(np.mean(P[:, 3] - tide))
     r = float(np.corrcoef(P[:, 3], tide)[0, 1])
     X = np.concatenate(photons)
     np.savez(REFERENCE, lon=X[:, 0], lat=X[:, 1], depth=msl - X[:, 2], year=X[:, 3].astype(int),
+             granule=np.concatenate(granules),
              msl_above_geoid=msl, n_passes=len(P), tide_r=r, nontidal_sd=float(np.std(P[:, 3] - tide)))
     print("%d passes, %d photons; MSL %.3f m above EGM2008; GOT4.10 r %.2f, non-tidal sd %.3f m"
           % (len(P), len(X), msl, r, np.std(P[:, 3] - tide)))
