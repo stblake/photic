@@ -160,6 +160,108 @@ Invert the confident pixels, calibrate a band-ratio depth model on them, and use
 
 **Rationale for the order.** Cheap diagnostics and decisions (G0–G2) come before builds. G1 targets the measured cause of the ceiling. G3 and G4 are self-contained extensions of the exact profile. G5 and G6 are large and pay off only if the cheaper steps confirm that forward-model and atmospheric errors are what is left.
 
+## Status and handoff (2026-10-20)
+
+A summary of the session of 2026-10-19/20 (commits 241f224 to d51f5ab, branch `profile-data`), so the work can resume in a new session. The details are in the Log, under the sections named here.
+
+**Where things stand.**
+- **DROP** (`MODEL DROP`, `model/profile.c`; formerly `Lee_Profile`) is the sounding-free model.
+  - **Strength:** accurate shallower than about 5 m at both regions.
+  - **Weakness:** above that it hits a **depth ceiling**: it calls 5–20 m water optically deep, or gives depths that are too shallow.
+  - **Cause:** ACOLITE's DSF leaves a red/NIR offset over clear deep water, so QAA's κ comes out too strong. This is now confirmed held out, at the Arabian Gulf.
+- **The empirical bar at the gulf is high:** Lyzenga fitted jointly to all six scenes against ICESat-2 scores 90% hits on a held-out half. DROP has to reach that depth range without soundings.
+- **Main next step:** G6 step 2. Fit the aerosol where the water is: first per site or tile from DROP's local deep references, then inside DROP from TOA reflectance (M3).
+
+**Key numbers** (hits % = within 0.5 m + 10% of the reference, over all reference cells):
+
+| Site | Model | Hits % | RMSE m | Notes |
+|---|---|---|---|---|
+| Exmouth S2 (Bundegi / Tantabiddi / Marina / gulf entrance) | DROP, default | 21.6 / 54.3 / 20.9 / 1.5 | 1.68 / 2.17 / 3.01 / 3.85 | Phase G first steps |
+| Exmouth S2 | DROP, AOT fitted per scene | 22.6 / 57.0 / 14.6 / 2.1 | 1.31 / 1.06 / 1.49 / 0.88 | G6 step 1; Marina regresses, not accepted |
+| Arabian Gulf L8, 9 tiles, cleaned ICESat-2 | DROP, frozen, haze-screened scenes | 19.4 | 1.23 | 33% of cells with a depth; good at 0–5 m, none beyond |
+| Arabian Gulf L8, test half (5,695 cells) | Lyzenga, all 6 scenes × 4 bands jointly, `POWER` | **90.0** | 1.21 | fitted to the ICESat-2 calibration half |
+| same | Lyzenga, median composite, 4 bands, `POWER` | 79.8 | 1.47 | |
+| same | 2019 photic product (SA model started from Lyzenga depths) | 58.8 | 1.88 | compressed: +2 m shallow, −2.3 m at 10–20 m |
+
+**What changed in the code.**
+- **DROP:**
+  - The name. Banners print `DROP:`.
+  - Switches, all off by default:
+    - `PROFILE_QAA` 1–3: QAA at 560 nm; mode 3 removes a red offset;
+    - `PROFILE_OFFSET_N`: the offset's spectral shape;
+    - `PROFILE_EPS_AUTO`: a self-calibrated ε;
+    - `SCENE ... NIR /grid/ /nm/`: the scene's NIR feeds the offset estimate.
+  - The defaults reproduce `profile-wt` exactly.
+- **`MODEL lyzenga_log_linear` was rewritten** (`model/lyzenga.c`, photic 1.96; REVIEW.md §2e). The old version could not fit reflectance at all, because `log_epsilon = 1` made it linear.
+  - **Fit:** weighted least squares (QR) with Huber IRLS, which is deterministic.
+  - **Options, in any order:** `LSM`/`PERCENTILE`, `DEEP`, `RADIUS`, `DEPTHS`, `TIDE`, `HUBER`, `BALANCE`, `POWER [ALL]`, `ERROR`.
+  - **`POWER`:** an inverted power law (classical calibration) against regression dilution. By default it applies only beyond the crossover.
+  - **Size:** up to 32 grids, so it can fit several scenes jointly.
+  - **Removed:** the annealing, `model_error` and their 10 SET keys. `Lsm_shallow`'s land test is fixed.
+  - **Tests:** `make test` now checks exact recovery and the POWER identity.
+- **Validation scripts:**
+  - `aot_fit.py` (G6 step 1), plus `patch_acolite_fixed_aot` in `tier4_prepare.py`, which works around ACOLITE's fixed-AOT crash in-process;
+  - `tier4_fetch_atl24.py`;
+  - `tier4_gulf.py`: `screen`, `select`, `reference` (with the cross-pass consistency filter), `acolite` and `sites`;
+  - `gulf_lyzenga.py`: `prepare`, `cv`, `fit [composite|joint bands radius power|nopower]`, `correlation` and `points`.
+
+**Data.**
+- **Sentinel-2 is no longer kept** (deleted for space, 34 GB). Tier 4 defaults to `sites_l8`; the README says how to rebuild Sentinel-2.
+- **The acceptance baseline is out of date.** `scorecards/baseline.json` was scored on Sentinel-2, so a **Landsat 8 baseline must be recorded before the next model-core change**.
+- **Arabian Gulf** (54.7–55.2 E, 24.75–25.1 N), Landsat 8 path 160/043:
+  - **Scenes:** chosen by haze, then sun, then tide (`tier4_gulf.py select`). Few scenes there are clear: the first selection by cloud alone was too hazy for ACOLITE's SWIR mask.
+  - **Reference:** ICESat-2 ATL24 v002 in `raw/atl24` (seabed and surface photons only, 281 MB), as depths below MSL. MSL is 0.25 m above EGM2008, estimated from the passes' sea surface minus the GOT4.10 tide.
+  - **Bad passes:** some read a near-surface layer as seabed. A cross-pass consistency filter drops 9.4% of photons.
+- **Earthdata:** the login in `~/.netrc` works for NSIDC downloads (fixed this session).
+- **Outputs:** maps and plots are in `runs/gulf_lyzenga/final/`:
+  - `lyzenga.png` and `icesat2.png`, both in photic's `PLOT GRID ... PALETTE gmt` on a shared −25 to 0 m scale;
+  - `correlation.png`.
+
+**To reproduce the gulf** (from `validation/`, with the validation venv):
+1. `tier4_fetch_atl24.py`, then `tier4_gulf.py reference`.
+2. `tier4_gulf.py screen`, then `select`. Put the names in `tier4_fetch_l8.GULF_SCENES`.
+3. `tier4_fetch_l8.py gulf`, then `tier4_gulf.py acolite` and `sites`.
+4. DROP: `PHOTIC_TIER4_SITES=sites_gulf_l8 bench.py run --tier 4 --model DROP --cid gulf-heldout-l8-clear`.
+5. Lyzenga: `gulf_lyzenga.py prepare`, `cv`, `fit`, `correlation`, then `points` (`fit` clears `final/`, so run `points` after it).
+
+**Held-out discipline.**
+- **Exmouth:** its test split has been looked at many times and no longer gives an unbiased test.
+- **Gulf test half:** it has been scored five times with Lyzenga variants:
+  1. linear composite;
+  2. composite with `POWER`;
+  3. composite with `POWER` again, on the cleaned reference;
+  4. the joint model chosen by cross-validation;
+  5. the four-band composite, as asked.
+  
+  Every choice was made by cross-validation within the calibration half. DROP was scored there frozen, and was only rescored after the reference was cleaned.
+- **Next:** a third region, or a fresh split, would be needed for the next unbiased test.
+
+**Findings to remember.**
+- **DROP fits all scenes jointly,** with χ² summed over scenes. A scene that cannot see the bottom adds about 0 to the deep test, so the depth reach is the pooled evidence, not the worst scene's. But a pixel needs every scene, and one biased scene raises the threshold for all through the reduced-χ² scale. So screen scenes first.
+- **Pan-sharpening before modelling would distort the spectra.** Sentinel-2 has no panchromatic band, and Landsat's skips 443/482 nm. If wanted, sharpen the *depth map* afterwards, guided by the panchromatic band, scored on the 5 m Marina composite.
+- **Fit Lyzenga jointly,** with every scene's bands as predictors. It beats a median composite by 10 points of hits.
+- **Lyzenga's compression is regression dilution.** An inverse-calibration power law beyond the crossover fixes the slope without costing the shallow fit.
+- **Pitfalls:**
+  - photic's `.asc` grids use −9999 as nodata, not NaN;
+  - netCDF4 is not thread-safe, so lock reads;
+  - the shell sets an unrelated `PHOTIC` variable, so scripts must use the repository's `model/photic`;
+  - photic's `PLOT` asks for a PGPLOT device on stdin: `file.png/PNG`.
+
+**Open decisions and next steps, in order.**
+1. **G6 step 2** (above). Its held-out test is the gulf DROP tiles.
+2. **Record a Landsat 8 tier 4 baseline** (`bench.py run --tier 4` on `sites_l8`, then `score` and `compare`) before accepting model-core changes.
+3. **Decision for the user: ICESat-2 as DROP's κ-scale anchor (G1b iii).** The split reference and fold machinery in `gulf_lyzenga.py` would serve it: calibrate κ's scale on the calibration half and score the test half.
+4. **Lyzenga joint model:**
+   - ridge or fewer bands per scene, for transfer (the |R| ratio is 91);
+   - fill cells lacking a scene from the composite fit;
+   - reach beyond about 16 m;
+   - a Lyzenga baseline at Exmouth from the training sites' soundings.
+5. **Smaller items:**
+   - a per-scene-median DROP variant, judged on the Exmouth training sites;
+   - a depth-map pan-sharpening step;
+   - the remaining Polcyn/BOUNDARY items (REVIEW.md §2e, item 9).
+6. **Push state:** `origin/main` is at bdbd6b6. d51f5ab and this summary are on `profile-data`, unpushed.
+
 ## Log
 
 | ID | Date | Hypothesis | Prediction | Result | Decision |
