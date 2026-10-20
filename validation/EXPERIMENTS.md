@@ -1968,6 +1968,54 @@ Test half (5,695 cells; scored for the chosen joint model, and for the four-band
   - the coefficients' |R| ratio is 91, so with 24 correlated predictors, ridge or fewer bands per scene may generalise better elsewhere.
 - **For the sounding-free goal:** an ICESat-2-fitted empirical model sets a high bar at this site, 90% hits. DROP already fits all scenes jointly, so it has the same advantage; it needs the reach.
 
+### Attenuation over the scene from the Lyzenga fit (2026-10-20, `ATTENUATION`, `gulf_lyzenga.py attenuation`)
+
+**Hypothesis.** Lyzenga's model is the linearised form of X = ln(L − Lsm) = B + c_m − K_m M_s (H + h_s). With the depths known at the soundings, each grid's K can be fitted as a smooth field across the box. A depth can then follow from K at every cell, independent of the bottom's brightness.
+
+**Prediction** (written before the run):
+- K(443–561) of about 0.05–0.15 m⁻¹, varying 2× or more across the box;
+- the ratios between bands close to the bi-plot slopes;
+- QAA's κ several times higher, as at Exmouth.
+
+**The model** (`MODEL lyzenga_log_linear ... ATTENUATION K SCENES 6 TIDES ... SUNZENITH ... VIEWZENITH ... NODES 0.05`; photic's `lyzenga.c` header):
+- **Stage 1:** at the soundings, for each grid, X = c_m − g_m(x) Z_s with g_m bilinear on 12 × 9 nodes. Neighbouring nodes are smoothed, the fit is weighted least squares with Huber weights, and K = g/M_s, with M_s from the sun and view zeniths refracted into water.
+- **Stage 2:** at every cell, X − c + g h = B − g H is a weighted straight line in g. It gives H, σ_H and B.
+- **Selection:** soundings and grids are selected, and weighted, by the *fitted* signal exp(c − gZ) after the first pass. Selecting by the observed signal keeps only the deep cells that happen to be bright, which flattened the red slope: K(655) was 0.08–0.15 m⁻¹, and rose 20–40% with this fix.
+- **Test:** `make test` includes an exact synthetic case (`tests/att_gen`). K is recovered to 3 × 10⁻⁶ at every node, and the depth at every cell to float precision, with the bottom's brightness varying away from the soundings.
+
+**Result**, on the palm box's calibration half (out of fold on cv's 4 folds by pass; the test half was not used):
+
+| Out of fold (5,833 cells) | Hits % | RMSE m | Bias m | 0–2 | 2–5 | 5–10 | 10–20 |
+|---|---|---|---|---|---|---|---|
+| Lyzenga, joint, four bands, `POWER` | **83.9** | 2.09 | +0.26 | 58 | 79 | 90 | 90 |
+| Depth from the attenuation, four bands | 57.3 | 3.14 | −0.58 | 5 | 56 | 79 | 47 |
+| Lyzenga, joint, 443/483/561 | 78.4 | 2.18 | +0.17 | 57 | 75 | 86 | 80 |
+| Depth from the attenuation, 443/483/561 | 61.4 | 2.84 | +0.12 | 34 | 54 | 69 | 69 |
+
+- **The harness reproduces cross-validation:** Lyzenga's out-of-fold 83.9% equals `cv.json`'s.
+- **K at 443–561 nm is plausible and spatially coherent.**
+  - Medians over the scenes: 0.05–0.09 m⁻¹ at 443 nm, 0.07–0.10 at 483 and 0.065–0.105 at 561, varying 1.5–2× across the box. The scenes differ: 2019-03-13 is the clearest (443 nm 0.050), 2018-10-04 the least clear (0.088).
+  - The three bands are fitted independently, yet they map the same pattern: low in the south-west, rising towards Jebel Ali and Dubai.
+  - This confirms the prediction's range, and the variation that one global set of Lyzenga coefficients cannot represent.
+- **K(655) is not physical:** 0.085–0.19 m⁻¹, against pure water's absorption alone of about 0.35–0.4 m⁻¹.
+  - The red sees the bottom only to a few metres. Its deep-water signal varies (turbidity, adjacency, the atmospheric residual) by far more than the darkest cells' spread, which sets the threshold. So nearly every sounding stays "active", and the slope is flattened.
+  - The fix would be a deep-water level fitted per grid (or as a field), or a floor at pure water's K. Neither is built.
+- **The depth from the attenuation does not compete with Lyzenga** (57–61% against 78–84% hits):
+  - It comes from how K differs between bands and scenes, which is only 0.01–0.03 m⁻¹ at 443–561 nm. A change of bottom type (seagrass against sand) moves the log band ratio by about 0.5, that is by metres of depth.
+  - The red's biased K wrecked 0–2 m (5% hits; 34% without the red).
+  - Its σ_H is too small: 25–37% of cells within ±σ_H.
+  - Lyzenga's regression absorbs the site's bottom–depth correlations; this estimate cannot.
+- **Not yet checked:** the band ratios against bi-plot slopes, and K against QAA.
+- **Decision:**
+  - Keep `ATTENUATION`, off unless asked, with no effect on the Lyzenga fit (test-half hits still 90.0%). `gulf_lyzenga.py` passes it on every run, and `fit` writes the K maps.
+  - K at 443–561 nm is the usable product. These maps are what `FUTURE_EXPERIMENTS.md` H4(c) needs at each training site.
+  - The depth from the attenuation is a diagnostic, not a product.
+- **Next, if pursued:**
+  - fit the deep-water level per grid in stage 1, and bound K below by pure water;
+  - two bottom classes in stage 2;
+  - check K against QAA on rrs∞ − δ and against an ocean-colour Kd(490).
+- **Found on the way:** the composite runs appear to count the mean tide twice. `calibration.xyz` holds depth + mean tide, and photic adds `TIDE` (the mean tide) again. The composite's depths would then be about 0.12 m too deep, which is consistent with its +0.16 to +0.21 m test bias. This is not fixed; the joint model (TIDE 0, depths below MSL) is unaffected.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.

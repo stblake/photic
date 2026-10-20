@@ -16,6 +16,13 @@ ICESat-2 on a split reference.
             (runs/gulf_lyzenga/final/correlation.png)
   points    the ICESat-2 reference itself as coloured points, in the same format and colour scale as
             the bathymetry map (runs/gulf_lyzenga/final/icesat2.png)
+  attenuation [/bands/]  MODEL lyzenga_log_linear's ATTENUATION with the chosen joint model: K of every scene
+            and band over the box, and the depth from it, scored against Lyzenga's out of fold on
+            cv's folds (the calibration half only; attenuation.json), then the maps from the whole
+            calibration half (runs/gulf_lyzenga/attenuation/)
+
+Every run passes ATTENUATION (each scene's tide and ACOLITE's sun and view zeniths), so photic
+also writes K and the attenuation's depth alongside Lyzenga's.
 
 Inputs: the composite (one image at the scenes' mean tide), or every scene at once: one Lyzenga
 regression with each scene's log-bands as predictors, depth = a0 + sum_s sum_b a_sb ln L_sb. The
@@ -69,6 +76,7 @@ POWER_CHOICES = [False, True]  # MODEL lyzenga_log_linear ... POWER: the inverte
 COLOUR_RANGE = (-25.0, 0.0)  # m, the maps' colour scale (PLOT GRID ... MIN MAX), shared by both maps
 NC_LOCK = threading.Lock()  # netCDF4 is not thread-safe
 POINTS_CELL = 0.0006  # deg, the ICESat-2 points map's cells: each a visible dot
+ATT_NODES = 0.05  # deg, the attenuation's node spacing (ATTENUATION ... NODES)
 
 
 def projected_l2w():
@@ -229,9 +237,38 @@ def write_xyz(path, depth, lon, lat, tide):
             f.write("%.7f %.7f %.3f\n" % (lon[b], lat[a], depth[a, b] + tide))
 
 
-def run_photic(rundir, soundings, bands, lsm, radius, extra="", plot=None, name="H", inputs="composite"):
-    """MODEL lyzenga_log_linear on the composite, or on every scene's bands jointly; returns the
-    depth grid (positive down, nan where none) and photic's printed fit."""
+def scene_geometry():
+    """Each scene's sun and view zenith (deg, ACOLITE's L2W attributes), in the composite's order."""
+    import netCDF4
+    files = projected_l2w() if g.REGION != "palm" else \
+        sorted(glob.glob(os.path.join(DATA, "derived", "tier4", g.ACOLITE, "*", "*L2W.nc")))
+    out = []
+    with NC_LOCK:
+        for f in files:
+            with netCDF4.Dataset(f) as d:
+                out.append((float(d.getncattr("sza")), float(d.getncattr("vza"))))
+    return out
+
+
+def attenuation_words(inputs):
+    """ATTENUATION K: each scene's tide above MSL (the joint model's soundings are below MSL) and
+    geometry; the composite is one scene at the mean tide and mean geometry (TIDE)."""
+    meta = json.load(open(os.path.join(OUT, "meta.json")))
+    geo = scene_geometry()
+    if len(geo) != meta["n_scenes"]:
+        raise SystemExit("%d L2W files for %d scenes" % (len(geo), meta["n_scenes"]))
+    if inputs == "joint":
+        return " ATTENUATION K SCENES %d TIDES %s SUNZENITH %s VIEWZENITH %s NODES %g" % (
+            len(geo), " ".join("%.4f" % h for h in meta["scene_tides"]), " ".join("%.3f" % s for s, _ in geo),
+            " ".join("%.3f" % v for _, v in geo), ATT_NODES)
+    return " ATTENUATION K SCENES 1 SUNZENITH %.3f VIEWZENITH %.3f NODES %g" % (
+        np.mean([s for s, _ in geo]), np.mean([v for _, v in geo]), ATT_NODES)
+
+
+def run_photic(rundir, soundings, bands, lsm, radius, extra="", plot=None, name="H", inputs="composite", writes=()):
+    """MODEL lyzenga_log_linear on the composite, or on every scene's bands jointly, with
+    ATTENUATION; returns the depth grid (positive down, nan where none) and photic's printed fit.
+    writes: further (grid, file) pairs to write, e.g. ("K_depth", "K_depth.nc")."""
     shutil.rmtree(rundir, ignore_errors=True)
     os.makedirs(rundir)
     if inputs == "joint":
@@ -242,9 +279,10 @@ def run_photic(rundir, soundings, bands, lsm, radius, extra="", plot=None, name=
     lines = ["READ GRID %s %s" % (n, os.path.join(OUT, n + EXT)) for n in names]
     lines.append("READ SOUNDINGS %s" % soundings)
     words = "LSM " + " ".join("0" for _ in names) if lsm == "none" else "PERCENTILE 1"
-    lines.append("MODEL lyzenga_log_linear GRIDS %s BATHYMETRY %s %s RADIUS %d DEPTHS 0 30%s"
-                 % (" ".join(names), name, words, radius, extra))
+    lines.append("MODEL lyzenga_log_linear GRIDS %s BATHYMETRY %s %s RADIUS %d DEPTHS 0 30%s%s"
+                 % (" ".join(names), name, words, radius, extra, attenuation_words(inputs)))
     lines.append("WRITE GRID %s H.nc" % name)
+    lines += ["WRITE GRID %s %s" % w for w in writes]
     if plot:
         lines += plot
     lines.append("EXIT")
@@ -280,10 +318,9 @@ def scores(ref, H):
     return out
 
 
-def cv():
-    lon, lat = grid()
-    meta = json.load(open(os.path.join(OUT, "meta.json")))
-    ref = np.load(os.path.join(OUT, "reference.npz"))
+def cv_folds(lon, lat, meta):
+    """The cross-validation folds by pass within the calibration half: each fold's training
+    soundings (cv_train_<f>.xyz at the mean tide, and _msl.xyz) and its held-out cells."""
     water = water_mask()
     cal, _, _, _ = split_photons()
     passes = np.random.default_rng(SEED + 1).permutation(np.unique(cal["granule"]))
@@ -298,6 +335,13 @@ def cv():
         write_xyz(path, train, lon, lat, meta["mean_tide"])
         write_xyz(path.replace(".xyz", "_msl.xyz"), train, lon, lat, 0.0)
         folds.append((path, test))
+    return folds
+
+
+def cv():
+    lon, lat = grid()
+    meta = json.load(open(os.path.join(OUT, "meta.json")))
+    folds = cv_folds(lon, lat, meta)
     # The joint model has many predictors (up to all four bands of each of six scenes, 24): only
     # ln L (Lsm per scene and band is not estimated), radius 2 or 3; the composite keeps the full search.
     configs = [(b, l, r, pw, "composite") for b in BAND_SETS for l in LSM_CHOICES for r in RADII for pw in POWER_CHOICES]
@@ -332,6 +376,89 @@ def cv():
             t["inputs"], t["bands"], t["lsm"], t["radius"], "power" if t["power"] else "", t["hits"], t["with_depth"],
             t["rmse"]))
     json.dump(dict(folds=FOLDS, configs=table, chosen=table[0]), open(os.path.join(OUT, "cv.json"), "w"), indent=1)
+
+
+def attenuation(bands=None):
+    """ATTENUATION with the chosen joint model (or other bands, e.g. 443,483,561). Out of fold on
+    cv's folds (the calibration half only), Lyzenga's depth and the attenuation's depth (stage 2)
+    are scored on the same held-out cells; then the whole calibration half gives the K maps and
+    the attenuation's depth map."""
+    import tier3_scenes
+    lon, lat = grid()
+    meta = json.load(open(os.path.join(OUT, "meta.json")))
+    ref = np.load(os.path.join(OUT, "reference.npz"))
+    c = json.load(open(os.path.join(OUT, "cv.json") if os.path.exists(os.path.join(OUT, "cv.json")) else CV_PALM))["chosen"]
+    if c.get("inputs") != "joint":
+        raise SystemExit("attenuation needs the joint model (one set of bands per scene)")
+    tag = ""
+    if bands:
+        c = dict(c, bands=bands, override=True)
+        tag = "_" + "-".join(map(str, bands))
+    work = os.path.join(WORK, "attenuation" + tag)
+    extra = " TIDE 0%s" % (" POWER" if c.get("power") else "")
+    folds = cv_folds(lon, lat, meta)
+    held = np.full(ref["calibration"].shape, np.nan)
+    H_lyz, H_att, S_att = held.copy(), held.copy(), held.copy()
+
+    def one(f):
+        rundir = os.path.join(work, "fold%d" % f)
+        H, _ = run_photic(rundir, folds[f][0].replace(".xyz", "_msl.xyz"), c["bands"], c["lsm"], c["radius"], extra,
+                          inputs="joint", writes=[("K_depth", "K_depth.nc"), ("K_depth_sigma", "K_depth_sigma.nc")])
+        with NC_LOCK:
+            A = -tier3_scenes.read_nc(os.path.join(rundir, "K_depth.nc"))
+            S = tier3_scenes.read_nc(os.path.join(rundir, "K_depth_sigma.nc"))
+        return f, H, A, S
+    with ThreadPoolExecutor(max_workers=FOLDS) as pool:
+        for f, H, A, S in pool.map(one, range(FOLDS)):
+            m = np.isfinite(folds[f][1])
+            held[m], H_lyz[m], H_att[m], S_att[m] = folds[f][1][m], H[m], A[m], S[m]
+    both = np.isfinite(H_lyz) & np.isfinite(H_att)
+    e = H_att[both] - held[both]
+    within = float(np.mean(np.abs(e) <= S_att[both])) if both.any() else None
+    result = dict(settings=c, nodes=ATT_NODES, out_of_fold=dict(lyzenga=scores(held, H_lyz), attenuation=scores(held, H_att),
+                  attenuation_within_sigma=within))
+    # The whole calibration half: every K grid, the depth, its sigma and the bottom term.
+    rundir = os.path.join(work, "final")
+    names = ["s%d_b%d" % (k + 1, b) for k in range(meta["n_scenes"]) for b in c["bands"]]
+    outs = ["K_" + n for n in names] + ["K_depth", "K_depth_sigma", "K_bottom"]
+    _, fit_log = run_photic(rundir, os.path.join(OUT, "calibration_msl.xyz"), c["bands"], c["lsm"], c["radius"], extra,
+                            inputs="joint", writes=[(o, o + ".nc") for o in outs])
+    result["fit"] = fit_log
+    json.dump(result, open(os.path.join(OUT, "attenuation%s.json" % tag), "w"), indent=1)
+    attenuation_maps(rundir, lon, lat, meta, c, names)
+    print("\n".join(l for l in fit_log if "soundings, c" in l or "attenuation" in l or "Attenuation" in l))
+    print(json.dumps(result["out_of_fold"], indent=1))
+
+
+def attenuation_maps(rundir, lon, lat, meta, c, names):
+    """K (the median over the scenes) for each band, and the attenuation's depth and sigma
+    (runs/gulf_lyzenga/attenuation/final/attenuation.png)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import tier3_scenes
+    read = lambda n: tier3_scenes.read_nc(os.path.join(rundir, n + ".nc"))
+    nb = len(c["bands"])
+    panels = [("K, %d nm (median of %d scenes), m$^{-1}$" % (b, meta["n_scenes"]),
+               np.nanmedian([read("K_" + n) for n in names[k::nb]], axis=0), "viridis", None) for k, b in enumerate(c["bands"])]
+    panels.append(("Depth from the attenuation, m", -read("K_depth"), "viridis_r", (0, 25)))
+    panels.append(("Its 1-sigma error, m", read("K_depth_sigma"), "magma", (0, 3)))
+    fig, axes = plt.subplots(2, 3, figsize=(17, 9), constrained_layout=True)
+    extent = (lon[0], lon[-1], lat[0], lat[-1])
+    for ax, (title, z, cmap, lim) in zip(axes.ravel(), panels):
+        lim = lim or tuple(np.nanpercentile(z, [2, 98]))
+        im = ax.imshow(z, origin="lower", extent=extent, cmap=cmap, vmin=lim[0], vmax=lim[1], interpolation="nearest")
+        ax.set_title(title, fontsize=10)
+        ax.set_aspect(1.0/np.cos(np.radians(np.mean(lat))))
+        fig.colorbar(im, ax=ax, shrink=0.8)
+    nodes = np.genfromtxt(os.path.join(rundir, "attenuation.csv"), delimiter=",", names=True)
+    for ax in axes.ravel()[:nb]:
+        ax.scatter(nodes["LON"], nodes["LAT"], s=4 + 2*np.sqrt(nodes["SOUNDINGS"]), facecolors="none", edgecolors="w", lw=0.5)
+    fig.suptitle("Dubai to Abu Dhabi: attenuation from MODEL lyzenga_log_linear ... ATTENUATION (nodes %g deg; "
+                 "circles: soundings near each node)" % ATT_NODES, fontsize=12)
+    out = os.path.join(rundir, "attenuation.png")
+    fig.savefig(out, dpi=110)
+    print(out)
 
 
 def on_cells(path, lon, lat, cells):
@@ -389,10 +516,13 @@ def fit(override=None):
     if joint:
         soundings = os.path.join(OUT, "calibration_msl.xyz")
         write_xyz(soundings, ref["calibration"], lon, lat, 0.0)
+    grids = ["s%d_b%d" % (k + 1, b) for k in range(meta["n_scenes"]) for b in c["bands"]] if joint else \
+        ["b%d" % b for b in c["bands"]]
     H, fit_log = run_photic(rundir, soundings, c["bands"], c["lsm"], c["radius"],
                             " TIDE %.4f%s ERROR H_error" % (0.0 if joint else meta["mean_tide"],
                                                            " POWER" if c.get("power") else ""), plot,
-                            name="Dubai_to_Abu_Dhabi", inputs=c.get("inputs", "composite"))
+                            name="Dubai_to_Abu_Dhabi", inputs=c.get("inputs", "composite"),
+                            writes=[("K_" + n, "K_%s.nc" % n) for n in grids])
     test = ref["test"]
     result = dict(settings=c, fit=fit_log, lyzenga=scores(test, H))
     if os.path.exists(PRODUCT_2019):
@@ -496,8 +626,11 @@ def points():
 
 
 if __name__ == "__main__":
-    commands = {"prepare": prepare, "cv": cv, "fit": fit, "correlation": correlation, "points": points}
-    if len(sys.argv) == 6 and sys.argv[1] == "fit":
+    commands = {"prepare": prepare, "cv": cv, "fit": fit, "correlation": correlation, "points": points,
+                "attenuation": attenuation}
+    if len(sys.argv) == 3 and sys.argv[1] == "attenuation":
+        attenuation([int(b) for b in sys.argv[2].split(",")])
+    elif len(sys.argv) == 6 and sys.argv[1] == "fit":
         # fit composite|joint 443,483,561,655 /radius/ power|nopower
         fit((sys.argv[2], [int(b) for b in sys.argv[3].split(",")], int(sys.argv[4]), sys.argv[5] == "power"))
     elif len(sys.argv) == 2 and sys.argv[1] in commands:

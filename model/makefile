@@ -64,20 +64,35 @@ tests/lyz_run: photic tests/lyz_gen
 	cp tests/lyz.bam tests/lyz_run/
 	cd tests/lyz_run && ../../photic lyz.bam < /dev/null > photic.log 2>&1
 
+# MODEL lyzenga_log_linear ... ATTENUATION on two scenes of three bands that follow its model
+# exactly: K at every node and the depth at every cell must be recovered (tests/att_check).
+tests/att_gen: tests/att_gen.o
+	$(CC) $(CFLAGS) $^ -lm -o $@
+
+tests/att_check: tests/att_check.o
+	$(CC) $(CFLAGS) $^ -lm -o $@
+
+tests/att_run: photic tests/att_gen
+	rm -rf tests/att_run && mkdir -p tests/att_run
+	tests/att_gen tests/att_run
+	cp tests/att.bam tests/att_run/
+	cd tests/att_run && ../../photic att.bam < /dev/null > photic.log 2>&1
+
 tests/run: photic tests/synth_gen
 	rm -rf tests/run && mkdir -p tests/run
 	tests/synth_gen tests/run > /dev/null
 	cp tests/synth.bam tests/run/
 	cd tests/run && ../../photic synth.bam < /dev/null > photic.log 2>&1
 
-.PHONY: tests/run tests/lyz_run test-baseline
+.PHONY: tests/run tests/lyz_run tests/att_run test-baseline
 
-test: tests/run tests/synth_check tests/lyz_run tests/lyz_check
+test: tests/run tests/synth_check tests/lyz_run tests/lyz_check tests/att_run tests/att_check
 	@fail=0; for f in $(TEST_OUTPUTS); do \
 	  tests/synth_check baseline tests/run/$$f.nc tests/baseline/$$f.nc || fail=1; \
 	done; \
 	tests/synth_check truth tests/run/modelled_H.nc tests/run/truth_H.asc; \
 	tests/lyz_check tests/lyz_run || fail=1; \
+	tests/att_check tests/att_run || fail=1; \
 	if [ $$fail = 0 ]; then echo "\nPASS"; else echo "\nFAIL (see tests/run/photic.log)"; exit 1; fi
 
 test-baseline: tests/run
@@ -90,7 +105,7 @@ test-baseline: tests/run
 spectra.o: ALL_CFLAGS += -DPHOTIC_DATA_DIR='"$(PHOTIC_DATA_DIR)"'
 
 clean:
-	rm -f *.o *.d tests/*.o tests/*.d photic xyz2nc $(UTILS) tests/synth_gen tests/synth_check tests/lyz_gen tests/lyz_check
+	rm -f *.o *.d tests/*.o tests/*.d photic xyz2nc $(UTILS) tests/synth_gen tests/synth_check tests/lyz_gen tests/lyz_check tests/att_gen tests/att_check
 	rm -rf tests/run
 
 -include $(wildcard *.d tests/*.d)

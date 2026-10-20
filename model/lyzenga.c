@@ -51,6 +51,37 @@
 //
 // Outputs model.bam (the fitted model as applied) and output.csv (every sounding, its cell, the
 // model depth and whether it was used).
+//
+// ATTENUATION /prefix/ also estimates the attenuation over the whole grid, with a physical depth
+// from it. Lyzenga's model is the linearised form of
+//
+//   X_m = ln(L_m - Lsm_m) = B(x) + c_m - g_m(x) Z_s,   Z_s = depth + h_s,
+//
+// for grid m of scene s (the grids are scene-major: SCENES /n/ groups them, n bands each, in the
+// same band order), with B the bottom's brightness (spectrally flat in logs, Lyzenga's assumption),
+// c_m the band's bottom colour and deep-water constant, and g_m = K_m M_s the two-way attenuation:
+// K_m the effective diffuse attenuation and M_s = sec(theta_w,sun) + sec(theta_w,view) the path
+// in water (from SUNZENITH and VIEWZENITH in air, refracted with n = 1.34; default 0, so M_s = 2).
+//   Stage 1, at the soundings (depth known): for each grid, X_m = c_m - g_m(x) Z_s with g_m(x)
+// bilinear on a grid of nodes NODES degrees apart (default 0.05), smoothed by a penalty on
+// neighbouring nodes' differences (SMOOTHING /w/, default 1, scaled to an average node's data;
+// 0 needs data at every node), fitted by weighted least squares with Huber weights. Weights are
+// 1/(sigma_m^2/(L_m - Lsm_m)^2 + 0.05^2), so a band counts only while it sees the bottom. B is
+// left in the residuals, so K is unbiased only where the bottom's brightness does not change with
+// depth across the soundings.
+//   Stage 2, at every cell: with c_m and g_m(x) fixed, X_m - c_m + g_m h_s = B - g_m H over the
+// grids above DEEP sigma is a straight line in g_m, and the weighted fit gives the depth H (from
+// how the attenuation differs between bands and scenes, which is what makes it independent of
+// B), its 1-sigma error and B. Cells with fewer than 3 such grids get none.
+// Lsm is the LSM value where it is > 0, else the PERCENTILE (so LSM 0, Lyzenga's ln L, still
+// subtracts a deep-water signal here). TIDES /h_1/ ... /h_n/ are the scenes' water levels above
+// the datum (default TIDE for each). Outputs: /prefix/_/grid/, K of each grid (m^-1);
+// /prefix/_depth (below the datum, negative down), /prefix/_depth_sigma and /prefix/_bottom (B);
+// and attenuation.csv, K at every node with the number of soundings near it.
+//
+//   ATTENUATION /prefix/ SCENES /n/ [TIDES /h_1/ ... /h_n/] [SUNZENITH /theta_1/ ... /theta_n/]
+//     [VIEWZENITH /theta_1/ ... /theta_n/] [NODES /deg/] [SMOOTHING /w/]   (SCENES before the
+//     per-scene lists)
 
 #include <math.h>
 #include <stdio.h>
@@ -61,6 +92,10 @@
 
 #define LYZ_MAX_BANDS 32  // e.g. 3 bands of each of 6 scenes, fitted jointly
 #define LYZ_MAX_ITER 100
+#define ATT_EPS 0.05      // the attenuation fit's model error in ln(L - Lsm)
+#define ATT_MIN_ROWS 10   // fewest soundings for a grid's attenuation
+#define ATT_MAX_PASSES 10 // reselections by the fitted signal
+#define N_WATER 1.34
 
 static int compare_doubles(const void *a, const void *b) {
   double x = *(const double *) a, y = *(const double *) b;
@@ -208,10 +243,448 @@ static double power_map(double h, double a, double d, bool all) {
   return exp((log(h) - a)/d);
 }
 
+// The attenuation's nodes: nx by ny, spanning the grid, dx and dy cells apart.
+typedef struct {
+  int nx, ny;
+  double dx, dy;
+} att_nodes;
+
+// The bilinear weights of cell (i, j) on its four nodes.
+static void node_weights(const att_nodes *a, int i, int j, int *q, double *f) {
+  double u = j/a->dx, v = i/a->dy, fu, fv;
+  int b = MIN((int) floor(u), a->nx - 2), c = MIN((int) floor(v), a->ny - 2);
+  fu = u - b;
+  fv = v - c;
+  q[0] = c*a->nx + b;
+  q[1] = q[0] + 1;
+  q[2] = q[0] + a->nx;
+  q[3] = q[2] + 1;
+  f[0] = (1.0 - fu)*(1.0 - fv);
+  f[1] = fu*(1.0 - fv);
+  f[2] = (1.0 - fu)*fv;
+  f[3] = fu*fv;
+}
+
+// Solves N x = b for symmetric positive-definite N (n x n, row-major) by Cholesky; N is
+// overwritten by its factor and b by x. Returns 1 if N is not positive definite.
+static int cholesky_solve(double *N, double *b, int n) {
+
+  int i, j, k;
+  double s, scale = 0.0;
+
+  for (j = 0; j < n; j++) scale = MAX(scale, N[j*n + j]);
+  for (j = 0; j < n; j++) {
+    s = N[j*n + j];
+    for (k = 0; k < j; k++) s -= N[j*n + k]*N[j*n + k];
+    if (s <= 1.0e-12*scale) return 1;
+    N[j*n + j] = sqrt(s);
+    for (i = j + 1; i < n; i++) {
+      s = N[i*n + j];
+      for (k = 0; k < j; k++) s -= N[i*n + k]*N[j*n + k];
+      N[i*n + j] = s/N[j*n + j];
+    }
+  }
+  for (i = 0; i < n; i++) {
+    s = b[i];
+    for (k = 0; k < i; k++) s -= N[i*n + k]*b[k];
+    b[i] = s/N[i*n + i];
+  }
+  for (i = n - 1; i >= 0; i--) {
+    s = b[i];
+    for (k = i + 1; k < n; k++) s -= N[k*n + i]*b[k];
+    b[i] = s/N[i*n + i];
+  }
+  return 0;
+}
+
+// The name of an attenuation output, /prefix/_/suffix/; false if it is too long or in use.
+static bool att_name(char *name, const char *prefix, const char *suffix) {
+  int n;
+  if (strlen(prefix) + strlen(suffix) + 2 > MAX_ARG_SIZE) {
+    printf("\nERROR: ATTENUATION: the name '%s_%s' is too long.\n", prefix, suffix);
+    return false;
+  }
+  snprintf(name, MAX_ARG_SIZE, "%s_%s", prefix, suffix);
+  for (n = 0; n < MAX_GRIDS; n++) {
+    if (grid_name_taken(n, name)) {
+      printf("\nERROR: grid '%s' already in use.\n", name);
+      return false;
+    }
+  }
+  return true;
+}
+
+// Stores an output grid under a name checked by att_name.
+static bool store_grid(const char *name, float **array, const geogrid *g0) {
+  int n;
+  for (n = 0; n < MAX_GRIDS && allocated_grids[n]; n++) ;
+  if (n == MAX_GRIDS) {
+    printf("\nERROR: unable to store grid '%s'.\n", name);
+    return false;
+  }
+  strcpy(grid_names[n], name);
+  allocated_grids[n] = true;
+  n_grids_in_use++;
+  gridded_data[n] = *g0;
+  gridded_data[n].array = array;
+  meminuse += 1.0e-6*((float) g0->nrows*g0->ncols)*((float) sizeof(float));
+  return true;
+}
+
+// ATTENUATION: the two-way attenuation of every grid over the whole grid, from the soundings
+// (stage 1), then a depth at every cell from it (stage 2); see the header.
+static void attenuation(const char *prefix, int nb, const int *bands, float ***Lbar, const geogrid *g0,
+    const double *lsm, const double *sigma, double deep_k, int n_scenes, const double *tides, const double *path,
+    double spacing, double smooth, double huber, double dmin, double dmax, double sign, const int *cell_i,
+    const int *cell_j, const int *status) {
+
+  int nr = g0->nrows, nc = g0->ncols, nbs = nb/n_scenes, m, s, n, i, j, l, q[4], nq, P, it, rows,
+    *row_cell = NULL, n_depth = 0, n_few = 0, *iters = NULL;
+  double f[4], *N = NULL, *rhs = NULL, *theta = NULL, *c = NULL, *X = NULL, *Z = NULL, *w0 = NULL, *w = NULL,
+    *res = NULL, *absr = NULL, *support = NULL, *scatter = NULL, lambda, sc, v, wzz, change, g, *Xc = NULL,
+    *Zc = NULL, *vc = NULL, *vhat = NULL;
+  bool *fitted = NULL, *active = NULL;
+  int *cand_cell = NULL;
+  float **out = NULL, **depth = NULL, **dsig = NULL, **bottom = NULL, nodata = g0->nodata_value;
+  char name[MAX_ARG_SIZE];
+  att_nodes nodes;
+  FILE *fp;
+
+  nodes.nx = MAX(2, (int) ceil((nc - 1)*g0->cellsize/spacing - 1.0e-9) + 1);
+  nodes.ny = MAX(2, (int) ceil((nr - 1)*g0->cellsize/spacing - 1.0e-9) + 1);
+  nodes.dx = MAX(nc - 1, 1)/((double) nodes.nx - 1);
+  nodes.dy = MAX(nr - 1, 1)/((double) nodes.ny - 1);
+  nq = nodes.nx*nodes.ny;
+  P = nq + 1;
+
+  N = malloc((size_t) P*P*sizeof(double));
+  rhs = malloc((size_t) P*sizeof(double));
+  theta = calloc((size_t) nb*nq, sizeof(double));
+  c = calloc(nb, sizeof(double));
+  scatter = calloc(nb, sizeof(double));
+  iters = calloc(nb, sizeof(int));
+  fitted = calloc(nb, sizeof(bool));
+  support = calloc(nq, sizeof(double));
+  X = malloc((size_t) nsoundings*sizeof(double));
+  Z = malloc((size_t) nsoundings*sizeof(double));
+  w0 = malloc((size_t) nsoundings*sizeof(double));
+  w = malloc((size_t) nsoundings*sizeof(double));
+  res = malloc((size_t) nsoundings*sizeof(double));
+  absr = malloc((size_t) nsoundings*sizeof(double));
+  row_cell = malloc((size_t) nsoundings*sizeof(int));
+  Xc = malloc((size_t) nsoundings*sizeof(double));
+  Zc = malloc((size_t) nsoundings*sizeof(double));
+  vc = malloc((size_t) nsoundings*sizeof(double));
+  vhat = malloc((size_t) nsoundings*sizeof(double));
+  active = malloc((size_t) nsoundings*sizeof(bool));
+  cand_cell = malloc((size_t) nsoundings*sizeof(int));
+
+  printf("\nAttenuation (%s): %d scenes of %d bands, %d x %d nodes %.4f x %.4f deg apart, smoothing %g\n", prefix,
+    n_scenes, nbs, nodes.nx, nodes.ny, nodes.dx*g0->cellsize, nodes.dy*g0->cellsize, smooth);
+
+// Stage 1: each grid's c_m and g_m(x) at the soundings, X = c - g(x) Z.
+
+  for (n = 0; n < nsoundings; n++) {
+    if (status[n] == 1 || status[n] == 2) continue ;
+    v = sign*soundings[n][2];
+    if (v < dmin || v > dmax) continue ;
+    node_weights(&nodes, cell_i[n], cell_j[n], q, f);
+    for (l = 0; l < 4; l++) support[q[l]] += f[l];
+  }
+  // A band's signal sinks into the noise with depth. Selecting (and weighting) the soundings by
+  // the observed signal keeps only the deep cells that happen to be bright, which flattens the
+  // slope (K too small, most in the red); so after the first pass they are reselected and
+  // reweighted by the fitted signal exp(c - g Z), until the selection settles.
+  for (m = 0; m < nb; m++) {
+    int n_cand = 0, pass, changed;
+    double *th = &theta[m*nq], prev_c;
+    s = m/nbs;
+    for (n = 0; n < nsoundings; n++) {
+      if (status[n] == 1 || status[n] == 2) continue ;
+      v = sign*soundings[n][2];
+      if (v < dmin || v > dmax || v + tides[s] <= 0.0) continue ;
+      Zc[n_cand] = v + tides[s];
+      v = Lbar[m][cell_i[n]][cell_j[n]] - lsm[m];
+      if (v <= 0.0) continue ;
+      Xc[n_cand] = log(v);
+      vc[n_cand] = v;
+      cand_cell[n_cand] = n;
+      active[n_cand] = v >= deep_k*sigma[m];
+      n_cand++;
+    }
+    rows = 0;
+    for (pass = 0; pass < ATT_MAX_PASSES; pass++) {
+      rows = 0;
+      for (l = 0; l < n_cand; l++) {
+        if (! active[l]) continue ;
+        X[rows] = Xc[l];
+        Z[rows] = Zc[l];
+        v = pass == 0 ? vc[l] : vhat[l];
+        w[rows] = w0[rows] = 1.0/(sigma[m]*sigma[m]/(v*v) + ATT_EPS*ATT_EPS);
+        row_cell[rows] = cand_cell[l];
+        rows++;
+      }
+      if (rows < ATT_MIN_ROWS) break;
+      wzz = 0.0;
+      for (n = 0; n < rows; n++) wzz += w0[n]*Z[n]*Z[n];
+      lambda = smooth*wzz/nq;
+      prev_c = 0.0;
+    for (it = 0; it < LYZ_MAX_ITER; it++) {
+      for (l = 0; l < P*P; l++) N[l] = 0.0;
+      for (l = 0; l < P; l++) rhs[l] = 0.0;
+      for (n = 0; n < rows; n++) {
+        int k2, idx[5];
+        double a[5];
+        node_weights(&nodes, cell_i[row_cell[n]], cell_j[row_cell[n]], q, f);
+        idx[0] = 0;
+        a[0] = 1.0;
+        for (l = 0; l < 4; l++) {
+          idx[l + 1] = q[l] + 1;
+          a[l + 1] = -Z[n]*f[l];
+        }
+        for (l = 0; l < 5; l++) {
+          rhs[idx[l]] += w[n]*a[l]*X[n];
+          for (k2 = 0; k2 < 5; k2++) N[idx[l]*P + idx[k2]] += w[n]*a[l]*a[k2];
+        }
+      }
+      // First differences between neighbouring nodes.
+      for (i = 0; i < nodes.ny && lambda > 0.0; i++) {
+        for (j = 0; j < nodes.nx; j++) {
+          int qa = i*nodes.nx + j + 1, qb;
+          for (l = 0; l < 2; l++) {
+            if (l == 0 && j == nodes.nx - 1) continue ;
+            if (l == 1 && i == nodes.ny - 1) continue ;
+            qb = l == 0 ? qa + 1 : qa + nodes.nx;
+            N[qa*P + qa] += lambda;
+            N[qb*P + qb] += lambda;
+            N[qa*P + qb] -= lambda;
+            N[qb*P + qa] -= lambda;
+          }
+        }
+      }
+      if (cholesky_solve(N, rhs, P) != 0) break;
+      change = fabs(rhs[0] - prev_c)/(1.0 + fabs(rhs[0]));
+      for (l = 0; l < nq; l++) change = MAX(change, fabs(rhs[l + 1] - th[l])/(1.0e-3 + fabs(rhs[l + 1])));
+      c[m] = prev_c = rhs[0];
+      for (l = 0; l < nq; l++) th[l] = rhs[l + 1];
+      fitted[m] = true;
+      for (n = 0; n < rows; n++) {
+        node_weights(&nodes, cell_i[row_cell[n]], cell_j[row_cell[n]], q, f);
+        g = 0.0;
+        for (l = 0; l < 4; l++) g += f[l]*th[q[l]];
+        res[n] = X[n] - (c[m] - g*Z[n]);
+        absr[n] = fabs(res[n]);
+      }
+      sc = 1.4826*median_double(absr, rows);
+      scatter[m] = sc;
+      if (huber == 0.0 || sc <= 0.0 || (it > 0 && change < 1.0e-9)) break;
+      for (n = 0; n < rows; n++) w[n] = w0[n]*(fabs(res[n]) <= huber*sc ? 1.0 : huber*sc/fabs(res[n]));
+    }
+      iters[m] = it + 1;
+      if (! fitted[m]) break;
+      changed = 0;
+      for (l = 0; l < n_cand; l++) {
+        bool now;
+        node_weights(&nodes, cell_i[cand_cell[l]], cell_j[cand_cell[l]], q, f);
+        g = 0.0;
+        for (i = 0; i < 4; i++) g += f[i]*th[q[i]];
+        vhat[l] = exp(c[m] - g*Zc[l]);
+        now = vhat[l] >= deep_k*sigma[m];
+        if (now != active[l]) changed++;
+        active[l] = now;
+      }
+      if (changed == 0) break;
+    }
+    if (! fitted[m]) {
+      printf("  %-20s %d soundings: %s\n", grid_names[bands[m]], rows, rows < ATT_MIN_ROWS ? "too few, no attenuation" :
+        "the attenuation is not determined (nodes without soundings need SMOOTHING > 0)");
+      continue ;
+    }
+    double kmin = INFINITY, kmax = -INFINITY, *kv = malloc((size_t) nq*sizeof(double));
+    int nk = 0;
+    for (l = 0; l < nq; l++) {
+      kmin = MIN(kmin, th[l]/path[s]);
+      kmax = MAX(kmax, th[l]/path[s]);
+      if (support[l] >= 1.0) kv[nk++] = th[l]/path[s];
+    }
+    printf("  %-20s %5d soundings, c %8.4f, K %.4f (median of supported nodes; %.4f to %.4f) m^-1, "
+      "robust sigma %.3f, %d passes\n", grid_names[bands[m]], rows, c[m], nk ? median_double(kv, nk) : NAN,
+      kmin, kmax, scatter[m], pass + 1);
+    free(kv);
+  }
+
+// The attenuation grids, K = g/M.
+
+  for (m = 0; m < nb; m++) {
+    if (! fitted[m]) continue ;
+    s = m/nbs;
+    allocate_float_array_2d(&out, nr, nc);
+    for (i = 0; i < nr; i++) {
+      for (j = 0; j < nc; j++) {
+        out[i][j] = nodata;
+        if (! isfinite(Lbar[m][i][j])) continue ;
+        node_weights(&nodes, i, j, q, f);
+        g = 0.0;
+        for (l = 0; l < 4; l++) g += f[l]*theta[m*nq + q[l]];
+        out[i][j] = g/path[s];
+      }
+    }
+    if (! att_name(name, prefix, grid_names[bands[m]]) || ! store_grid(name, out, g0)) goto done;
+    out = NULL;
+  }
+
+// Stage 2: at every cell, X - c + g h = B - g H, a weighted straight line in g.
+
+  allocate_float_array_2d(&depth, nr, nc);
+  allocate_float_array_2d(&dsig, nr, nc);
+  allocate_float_array_2d(&bottom, nr, nc);
+  for (i = 0; i < nr; i++) {
+    for (j = 0; j < nc; j++) {
+      depth[i][j] = dsig[i][j] = bottom[i][j] = nodata;
+      if (! isfinite(Lbar[0][i][j])) continue ;
+      // As stage 1: the grids are chosen and weighted by the observed signal first, then by the
+      // fitted one, exp(B + c - g (H + h)).
+      double gm[LYZ_MAX_BANDS], ym[LYZ_MAX_BANDS], vm[LYZ_MAX_BANDS], sm[LYZ_MAX_BANDS], wl[LYZ_MAX_BANDS], H = 0.0,
+        B = 0.0,
+        sw, sg, sy, sgg, sgy, rss, vfit;
+      bool use[LYZ_MAX_BANDS], ok2 = false;
+      int k = 0, used, pass, changed;
+      node_weights(&nodes, i, j, q, f);
+      for (m = 0; m < nb; m++) {
+        if (! fitted[m]) continue ;
+        v = Lbar[m][i][j] - lsm[m];
+        if (v <= 0.0) continue ;
+        g = 0.0;
+        for (l = 0; l < 4; l++) g += f[l]*theta[m*nq + q[l]];
+        gm[k] = g;
+        ym[k] = log(v) - c[m] + g*tides[m/nbs];
+        vm[k] = v;
+        sm[k] = sigma[m];
+        use[k] = v >= deep_k*sigma[m];
+        k++;
+      }
+      for (pass = 0; pass < ATT_MAX_PASSES; pass++) {
+        sw = sg = sy = sgg = sgy = rss = 0.0;
+        used = 0;
+        for (l = 0; l < k; l++) {
+          if (! use[l]) continue ;
+          // The fitted signal is v exp((B - g H) - y).
+          vfit = pass == 0 ? vm[l] : vm[l]*exp((B - gm[l]*H) - ym[l]);
+          wl[l] = 1.0/(sm[l]*sm[l]/(vfit*vfit) + ATT_EPS*ATT_EPS);
+          sw += wl[l];
+          sg += wl[l]*gm[l];
+          sy += wl[l]*ym[l];
+          used++;
+        }
+        if (used < 3) break;
+        for (l = 0; l < k; l++) {
+          if (! use[l]) continue ;
+          sgg += wl[l]*(gm[l] - sg/sw)*(gm[l] - sg/sw);
+          sgy += wl[l]*(gm[l] - sg/sw)*(ym[l] - sy/sw);
+        }
+        if (sgg <= 1.0e-12*sw) break;
+        double H1 = -sgy/sgg, B1 = sy/sw + H1*sg/sw;
+        for (l = 0; l < k; l++) {
+          if (use[l]) rss += wl[l]*(ym[l] - (B1 - gm[l]*H1))*(ym[l] - (B1 - gm[l]*H1));
+        }
+        H = H1;
+        B = B1;
+        ok2 = true;
+        depth[i][j] = -H;
+        dsig[i][j] = used > 2 ? sqrt(rss/(used - 2)/sgg) : nodata;
+        bottom[i][j] = B;
+        changed = 0;
+        for (l = 0; l < k; l++) {
+          bool now = vm[l]*exp((B - gm[l]*H) - ym[l]) >= deep_k*sm[l];
+          if (now != use[l]) changed++;
+          use[l] = now;
+        }
+        if (changed == 0) break;
+      }
+      if (! ok2) {
+        n_few++;
+        continue ;
+      }
+      n_depth++;
+    }
+  }
+
+  // In-sample check at the soundings.
+  double e, rms = 0.0, bias = 0.0;
+  int n_check = 0;
+  for (n = 0; n < nsoundings; n++) {
+    if (status[n] == 1 || status[n] == 2) continue ;
+    v = sign*soundings[n][2];
+    if (v < dmin || v > dmax || depth[cell_i[n]][cell_j[n]] == nodata) continue ;
+    e = -depth[cell_i[n]][cell_j[n]] - v;
+    rms += e*e;
+    bias += e;
+    n_check++;
+  }
+  printf("  depth from the attenuation: %d cells, %d with fewer than 3 usable grids; at %d soundings rms %.3f m, "
+    "bias %+.3f m\n", n_depth, n_few, n_check, n_check ? sqrt(rms/n_check) : NAN, n_check ? bias/n_check : NAN);
+
+  if (! att_name(name, prefix, "depth") || ! store_grid(name, depth, g0)) goto done;
+  depth = NULL;
+  if (! att_name(name, prefix, "depth_sigma") || ! store_grid(name, dsig, g0)) goto done;
+  dsig = NULL;
+  if (! att_name(name, prefix, "bottom") || ! store_grid(name, bottom, g0)) goto done;
+  bottom = NULL;
+
+// K at every node.
+
+  fp = fopen("attenuation.csv", "w");
+  if (fp != NULL) {
+    fprintf(fp, "LON,LAT,SOUNDINGS");
+    for (m = 0; m < nb; m++) fprintf(fp, ",%s", grid_names[bands[m]]);
+    fprintf(fp, "\n");
+    for (i = 0; i < nodes.ny; i++) {
+      for (j = 0; j < nodes.nx; j++) {
+        l = i*nodes.nx + j;
+        fprintf(fp, "%.6f,%.6f,%.2f", g0->wlon + j*nodes.dx*g0->cellsize, g0->slat + i*nodes.dy*g0->cellsize, support[l]);
+        for (m = 0; m < nb; m++) {
+          if (fitted[m]) fprintf(fp, ",%.6g", theta[m*nq + l]/path[m/nbs]);
+          else fprintf(fp, ",");
+        }
+        fprintf(fp, "\n");
+      }
+    }
+    fclose(fp);
+  }
+done:
+  if (out != NULL) free_float_array_2d(out, nr);
+  if (depth != NULL) free_float_array_2d(depth, nr);
+  if (dsig != NULL) free_float_array_2d(dsig, nr);
+  if (bottom != NULL) free_float_array_2d(bottom, nr);
+  free(N);
+  free(rhs);
+  free(theta);
+  free(c);
+  free(scatter);
+  free(iters);
+  free(fitted);
+  free(support);
+  free(X);
+  free(Z);
+  free(w0);
+  free(w);
+  free(res);
+  free(absr);
+  free(row_cell);
+  free(Xc);
+  free(Zc);
+  free(vc);
+  free(vhat);
+  free(active);
+  free(cand_cell);
+}
+
 static void usage(void) {
   printf("\nERROR: MODEL lyzenga_log_linear GRIDS /band 1/ ... /band n/ BATHYMETRY /output/ [optional, any order]\n"
     "  LAND /grid/ SHALLOW /grid/ LSM /Lsm 1/ ... /Lsm n/ PERCENTILE /p/ DEEP /k/ RADIUS /r/\n"
-    "  DEPTHS /min/ /max/ TIDE /h/ HUBER /k/ BALANCE /bin (m)/ POWER ERROR /output/\n");
+    "  DEPTHS /min/ /max/ TIDE /h/ HUBER /k/ BALANCE /bin (m)/ POWER ERROR /output/\n"
+    "  ATTENUATION /prefix/ SCENES /n/ TIDES /h_1/ ... SUNZENITH /theta_1/ ... VIEWZENITH /theta_1/ ...\n"
+    "  NODES /deg/ SMOOTHING /w/\n");
 }
 
 static bool parse_number(int *k, double *v) {
@@ -228,12 +701,17 @@ void run_model_lyzenga(void) {
   int k, m, i, j, ii, jj, n, nb = 0, nr, nc, p, ps_out = -1, ps_error = -1, ps_land = -1, ps_shallow = -1,
     bands[LYZ_MAX_BANDS], radius = depth_radius, n_cells = 0, n_fit = 0, it, *cell_i = NULL, *cell_j = NULL,
     dropped_outside = 0, dropped_masked = 0, dropped_deep = 0, dropped_range = 0, count, *status = NULL, bin;
+  int ks;
   double v, lsm[LYZ_MAX_BANDS], sigma[LYZ_MAX_BANDS], pct = 1.0, deep_k = 2.0, dmin = depthmin, dmax = depthmax,
     tide = 0.0, huber = 1.345, balance = 0.0, coef[LYZ_MAX_BANDS + 1] = {0.0},
     R[(LYZ_MAX_BANDS + 1)*(LYZ_MAX_BANDS + 1)], C[(LYZ_MAX_BANDS + 1)*(LYZ_MAX_BANDS + 1)], *A = NULL, *y = NULL,
     *w0 = NULL, *w = NULL, *res = NULL, *tmp = NULL, s, s2, rss, sw, sign = 1.0, mae, bias, ss_tot, mean_y,
     xrow[LYZ_MAX_BANDS + 1], pw_a = 0.0, pw_d = 1.0;
-  bool lsm_given = false, error_wanted = false, power = false, power_all = false, ok;
+  bool lsm_given = false, error_wanted = false, power = false, power_all = false, ok, scenes_given = false,
+    tides_given = false;
+  int n_scenes = 1, k_att = -1;
+  double pct_lsm[LYZ_MAX_BANDS], att_lsm[LYZ_MAX_BANDS], tides[LYZ_MAX_BANDS], sunz[LYZ_MAX_BANDS] = {0.0},
+    viewz[LYZ_MAX_BANDS] = {0.0}, path[LYZ_MAX_BANDS], spacing = 0.05, smooth = 1.0;
   float ***Lbar = NULL, **bathy = NULL, **err = NULL, *vals, nodata, *depths;
   geogrid *g0;
   FILE *fp;
@@ -316,6 +794,45 @@ void run_model_lyzenga(void) {
         power_all = true;
         k++;
       }
+    } else if (strcmp(parsed[k], "ATTENUATION") == 0) {
+      if (k + 1 >= MAX_ARGS || parsed[k + 1][0] == '\0') {
+        usage();
+        return ;
+      }
+      k_att = ++k;
+    } else if (strcmp(parsed[k], "SCENES") == 0) {
+      if (! parse_number(&k, &v) || v < 1.0 || v != floor(v) || v > LYZ_MAX_BANDS) {
+        printf("\nERROR: SCENES /n/ with n a whole number from 1 to %d.\n", LYZ_MAX_BANDS);
+        return ;
+      }
+      n_scenes = (int) v;
+      scenes_given = true;
+    } else if (strcmp(parsed[k], "TIDES") == 0 || strcmp(parsed[k], "SUNZENITH") == 0 ||
+        strcmp(parsed[k], "VIEWZENITH") == 0) {
+      double *dst = parsed[k][0] == 'T' ? tides : parsed[k][0] == 'S' ? sunz : viewz;
+      const char *key = parsed[k];
+      if (! scenes_given) {
+        printf("\nERROR: SCENES /n/ must come before %s.\n", key);
+        return ;
+      }
+      for (m = 0; m < n_scenes; m++) {
+        if (! parse_number(&k, &dst[m]) || (dst != tides && (dst[m] < 0.0 || dst[m] >= 90.0))) {
+          printf("\nERROR: %s needs one value per scene (%d)%s.\n", key, n_scenes,
+            dst == tides ? "" : ", from 0 to 90 degrees");
+          return ;
+        }
+      }
+      if (dst == tides) tides_given = true;
+    } else if (strcmp(parsed[k], "NODES") == 0) {
+      if (! parse_number(&k, &spacing) || spacing <= 0.0) {
+        printf("\nERROR: NODES /spacing (degrees)/ > 0.\n");
+        return ;
+      }
+    } else if (strcmp(parsed[k], "SMOOTHING") == 0) {
+      if (! parse_number(&k, &smooth) || smooth < 0.0) {
+        printf("\nERROR: SMOOTHING /w/ with w >= 0.\n");
+        return ;
+      }
     } else if (strcmp(parsed[k], "ERROR") == 0) {
       if (k + 1 >= MAX_ARGS || parsed[k + 1][0] == '\0') {
         usage();
@@ -357,6 +874,18 @@ void run_model_lyzenga(void) {
   if (error_wanted && strcmp(parsed[k_out], parsed[k_error]) == 0) {
     printf("\nERROR: the bathymetry and error grids need different names.\n");
     return ;
+  }
+  if (k_att >= 0) {
+    char name[MAX_ARG_SIZE];
+    if (nb % n_scenes != 0) {
+      printf("\nERROR: ATTENUATION: %d grids do not divide into %d scenes.\n", nb, n_scenes);
+      return ;
+    }
+    for (m = 0; m < nb; m++) {
+      if (! att_name(name, parsed[k_att], grid_names[bands[m]])) return ;
+    }
+    if (! att_name(name, parsed[k_att], "depth") || ! att_name(name, parsed[k_att], "depth_sigma") ||
+        ! att_name(name, parsed[k_att], "bottom")) return ;
   }
 
   nr = g0->nrows;
@@ -412,6 +941,7 @@ void run_model_lyzenga(void) {
       }
     }
     v = percentile(vals, n, pct);
+    pct_lsm[m] = v;
     if (! lsm_given) lsm[m] = v;
     // The robust spread (1.4826 MAD) of the cells at or below the percentile.
     count = MAX(1, (int) ceil(pct/100.0*n));
@@ -678,6 +1208,18 @@ void run_model_lyzenga(void) {
     free(model_at);
     free(weight_at);
     fclose(fp);
+  }
+
+// The attenuation over the whole grid, and the depth from it (ATTENUATION).
+
+  if (k_att >= 0) {
+    for (ks = 0; ks < n_scenes; ks++) {
+      if (! tides_given) tides[ks] = tide;
+      path[ks] = 1.0/cos(asin(sin(sunz[ks]*M_PI/180.0)/N_WATER)) + 1.0/cos(asin(sin(viewz[ks]*M_PI/180.0)/N_WATER));
+    }
+    for (m = 0; m < nb; m++) att_lsm[m] = lsm_given && lsm[m] > 0.0 ? lsm[m] : pct_lsm[m];
+    attenuation(parsed[k_att], nb, bands, Lbar, g0, att_lsm, sigma, deep_k, n_scenes, tides, path, spacing, smooth,
+      huber, dmin, dmax, sign, cell_i, cell_j, status);
   }
 
 done:

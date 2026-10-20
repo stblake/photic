@@ -15,3 +15,6 @@ tests/synth_check
 tests/lyz_run/
 tests/lyz_gen
 tests/lyz_check
+tests/att_run/
+tests/att_gen
+tests/att_check
