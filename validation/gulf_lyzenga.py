@@ -1219,7 +1219,8 @@ def fit(override=None):
 
 
 def correlation(run="final"):
-    """The run's depths (runs/gulf_lyzenga/<run>/, default the chosen model's) against ICESat-2."""
+    """The run's depths (runs/gulf_lyzenga/<run>/, default the chosen model's) against ICESat-2:
+    the test half, the calibration half and both together."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -1232,9 +1233,10 @@ def correlation(run="final"):
     H = -tier3_scenes.read_nc(os.path.join(rundir, "H.nc"))
     ref = np.load(os.path.join(OUT, "reference.npz"))
     top = 26.0
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5.8), constrained_layout=True)
-    for ax, name, title in zip(axes, ("test", "calibration"), ("Test half (held out)", "Calibration half (fitted)")):
-        R = ref[name]
+    both = np.where(np.isfinite(ref["calibration"]), ref["calibration"], ref["test"])
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5.8), constrained_layout=True)
+    for ax, R, title in zip(axes, (ref["test"], ref["calibration"], both),
+                            ("Test half (held out)", "Calibration half (fitted)", "Both halves")):
         m = np.isfinite(R) & np.isfinite(H)
         x, y = R[m], H[m]
         e = y - x
