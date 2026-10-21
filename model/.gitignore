@@ -18,3 +18,6 @@ tests/lyz_check
 tests/att_run/
 tests/att_gen
 tests/att_check
+tests/con_run/
+tests/con_gen
+tests/con_check

@@ -1,0 +1,16 @@
+// Synthetic regression test for MODEL lyzenga_log_linear ... ATTENUATION ... CONSISTENT (see makefile: make test).
+READ GRID s1_b1 s1_b1.asc
+READ GRID s1_b2 s1_b2.asc
+READ GRID s1_b3 s1_b3.asc
+READ GRID s2_b1 s2_b1.asc
+READ GRID s2_b2 s2_b2.asc
+READ GRID s2_b3 s2_b3.asc
+READ GRID s3_b1 s3_b1.asc
+READ GRID s3_b2 s3_b2.asc
+READ GRID s3_b3 s3_b3.asc
+READ SOUNDINGS soundings.xyz
+MODEL lyzenga_log_linear GRIDS s1_b1 s1_b2 s1_b3 s2_b1 s2_b2 s2_b3 s3_b1 s3_b2 s3_b3 BATHYMETRY H LSM 0.004 0.003 0.002 0.005 0.0035 0.0025 0.0045 0.0032 0.0022 DEEP 0 RADIUS 1 DEPTHS 0 30 HUBER 0 ATTENUATION A SCENES 3 TIDES 0.2 0.2 0.2 SUNZENITH 30 50 40 NODES 0.012 SMOOTHING 0 CONSISTENT INDICES
+// The depth from the attenuation at every interior node (tests/con_check).
+READ SOUNDINGS check.xyz
+WRITE POINTS A_depth depth_points.xyz
+EXIT

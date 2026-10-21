@@ -82,21 +82,37 @@ tests/att_run: photic tests/att_gen
 	sed 's/SMOOTHING 0/SMOOTHING 0 NORMALISE CONSTRAIN GAIN BRIGHTNESS/' tests/att.bam > tests/att_run/con/att.bam
 	cd tests/att_run/con && ../../../photic att.bam < /dev/null > photic.log 2>&1
 
+# ... ATTENUATION ... CONSISTENT on three scenes of three bands with a bottom whose colour changes
+# from cell to cell: the scenes' differences of attenuation and the depth at every cell must be
+# recovered (tests/con_check).
+tests/con_gen: tests/con_gen.o
+	$(CC) $(CFLAGS) $^ -lm -o $@
+
+tests/con_check: tests/con_check.o
+	$(CC) $(CFLAGS) $^ -lm -o $@
+
+tests/con_run: photic tests/con_gen
+	rm -rf tests/con_run && mkdir -p tests/con_run
+	tests/con_gen tests/con_run
+	cp tests/con.bam tests/con_run/
+	cd tests/con_run && ../../photic con.bam < /dev/null > photic.log 2>&1
+
 tests/run: photic tests/synth_gen
 	rm -rf tests/run && mkdir -p tests/run
 	tests/synth_gen tests/run > /dev/null
 	cp tests/synth.bam tests/run/
 	cd tests/run && ../../photic synth.bam < /dev/null > photic.log 2>&1
 
-.PHONY: tests/run tests/lyz_run tests/att_run test-baseline
+.PHONY: tests/run tests/lyz_run tests/att_run tests/con_run test-baseline
 
-test: tests/run tests/synth_check tests/lyz_run tests/lyz_check tests/att_run tests/att_check
+test: tests/run tests/synth_check tests/lyz_run tests/lyz_check tests/att_run tests/att_check tests/con_run tests/con_check
 	@fail=0; for f in $(TEST_OUTPUTS); do \
 	  tests/synth_check baseline tests/run/$$f.nc tests/baseline/$$f.nc || fail=1; \
 	done; \
 	tests/synth_check truth tests/run/modelled_H.nc tests/run/truth_H.asc; \
 	tests/lyz_check tests/lyz_run || fail=1; \
 	tests/att_check tests/att_run || fail=1; \
+	tests/con_check tests/con_run || fail=1; \
 	if grep -q "gain 1.0000 .*brightness response -*0.0000 " tests/att_run/con/photic.log; then \
 	  echo "constraints: ok"; else echo "constraints: FAIL, CONSTRAIN GAIN BRIGHTNESS does not hold"; fail=1; fi; \
 	if [ $$fail = 0 ]; then echo "\nPASS"; else echo "\nFAIL (see tests/run/photic.log)"; exit 1; fi
@@ -111,7 +127,7 @@ test-baseline: tests/run
 spectra.o: ALL_CFLAGS += -DPHOTIC_DATA_DIR='"$(PHOTIC_DATA_DIR)"'
 
 clean:
-	rm -f *.o *.d tests/*.o tests/*.d photic xyz2nc $(UTILS) tests/synth_gen tests/synth_check tests/lyz_gen tests/lyz_check tests/att_gen tests/att_check
+	rm -f *.o *.d tests/*.o tests/*.d photic xyz2nc $(UTILS) tests/synth_gen tests/synth_check tests/lyz_gen tests/lyz_check tests/att_gen tests/att_check tests/con_gen tests/con_check
 	rm -rf tests/run
 
 -include $(wildcard *.d tests/*.d)

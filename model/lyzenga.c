@@ -96,6 +96,19 @@
 //     [VIEWZENITH /theta_1/ ... /theta_n/] [NODES /deg/] [SMOOTHING /w/]   (SCENES before the
 //     per-scene lists)
 //
+// CONSISTENT (with ATTENUATION, two or more scenes) asks for one bottom in every scene: at every
+// cell, each band's bottom beta_b (any colour) is shared by the scenes, so only how the attenuation
+// differs between the scenes carries the depth. It refits those differences, gamma_sb(x) = g_sb -
+// gbar_b, and the scenes' constants over the image's cells, not only the soundings (see "The
+// scenes' differences" below); gbar_b, the band's mean over the scenes, stays from stage 1, as the
+// images cannot separate it from a bottom that changes with depth. Stage 2 then fits one bottom per
+// band at every cell; /prefix/_bottom is their mean, and with INDICES /prefix/_index/i/ are the one
+// bottom's N - 1 indices (Lyzenga 1978's rotation of beta_b with gbar_b). PRIOR /w/ pulls the fit
+// towards stage 1's values, with w times the weight of an average parameter's data (default 0).
+// At the Arabian Gulf it did not beat stage 2's flat bottom: depth explains only about half of
+// the scenes' differences there, the rest being atmosphere and adjacency (validation/EXPERIMENTS.md).
+//   CONSISTENT [PRIOR /w/]
+//
 // With ATTENUATION, stage 1 runs before Lyzenga's fit, and two options use it (see "The
 // attenuation at the soundings" below): CONSTRAIN GAIN [BRIGHTNESS] imposes Lyzenga et al. 2006's
 // calibration condition (eq. 12) on the fit, and NORMALISE divides each predictor by the local
@@ -319,11 +332,11 @@ static int cholesky_solve(double *N, double *b, int n) {
 // The name of an attenuation output, /prefix/_/suffix/; false if it is too long or in use.
 static bool att_name(char *name, const char *prefix, const char *suffix) {
   int n;
-  if (strlen(prefix) + strlen(suffix) + 2 > MAX_ARG_SIZE) {
+  if (strlen(prefix) + strlen(suffix) + 2 > MAX_ARG_SIZE ||
+      snprintf(name, MAX_ARG_SIZE, "%s_%s", prefix, suffix) >= MAX_ARG_SIZE) {
     printf("\nERROR: ATTENUATION: the name '%s_%s' is too long.\n", prefix, suffix);
     return false;
   }
-  snprintf(name, MAX_ARG_SIZE, "%s_%s", prefix, suffix);
   for (n = 0; n < MAX_GRIDS; n++) {
     if (grid_name_taken(n, name)) {
       printf("\nERROR: grid '%s' already in use.\n", name);
@@ -357,6 +370,7 @@ typedef struct {
   int nq;
   double *theta, *c, *support;  // theta[m*nq + q]: g_m at node q
   bool *fitted;
+  bool consistent;              // refitted by CONSISTENT: one bottom per band at every cell
 } att_field;
 
 static void att_free(att_field *af) {
@@ -579,6 +593,426 @@ static void att_stage1(att_field *af, const char *prefix, int nb, const int *ban
   free(cand_cell);
 }
 
+// The scenes' differences (CONSISTENT): the attenuation's differences between scenes from every
+// cell, with one bottom for all scenes.
+// The bottom is the same in every scene, so at a cell
+//   X_sb = beta_b + c_sb - g_sb(x) (H + h_s)
+// for band b of scene s, with beta_b free at every cell (any colour, not only a flat brightness).
+// Removing each band's (weighted) mean over the scenes removes beta_b and gbar_b H, where gbar_b
+// is the band's mean attenuation over the scenes, and leaves
+//   r_sb = C_s[X_sb - c_sb + g_sb (H + h_s)],   g_sb = gbar_b(x) + gamma_sb(x),   sum_s gamma_sb = 0,
+// so only the scenes' differences gamma_sb and the depth remain. gbar_b is not identified by the
+// images: a bottom that darkens uniformly with depth is the same data as every scene's attenuation
+// shifted by the same amount (the tides alone distinguish them, weakly), so it is kept from stage 1.
+// gamma and c are fitted over the cells (every cell, or a regular subset of them, plus the
+// soundings' cells, where H is fixed to the sounding), with H free at every other cell: a
+// bilinear problem, solved by Gauss-Newton with each cell's H eliminated (its Schur complement)
+// and a backtracking line search, H then re-solved exactly at each cell. There is no smoothing
+// penalty: every node has cells, and a penalty would shrink gamma along the near-gauge gamma ->
+// lambda gamma, H -> H/lambda that only the soundings and tides resist. gamma_sb = sum_k U_sk
+// eta_bk(x) and c_sb = cbar_b + sum_k U_sk d_bk, with U the orthonormal (Helmert) basis of vectors
+// over the scenes that sum to zero; eta_bk bilinear on stage 1's nodes. Residuals are weighted as
+// stage 1, by the observed signal, with Huber weights; only grids above DEEP sigma enter, and a
+// band only where at least two scenes see the bottom.
+
+#define CON_MAX_CELLS 100000  // a regular subset of the cells beyond this
+#define CON_MAX_ITER 50
+#define CON_RIDGE 1.0e-8      // relative to the largest diagonal element, for nodes without cells
+
+static void att_consistent(att_field *af, int nb, float ***Lbar, const geogrid *g0, const double *lsm,
+    const double *sigma, double deep_k, int n_scenes, const double *tides, double huber, double prior, double dmin,
+    double dmax, double sign, const int *cell_i, const int *cell_j, const int *status) {
+
+  int nr = g0->nrows, nc = g0->ncols, S = n_scenes, nbs = nb/n_scenes, nq = af->nq, K1 = n_scenes - 1,
+    nb1 = (n_scenes - 1)*(af->nq + 1), P = nbs*(n_scenes - 1)*(af->nq + 1), nloc = nbs*(n_scenes - 1)*5,
+    n_valid = 0, stride, ncell = 0, n_fixed = 0, i, j, k, l, m, s, b, n, x, it, *cq = NULL, *loc = NULL;
+  double U[LYZ_MAX_BANDS][LYZ_MAX_BANDS], *gbar = NULL, *cbar = NULL, *th = NULL, *trial = NULL, *N = NULL,
+    *gr = NULL, *dth = NULL, *X = NULL, *w0 = NULL, *w = NULL, *Hfix = NULL, *Hcur = NULL, *cf = NULL,
+    *Jl = NULL, *u = NULL, *JH = NULL, *ra = NULL, *th1 = NULL, *lam = NULL, J0 = 0.0, J1 = 0.0, alpha = 0.0, step = 0.0;
+  char *mask = NULL;
+
+  for (m = 0; m < nb; m++) {
+    if (! af->fitted[m]) {
+      printf("  CONSISTENT: grid %d has no attenuation from stage 1; not applied\n", m + 1);
+      return ;
+    }
+  }
+  if (S < 2) {
+    printf("  CONSISTENT needs two or more scenes; not applied\n");
+    return ;
+  }
+
+  // U: column k is (1, ..., 1, -(k + 1), 0, ...)/sqrt((k + 1)(k + 2)), with k + 1 ones.
+  for (k = 0; k < K1; k++) {
+    for (s = 0; s < S; s++) U[s][k] = s <= k ? 1.0 : (s == k + 1 ? -(k + 1.0) : 0.0);
+    for (s = 0; s < S; s++) U[s][k] /= sqrt((k + 1.0)*(k + 2.0));
+  }
+
+// The cells: a regular subset of the valid ones, and the soundings' cells with H fixed.
+
+  for (i = 0; i < nr; i++) {
+    for (j = 0; j < nc; j++) {
+      if (isfinite(Lbar[0][i][j])) n_valid++;
+    }
+  }
+  stride = MAX(1, (int) ceil(sqrt((double) n_valid/CON_MAX_CELLS)));
+  mask = calloc((size_t) nr*nc, 1);
+  Hfix = malloc((size_t) nr*nc*sizeof(double));
+  for (n = 0; n < nr*nc; n++) Hfix[n] = 0.0;
+  for (n = 0; n < nsoundings; n++) {
+    double v;
+    if (status[n] == 1 || status[n] == 2) continue ;
+    v = sign*soundings[n][2];
+    if (v < dmin || v > dmax) continue ;
+    x = cell_i[n]*nc + cell_j[n];
+    mask[x] = mask[x] < 2 ? 2 : mask[x] + 1;  // 2 + soundings - 1
+    Hfix[x] += v;
+  }
+  for (i = 0; i < nr; i++) {
+    for (j = 0; j < nc; j++) {
+      x = i*nc + j;
+      if (! isfinite(Lbar[0][i][j])) mask[x] = 0;
+      else if (mask[x] == 0 && i % stride == 0 && j % stride == 0) mask[x] = 1;
+      if (mask[x]) ncell++;
+    }
+  }
+  cq = malloc((size_t) ncell*4*sizeof(int));
+  cf = malloc((size_t) ncell*4*sizeof(double));
+  X = malloc((size_t) ncell*nb*sizeof(double));
+  w0 = malloc((size_t) ncell*nb*sizeof(double));
+  w = malloc((size_t) ncell*nb*sizeof(double));
+  Hcur = malloc((size_t) ncell*sizeof(double));
+  double *Hgiven = malloc((size_t) ncell*sizeof(double));
+  n = 0;
+  for (i = 0; i < nr; i++) {
+    for (j = 0; j < nc; j++) {
+      x = i*nc + j;
+      if (! mask[x]) continue ;
+      node_weights(&af->nodes, i, j, &cq[4*n], &cf[4*n]);
+      Hgiven[n] = mask[x] >= 2 ? Hfix[x]/(mask[x] - 1) : NAN;
+      if (mask[x] >= 2) n_fixed++;
+      for (m = 0; m < nb; m++) {
+        double v = Lbar[m][i][j] - lsm[m];
+        X[n*nb + m] = v > 0.0 ? log(v) : 0.0;
+        w0[n*nb + m] = v > 0.0 && v >= deep_k*sigma[m] ? 1.0/(sigma[m]*sigma[m]/(v*v) + ATT_EPS*ATT_EPS) : 0.0;
+        w[n*nb + m] = w0[n*nb + m];
+      }
+      n++;
+    }
+  }
+  free(Hfix);
+  Hfix = NULL;
+
+// The parameters: per band b, eta_bk at the nodes (b*nb1 + k*nq + q), then d_bk (b*nb1 + K1*nq + k).
+
+  gbar = calloc((size_t) nbs*nq, sizeof(double));
+  cbar = calloc(nbs, sizeof(double));
+  th = calloc(P, sizeof(double));
+  trial = malloc((size_t) P*sizeof(double));
+  dth = malloc((size_t) P*sizeof(double));
+  gr = malloc((size_t) P*sizeof(double));
+  N = malloc((size_t) P*P*sizeof(double));
+  Jl = malloc((size_t) nb*nloc*sizeof(double));
+  u = malloc((size_t) nloc*sizeof(double));
+  loc = malloc((size_t) nloc*sizeof(int));
+  JH = malloc((size_t) nb*sizeof(double));
+  ra = malloc((size_t) nb*sizeof(double));
+  for (b = 0; b < nbs; b++) {
+    for (s = 0; s < S; s++) {
+      cbar[b] += af->c[s*nbs + b]/S;
+      for (l = 0; l < nq; l++) gbar[b*nq + l] += af->theta[(s*nbs + b)*nq + l]/S;
+    }
+    for (k = 0; k < K1; k++) {
+      for (s = 0; s < S; s++) {
+        for (l = 0; l < nq; l++) th[b*nb1 + k*nq + l] += U[s][k]*(af->theta[(s*nbs + b)*nq + l] - gbar[b*nq + l]);
+        th[b*nb1 + K1*nq + k] += U[s][k]*(af->c[s*nbs + b] - cbar[b]);
+      }
+    }
+  }
+
+  th1 = malloc((size_t) P*sizeof(double));
+  lam = calloc(P, sizeof(double));
+  for (l = 0; l < P; l++) th1[l] = th[l];
+  printf("  CONSISTENT: %d cells (every %d%s, and %d soundings' cells), %d parameters, prior %g\n", ncell, stride,
+    stride == 1 ? "" : " in each direction", n_fixed, P, prior);
+
+// One cell's centred residuals at depth H: ra (H = 0) and JH (the derivative), each band's weighted
+// mean over its scenes removed and scaled by sqrt(w); grids of a band seen in fewer than two
+// scenes get zero. g and Z use the parameters t.
+
+#define CON_CELL(t, n) do { \
+    for (b = 0; b < nbs; b++) { \
+      double sw_ = 0.0, sa_ = 0.0, sg_ = 0.0, gv_[LYZ_MAX_BANDS], av_[LYZ_MAX_BANDS]; \
+      int ns_ = 0; \
+      for (s = 0; s < S; s++) { \
+        m = s*nbs + b; \
+        double g_ = 0.0, ga_ = 0.0, cc_ = cbar[b]; \
+        for (l = 0; l < 4; l++) { \
+          ga_ += cf[4*(n) + l]*gbar[b*nq + cq[4*(n) + l]]; \
+          for (k = 0; k < K1; k++) g_ += U[s][k]*cf[4*(n) + l]*(t)[b*nb1 + k*nq + cq[4*(n) + l]]; \
+        } \
+        for (k = 0; k < K1; k++) cc_ += U[s][k]*(t)[b*nb1 + K1*nq + k]; \
+        gv_[s] = ga_ + g_; \
+        av_[s] = X[(n)*nb + m] - cc_ + gv_[s]*tides[s]; \
+        if (w[(n)*nb + m] > 0.0) { \
+          sw_ += w[(n)*nb + m]; \
+          sa_ += w[(n)*nb + m]*av_[s]; \
+          sg_ += w[(n)*nb + m]*gv_[s]; \
+          ns_++; \
+        } \
+      } \
+      for (s = 0; s < S; s++) { \
+        m = s*nbs + b; \
+        if (ns_ < 2 || w[(n)*nb + m] <= 0.0) { \
+          ra[m] = JH[m] = 0.0; \
+          continue ; \
+        } \
+        ra[m] = sqrt(w[(n)*nb + m])*(av_[s] - sa_/sw_); \
+        JH[m] = sqrt(w[(n)*nb + m])*(gv_[s] - sg_/sw_); \
+      } \
+    } \
+  } while (0)
+
+  for (it = 0; it < CON_MAX_ITER; it++) {
+    double hh, rH, scale, *absr = NULL;
+    int nres = 0;
+
+    // The current depths, the objective, then Huber weights from the residuals.
+    J0 = 0.0;
+    for (n = 0; n < ncell; n++) {
+      CON_CELL(th, n);
+      hh = rH = 0.0;
+      for (m = 0; m < nb; m++) {
+        hh += JH[m]*JH[m];
+        rH += JH[m]*ra[m];
+      }
+      Hcur[n] = isfinite(Hgiven[n]) ? Hgiven[n] : (hh > 1.0e-12 ? -rH/hh : NAN);
+      if (! isfinite(Hcur[n])) continue ;
+      for (m = 0; m < nb; m++) J0 += (ra[m] + JH[m]*Hcur[n])*(ra[m] + JH[m]*Hcur[n]);
+    }
+    if (huber > 0.0) {
+      absr = malloc((size_t) ncell*nb*sizeof(double));
+      for (n = 0; n < ncell; n++) {
+        if (! isfinite(Hcur[n])) continue ;
+        CON_CELL(th, n);
+        for (m = 0; m < nb; m++) {
+          if (w[n*nb + m] > 0.0) absr[nres++] = fabs(ra[m] + JH[m]*Hcur[n])/sqrt(w[n*nb + m]/w0[n*nb + m]);
+        }
+      }
+      scale = nres ? 1.4826*median_double(absr, nres) : 0.0;
+      // A residual's Huber weight is from its size at the base weight; the next pass's centring uses it.
+      for (n = 0; n < ncell && scale > 0.0; n++) {
+        if (! isfinite(Hcur[n])) continue ;
+        CON_CELL(th, n);
+        for (m = 0; m < nb; m++) {
+          double e;
+          if (w[n*nb + m] <= 0.0) continue ;
+          e = fabs(ra[m] + JH[m]*Hcur[n])/sqrt(w[n*nb + m]/w0[n*nb + m]);
+          w[n*nb + m] = w0[n*nb + m]*(e <= huber*scale ? 1.0 : huber*scale/e);
+        }
+      }
+      free(absr);
+      // The objective again, at the new weights.
+      J0 = 0.0;
+      for (n = 0; n < ncell; n++) {
+        CON_CELL(th, n);
+        hh = rH = 0.0;
+        for (m = 0; m < nb; m++) {
+          hh += JH[m]*JH[m];
+          rH += JH[m]*ra[m];
+        }
+        Hcur[n] = isfinite(Hgiven[n]) ? Hgiven[n] : (hh > 1.0e-12 ? -rH/hh : NAN);
+        if (! isfinite(Hcur[n])) continue ;
+        for (m = 0; m < nb; m++) J0 += (ra[m] + JH[m]*Hcur[n])*(ra[m] + JH[m]*Hcur[n]);
+      }
+    }
+
+    // PRIOR: sum lambda_l (theta_l - theta_1,l)^2, towards stage 1's values, with lambda the prior
+    // weight times the mean diagonal, in the first iteration's system, of the parameter's kind (the
+    // attenuation's nodes, or the scenes' constants): an average parameter's data.
+    for (l = 0; l < P; l++) J0 += lam[l]*(th[l] - th1[l])*(th[l] - th1[l]);
+
+    // The Gauss-Newton system, each free cell's H eliminated.
+    for (l = 0; l < P*P; l++) N[l] = 0.0;
+    for (l = 0; l < P; l++) gr[l] = 0.0;
+    for (n = 0; n < ncell; n++) {
+      int a1, a2;
+      double res[LYZ_MAX_BANDS];
+      if (! isfinite(Hcur[n])) continue ;
+      CON_CELL(th, n);
+      // The local Jacobian: grid m (band b, scene s) depends on band b's eta_bk at the cell's four
+      // nodes and its d_bk; columns ordered (b, k, then the four nodes and d), the band's mean over
+      // its scenes removed as for the residual.
+      for (l = 0; l < nb*nloc; l++) Jl[l] = 0.0;
+      for (b = 0; b < nbs; b++) {
+        double sw_ = 0.0, mj[5*LYZ_MAX_BANDS];
+        int ns_ = 0, c0 = b*K1*5;
+        for (l = 0; l < 5*K1; l++) mj[l] = 0.0;
+        for (s = 0; s < S; s++) {
+          m = s*nbs + b;
+          if (w[n*nb + m] > 0.0) {
+            sw_ += w[n*nb + m];
+            ns_++;
+          }
+        }
+        if (ns_ < 2) continue ;
+        for (s = 0; s < S; s++) {
+          m = s*nbs + b;
+          if (w[n*nb + m] <= 0.0) continue ;
+          for (k = 0; k < K1; k++) {
+            for (l = 0; l < 4; l++) mj[k*5 + l] += w[n*nb + m]*U[s][k]*cf[4*n + l]*(Hcur[n] + tides[s]);
+            mj[k*5 + 4] -= w[n*nb + m]*U[s][k];
+          }
+        }
+        for (s = 0; s < S; s++) {
+          m = s*nbs + b;
+          if (w[n*nb + m] <= 0.0) continue ;
+          for (k = 0; k < K1; k++) {
+            for (l = 0; l < 4; l++) {
+              Jl[m*nloc + c0 + k*5 + l] = sqrt(w[n*nb + m])*(U[s][k]*cf[4*n + l]*(Hcur[n] + tides[s]) - mj[k*5 + l]/sw_);
+            }
+            Jl[m*nloc + c0 + k*5 + 4] = sqrt(w[n*nb + m])*(-U[s][k] - mj[k*5 + 4]/sw_);
+          }
+        }
+        for (k = 0; k < K1; k++) {
+          for (l = 0; l < 4; l++) loc[c0 + k*5 + l] = b*nb1 + k*nq + cq[4*n + l];
+          loc[c0 + k*5 + 4] = b*nb1 + K1*nq + k;
+        }
+      }
+      for (b = 0; b < nbs; b++) {  // bands not seen here still need valid columns (zero)
+        int ns_ = 0;
+        for (s = 0; s < S; s++) ns_ += w[n*nb + s*nbs + b] > 0.0;
+        if (ns_ >= 2) continue ;
+        for (k = 0; k < K1; k++) {
+          for (l = 0; l < 4; l++) loc[b*K1*5 + k*5 + l] = b*nb1 + k*nq + cq[4*n + l];
+          loc[b*K1*5 + k*5 + 4] = b*nb1 + K1*nq + k;
+        }
+      }
+      hh = rH = 0.0;
+      for (m = 0; m < nb; m++) {
+        res[m] = ra[m] + JH[m]*Hcur[n];
+        hh += JH[m]*JH[m];
+        rH += JH[m]*res[m];
+      }
+      for (a1 = 0; a1 < nloc; a1++) {
+        b = a1/(5*K1);
+        u[a1] = 0.0;
+        for (s = 0; s < S; s++) u[a1] += Jl[(s*nbs + b)*nloc + a1]*JH[s*nbs + b];
+      }
+      // Grid m's row is zero outside its band's columns, so J'J is block diagonal by band; the
+      // Schur term couples the bands.
+      bool free_h = ! isfinite(Hgiven[n]) && hh > 1.0e-12;
+      for (a1 = 0; a1 < nloc; a1++) {
+        double gsum = 0.0;
+        b = a1/(5*K1);
+        for (s = 0; s < S; s++) gsum += Jl[(s*nbs + b)*nloc + a1]*res[s*nbs + b];
+        if (free_h) gsum -= u[a1]*rH/hh;
+        gr[loc[a1]] += gsum;
+        for (a2 = b*5*K1; a2 < (b + 1)*5*K1; a2++) {
+          double nsum = 0.0;
+          for (s = 0; s < S; s++) nsum += Jl[(s*nbs + b)*nloc + a1]*Jl[(s*nbs + b)*nloc + a2];
+          N[loc[a1]*P + loc[a2]] += nsum;
+        }
+        if (! free_h) continue ;
+        for (a2 = 0; a2 < nloc; a2++) N[loc[a1]*P + loc[a2]] -= u[a1]*u[a2]/hh;
+      }
+    }
+    if (it == 0 && prior > 0.0) {
+      double tr_eta = 0.0, tr_d = 0.0;
+      for (l = 0; l < P; l++) {
+        if (l % nb1 < K1*nq) tr_eta += N[l*P + l];
+        else tr_d += N[l*P + l];
+      }
+      for (l = 0; l < P; l++) lam[l] = prior*(l % nb1 < K1*nq ? tr_eta/(nbs*K1*nq) : tr_d/(nbs*K1));
+    }
+    for (l = 0; l < P; l++) {
+      N[l*P + l] += lam[l];
+      gr[l] += lam[l]*(th[l] - th1[l]);
+    }
+    double dmax_n = 0.0;
+    for (l = 0; l < P; l++) dmax_n = MAX(dmax_n, N[l*P + l]);
+    for (l = 0; l < P; l++) {
+      N[l*P + l] += CON_RIDGE*dmax_n;
+      dth[l] = -gr[l];
+    }
+    if (dmax_n <= 0.0 || cholesky_solve(N, dth, P) != 0) {
+      printf("  CONSISTENT: the system is singular at iteration %d; stopped\n", it + 1);
+      break;
+    }
+
+    // Backtrack until the reduced objective falls.
+    for (alpha = 1.0; alpha > 1.0e-6; alpha *= 0.5) {
+      for (l = 0; l < P; l++) trial[l] = th[l] + alpha*dth[l];
+      J1 = 0.0;
+      for (n = 0; n < ncell; n++) {
+        double H;
+        CON_CELL(trial, n);
+        hh = rH = 0.0;
+        for (m = 0; m < nb; m++) {
+          hh += JH[m]*JH[m];
+          rH += JH[m]*ra[m];
+        }
+        H = isfinite(Hgiven[n]) ? Hgiven[n] : (hh > 1.0e-12 ? -rH/hh : NAN);
+        if (! isfinite(H)) continue ;
+        for (m = 0; m < nb; m++) J1 += (ra[m] + JH[m]*H)*(ra[m] + JH[m]*H);
+      }
+      for (l = 0; l < P; l++) J1 += lam[l]*(trial[l] - th1[l])*(trial[l] - th1[l]);
+      if (J1 < J0) break;
+    }
+    if (J1 >= J0) {
+      printf("  CONSISTENT: converged at iteration %d, objective %.6g\n", it + 1, J0);
+      break;
+    }
+    step = 0.0;
+    for (l = 0; l < P; l++) {
+      step = MAX(step, fabs(alpha*dth[l]));
+      th[l] = trial[l];
+    }
+    printf("  CONSISTENT: iteration %2d, objective %.6g -> %.6g (step %.3g, largest change %.3g)\n", it + 1, J0, J1,
+      alpha, step);
+    if (step < 1.0e-9 || (J0 - J1) < 1.0e-12*J0) break;
+  }
+
+// Back to each grid's field: g_sb = gbar_b + sum_k U_sk eta_bk, c_sb = cbar_b + sum_k U_sk d_bk.
+
+  for (b = 0; b < nbs; b++) {
+    for (s = 0; s < S; s++) {
+      m = s*nbs + b;
+      af->c[m] = cbar[b];
+      for (k = 0; k < K1; k++) af->c[m] += U[s][k]*th[b*nb1 + K1*nq + k];
+      for (l = 0; l < nq; l++) {
+        af->theta[m*nq + l] = gbar[b*nq + l];
+        for (k = 0; k < K1; k++) af->theta[m*nq + l] += U[s][k]*th[b*nb1 + k*nq + l];
+      }
+    }
+  }
+  af->consistent = true;
+#undef CON_CELL
+
+  free(mask);
+  free(cq);
+  free(cf);
+  free(X);
+  free(w0);
+  free(w);
+  free(Hcur);
+  free(Hgiven);
+  free(gbar);
+  free(cbar);
+  free(th);
+  free(th1);
+  free(lam);
+  free(trial);
+  free(dth);
+  free(gr);
+  free(N);
+  free(Jl);
+  free(u);
+  free(loc);
+  free(JH);
+  free(ra);
+}
+
 // ATTENUATION's outputs from stage 1's field: K of every grid, then a depth at every cell from it
 // (stage 2), and attenuation.csv; see the header.
 static void att_outputs(const att_field *af, const char *prefix, int nb, const int *bands, float ***Lbar,
@@ -592,7 +1026,8 @@ static void att_outputs(const att_field *af, const char *prefix, int nb, const i
   const double *theta = af->theta, *c = af->c, *support = af->support;
   const bool *fitted = af->fitted;
   const att_nodes nodes = af->nodes;
-  float **out = NULL, **depth = NULL, **dsig = NULL, **bottom = NULL, nodata = g0->nodata_value;
+  float **out = NULL, **depth = NULL, **dsig = NULL, **bottom = NULL, **one[LYZ_MAX_BANDS] = {NULL},
+    nodata = g0->nodata_value;
   char name[MAX_ARG_SIZE];
   FILE *fp;
 
@@ -621,6 +1056,14 @@ static void att_outputs(const att_field *af, const char *prefix, int nb, const i
   allocate_float_array_2d(&depth, nr, nc);
   allocate_float_array_2d(&dsig, nr, nc);
   allocate_float_array_2d(&bottom, nr, nc);
+  // CONSISTENT with INDICES: the indices of the one bottom, beta_b rotated with gbar_b (as below).
+  int n_one = af->consistent && indices && nbs >= 2 ? nbs - 1 : 0;
+  for (l = 0; l < n_one; l++) {
+    allocate_float_array_2d(&one[l], nr, nc);
+    for (i = 0; i < nr; i++) {
+      for (j = 0; j < nc; j++) one[l][i][j] = nodata;
+    }
+  }
   for (i = 0; i < nr; i++) {
     for (j = 0; j < nc; j++) {
       depth[i][j] = dsig[i][j] = bottom[i][j] = nodata;
@@ -629,7 +1072,7 @@ static void att_outputs(const att_field *af, const char *prefix, int nb, const i
       // fitted one, exp(B + c - g (H + h)).
       double gm[LYZ_MAX_BANDS], ym[LYZ_MAX_BANDS], vm[LYZ_MAX_BANDS], sm[LYZ_MAX_BANDS], wl[LYZ_MAX_BANDS], H = 0.0,
         B = 0.0,
-        sw, sg, sy, sgg, sgy, rss, vfit;
+        sw, sgg, sgy, rss, vfit;
       bool use[LYZ_MAX_BANDS], ok2 = false;
       int k = 0, used, pass, changed;
       node_weights(&nodes, i, j, q, f);
@@ -646,39 +1089,64 @@ static void att_outputs(const att_field *af, const char *prefix, int nb, const i
         use[k] = v >= deep_k*sigma[m];
         k++;
       }
+      // One bottom for every grid (B, a flat brightness), or with CONSISTENT one per band (beta_b,
+      // any colour), shared by the scenes: then only the scenes' differences of g within a band
+      // carry the depth. Grid l belongs to group grp[l].
+      int grp[LYZ_MAX_BANDS], ngrp = af->consistent ? nbs : 1, ig;
+      double gsw[LYZ_MAX_BANDS], gsg[LYZ_MAX_BANDS], gsy[LYZ_MAX_BANDS], beta[LYZ_MAX_BANDS];
+      int gn[LYZ_MAX_BANDS];
+      for (l = 0, m = 0; m < nb; m++) {
+        if (! fitted[m] || Lbar[m][i][j] - lsm[m] <= 0.0) continue ;
+        grp[l++] = af->consistent ? m % nbs : 0;
+      }
       for (pass = 0; pass < ATT_MAX_PASSES; pass++) {
-        sw = sg = sy = sgg = sgy = rss = 0.0;
+        sw = sgg = sgy = rss = 0.0;
         used = 0;
+        for (ig = 0; ig < ngrp; ig++) {
+          gsw[ig] = gsg[ig] = gsy[ig] = 0.0;
+          gn[ig] = 0;
+        }
         for (l = 0; l < k; l++) {
           if (! use[l]) continue ;
           // The fitted signal is v exp((B - g H) - y).
-          vfit = pass == 0 ? vm[l] : vm[l]*exp((B - gm[l]*H) - ym[l]);
+          vfit = pass == 0 ? vm[l] : vm[l]*exp((beta[grp[l]] - gm[l]*H) - ym[l]);
           wl[l] = 1.0/(sm[l]*sm[l]/(vfit*vfit) + ATT_EPS*ATT_EPS);
-          sw += wl[l];
-          sg += wl[l]*gm[l];
-          sy += wl[l]*ym[l];
+          gsw[grp[l]] += wl[l];
+          gsg[grp[l]] += wl[l]*gm[l];
+          gsy[grp[l]] += wl[l]*ym[l];
+          gn[grp[l]]++;
           used++;
         }
-        if (used < 3) break;
+        int nseen = 0;
+        for (ig = 0; ig < ngrp; ig++) {
+          sw += gsw[ig];
+          nseen += gn[ig] > 0;
+        }
+        if (used < 3 || used - nseen < 2) break;
         for (l = 0; l < k; l++) {
           if (! use[l]) continue ;
-          sgg += wl[l]*(gm[l] - sg/sw)*(gm[l] - sg/sw);
-          sgy += wl[l]*(gm[l] - sg/sw)*(ym[l] - sy/sw);
+          sgg += wl[l]*(gm[l] - gsg[grp[l]]/gsw[grp[l]])*(gm[l] - gsg[grp[l]]/gsw[grp[l]]);
+          sgy += wl[l]*(gm[l] - gsg[grp[l]]/gsw[grp[l]])*(ym[l] - gsy[grp[l]]/gsw[grp[l]]);
         }
         if (sgg <= 1.0e-12*sw) break;
-        double H1 = -sgy/sgg, B1 = sy/sw + H1*sg/sw;
+        double H1 = -sgy/sgg, B1 = 0.0;
+        for (ig = 0; ig < ngrp; ig++) {
+          if (gn[ig] == 0) continue ;
+          beta[ig] = gsy[ig]/gsw[ig] + H1*gsg[ig]/gsw[ig];
+          B1 += beta[ig]/nseen;
+        }
         for (l = 0; l < k; l++) {
-          if (use[l]) rss += wl[l]*(ym[l] - (B1 - gm[l]*H1))*(ym[l] - (B1 - gm[l]*H1));
+          if (use[l]) rss += wl[l]*(ym[l] - (beta[grp[l]] - gm[l]*H1))*(ym[l] - (beta[grp[l]] - gm[l]*H1));
         }
         H = H1;
         B = B1;
         ok2 = true;
         depth[i][j] = -H;
-        dsig[i][j] = used > 2 ? sqrt(rss/(used - 2)/sgg) : nodata;
+        dsig[i][j] = used - nseen > 1 ? sqrt(rss/(used - nseen - 1)/sgg) : nodata;
         bottom[i][j] = B;
         changed = 0;
         for (l = 0; l < k; l++) {
-          bool now = vm[l]*exp((B - gm[l]*H) - ym[l]) >= deep_k*sm[l];
+          bool now = vm[l]*exp((beta[grp[l]] - gm[l]*H) - ym[l]) >= deep_k*sm[l];
           if (now != use[l]) changed++;
           use[l] = now;
         }
@@ -689,6 +1157,26 @@ static void att_outputs(const att_field *af, const char *prefix, int nb, const i
         continue ;
       }
       n_depth++;
+      for (ig = 0; ig < ngrp && gn[ig] > 0; ig++) ;
+      if (n_one > 0 && ig == ngrp) {
+        double bb[LYZ_MAX_BANDS], S1, S2, yv;
+        int ix, b2;
+        for (b2 = 0; b2 < nbs; b2++) {
+          bb[b2] = 0.0;
+          for (s = 0; s < n_scenes; s++) {
+            for (l = 0; l < 4; l++) bb[b2] += f[l]*theta[(s*nbs + b2)*nq + q[l]]/n_scenes;
+          }
+        }
+        for (ix = 0; ix < n_one; ix++) {
+          S1 = 0.0;
+          for (l = 0; l <= ix; l++) S1 += bb[l]*bb[l];
+          S2 = S1 + bb[ix + 1]*bb[ix + 1];
+          if (S1 <= 0.0) continue ;
+          yv = -sqrt(S1/S2)*beta[ix + 1];
+          for (l = 0; l <= ix; l++) yv += bb[ix + 1]*bb[l]/sqrt(S1*S2)*beta[l];
+          one[ix][i][j] = yv;
+        }
+      }
     }
   }
 
@@ -713,6 +1201,12 @@ static void att_outputs(const att_field *af, const char *prefix, int nb, const i
   dsig = NULL;
   if (! att_name(name, prefix, "bottom") || ! store_grid(name, bottom, g0)) goto done;
   bottom = NULL;
+  for (l = 0; l < n_one; l++) {
+    char suffix[32];
+    snprintf(suffix, sizeof(suffix), "index%d", l + 1);
+    if (! att_name(name, prefix, suffix) || ! store_grid(name, one[l], g0)) goto done;
+    one[l] = NULL;
+  }
 
 // INDICES: Lyzenga 1978's depth-invariant bottom indices for each scene, with the local attenuation.
 // Within a scene, X_j = a_j - b_j Z with b_j = g_j(x); the rotation of eqs. 8 and B2-B7 takes the
@@ -786,6 +1280,9 @@ done:
   if (depth != NULL) free_float_array_2d(depth, nr);
   if (dsig != NULL) free_float_array_2d(dsig, nr);
   if (bottom != NULL) free_float_array_2d(bottom, nr);
+  for (l = 0; l < LYZ_MAX_BANDS; l++) {
+    if (one[l] != NULL) free_float_array_2d(one[l], nr);
+  }
 }
 
 static void usage(void) {
@@ -793,7 +1290,7 @@ static void usage(void) {
     "  LAND /grid/ SHALLOW /grid/ LSM /Lsm 1/ ... /Lsm n/ PERCENTILE /p/ DEEP /k/ RADIUS /r/\n"
     "  DEPTHS /min/ /max/ TIDE /h/ HUBER /k/ BALANCE /bin (m)/ POWER ERROR /output/\n"
     "  ATTENUATION /prefix/ SCENES /n/ TIDES /h_1/ ... SUNZENITH /theta_1/ ... VIEWZENITH /theta_1/ ...\n"
-    "  NODES /deg/ SMOOTHING /w/ INDICES  CONSTRAIN GAIN [BRIGHTNESS]  NORMALISE (with ATTENUATION)\n");
+    "  NODES /deg/ SMOOTHING /w/ INDICES CONSISTENT  CONSTRAIN GAIN [BRIGHTNESS]  NORMALISE (with ATTENUATION)\n");
 }
 
 static bool parse_number(int *k, double *v) {
@@ -818,7 +1315,8 @@ void run_model_lyzenga(void) {
     xrow[LYZ_MAX_BANDS + 1], pw_a = 0.0, pw_d = 1.0;
   bool lsm_given = false, error_wanted = false, power = false, power_all = false, ok, scenes_given = false,
     tides_given = false, con_gain = false, con_bright = false, normalise = false, error_noise = false,
-    error_gain = false, indices = false;
+    error_gain = false, indices = false, consistent = false;
+  double con_prior = 0.0;
   att_field af = {0};
   int n_con = 0, piv[2] = {0, 0}, p_r = 0, freec[LYZ_MAX_BANDS + 1];
   double E[2][LYZ_MAX_BANDS + 1], dcon[2] = {0.0, 0.0}, gbar[LYZ_MAX_BANDS] = {0.0};
@@ -973,6 +1471,15 @@ void run_model_lyzenga(void) {
       }
     } else if (strcmp(parsed[k], "INDICES") == 0) {
       indices = true;
+    } else if (strcmp(parsed[k], "CONSISTENT") == 0) {
+      consistent = true;
+      if (k + 1 < MAX_ARGS && strcmp(parsed[k + 1], "PRIOR") == 0) {
+        k++;
+        if (! parse_number(&k, &con_prior) || con_prior < 0.0) {
+          printf("\nERROR: CONSISTENT [PRIOR /w/] with w >= 0.\n");
+          return ;
+        }
+      }
     } else {
       printf("\nERROR: MODEL lyzenga_log_linear: unexpected '%s'.\n", parsed[k]);
       usage();
@@ -1008,8 +1515,8 @@ void run_model_lyzenga(void) {
     printf("\nERROR: the bathymetry and error grids need different names.\n");
     return ;
   }
-  if ((con_gain || normalise || error_gain || indices) && k_att < 0) {
-    printf("\nERROR: CONSTRAIN, NORMALISE, ERROR ... GAIN and INDICES need ATTENUATION.\n");
+  if ((con_gain || normalise || error_gain || indices || consistent) && k_att < 0) {
+    printf("\nERROR: CONSTRAIN, NORMALISE, ERROR ... GAIN, INDICES and CONSISTENT need ATTENUATION.\n");
     return ;
   }
   if (k_att >= 0) {
@@ -1023,6 +1530,11 @@ void run_model_lyzenga(void) {
     }
     if (! att_name(name, parsed[k_att], "depth") || ! att_name(name, parsed[k_att], "depth_sigma") ||
         ! att_name(name, parsed[k_att], "bottom")) return ;
+    for (m = 0; consistent && indices && m < nb/n_scenes - 1; m++) {
+      char suffix[32];
+      snprintf(suffix, sizeof(suffix), "index%d", m + 1);
+      if (! att_name(name, parsed[k_att], suffix)) return ;
+    }
     for (ks = 0; indices && ks < n_scenes; ks++) {
       for (m = 0; m < nb/n_scenes - 1; m++) {
         char suffix[32];
@@ -1183,6 +1695,10 @@ void run_model_lyzenga(void) {
     for (m = 0; m < nb; m++) att_lsm[m] = lsm_given && lsm[m] > 0.0 ? lsm[m] : pct_lsm[m];
     att_stage1(&af, parsed[k_att], nb, bands, Lbar, g0, att_lsm, sigma, deep_k, n_scenes, tides, path, spacing,
       smooth, huber, dmin, dmax, sign, cell_i, cell_j, status);
+    if (consistent) {
+      att_consistent(&af, nb, Lbar, g0, att_lsm, sigma, deep_k, n_scenes, tides, huber, con_prior, dmin, dmax, sign,
+        cell_i, cell_j, status);
+    }
   }
   if (con_gain || normalise) {
     for (m = 0; m < nb; m++) {

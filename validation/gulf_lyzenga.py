@@ -33,6 +33,11 @@ ICESat-2 on a split reference.
             calibration half (runs/gulf_lyzenga/attenuation/: attenuation.png, and K of every scene and band
             as maps, k_maps.png, and spectra against pure water, k_spectra.png; Lyzenga 1978's
             depth-invariant bottom indices, bottom_indices.png)
+  consistent [/bands/]  ATTENUATION ... CONSISTENT (one bottom in every scene, the scenes' differences of
+            attenuation from every cell) against stage 2's flat bottom, with Lyzenga's free fit and
+            CONSTRAIN GAIN beside them, out of fold on cv's folds; then the whole calibration half
+            scored on the test half, with the indices' depth and between-scene correlations
+            (consistent.json; default 4 and 3 bands)
 
 Every run passes ATTENUATION (each scene's tide and ACOLITE's sun and view zeniths), so photic
 also writes K and the attenuation's depth alongside Lyzenga's.
@@ -765,6 +770,128 @@ def attenuation(bands=None):
     print(json.dumps(result["out_of_fold"], indent=1))
 
 
+def index_checks(rundir, nb, ns, R, water):
+    """The depth-invariant indices: each scene's (K_index<i>_s<k>) correlation with the depth R and
+    their median correlation between scenes, and with CONSISTENT the one bottom's (K_index<i>)."""
+    import tier3_scenes
+    out = []
+    for i in range(nb - 1):
+        Y = []
+        for k in range(ns):
+            with NC_LOCK:
+                y = tier3_scenes.read_nc(os.path.join(rundir, "K_index%d_s%d.nc" % (i + 1, k + 1)))
+            y[~water] = np.nan
+            Y.append(y)
+        depth_r = [float(np.corrcoef(R[m], y[m])[0, 1]) for y in Y for m in [np.isfinite(R) & np.isfinite(y)]]
+        pair_r = [float(np.corrcoef(Y[a][m], Y[b][m])[0, 1]) for a in range(ns) for b in range(a + 1, ns)
+                  for m in [np.isfinite(Y[a]) & np.isfinite(Y[b])]]
+        row = dict(index=i + 1, depth_correlation=depth_r, between_scenes_median=float(np.median(pair_r)))
+        path = os.path.join(rundir, "K_index%d.nc" % (i + 1))
+        if os.path.exists(path):
+            with NC_LOCK:
+                y = tier3_scenes.read_nc(path)
+            y[~water] = np.nan
+            m = np.isfinite(R) & np.isfinite(y)
+            row["one_bottom_depth_correlation"] = float(np.corrcoef(R[m], y[m])[0, 1])
+            # How far each scene's own index agrees with the one bottom's.
+            row["scene_vs_one_bottom"] = [float(np.corrcoef(Y[k][mk], y[mk])[0, 1]) for k in range(ns)
+                                          for mk in [np.isfinite(Y[k]) & np.isfinite(y)]]
+        out.append(row)
+    return out
+
+
+def consistent(bands_list=None):
+    """CONSISTENT (one bottom in every scene; the scenes' differences of attenuation from every cell)
+    against stage 2's flat bottom, with Lyzenga's free fit (the chosen settings) and its
+    CONSTRAIN GAIN variant beside them: out of fold on cv's folds (the calibration half only), all
+    scored on the same held-out cells; then fitted on the whole calibration half and scored on the
+    test half, with the depth-invariant indices (consistent.json)."""
+    import tier3_scenes
+    lon, lat = grid()
+    meta = json.load(open(os.path.join(OUT, "meta.json")))
+    ref = np.load(os.path.join(OUT, "reference.npz"))
+    water = water_mask()
+    c = json.load(open(os.path.join(OUT, "cv.json")))["chosen"]
+    if c.get("inputs") != "joint":
+        raise SystemExit("consistent needs the joint model (one set of bands per scene)")
+    bands_list = bands_list or [[443, 483, 561, 655], [443, 483, 561]]
+    folds = cv_folds(lon, lat, meta)
+    # (name, lsm, extra words, which depth): the attenuation's depth (K_depth), or Lyzenga's (H).
+    # PRIOR 1 pulls the fit towards stage 1 (the attenuation and the scenes' constants), with the
+    # weight of an average parameter's data.
+    variants = [("flat", "K_depth"), ("consistent", "K_depth"), ("consistent_prior1", "K_depth"),
+                ("lyzenga", "H"), ("lyzenga_gain", "H")]
+    runs = {"flat": "free", "lyzenga": "free", "consistent": "consistent", "consistent_prior1": "consistent_prior1",
+            "lyzenga_gain": "gain"}
+    words = {"free": (c["lsm"], ""), "consistent": (c["lsm"], " CONSISTENT"),
+             "consistent_prior1": (c["lsm"], " CONSISTENT PRIOR 1"), "gain": ("percentile", " CONSTRAIN GAIN")}
+    jobs = [(tuple(b), r, f) for b in bands_list for r in words for f in range(FOLDS)]
+
+    def one(job):
+        bands, run, f = job
+        rundir = os.path.join(WORK, "consistent", "%s_%s_f%d" % ("-".join(map(str, bands)), run, f))
+        lsm, w = words[run]
+        H, log = run_photic(rundir, folds[f][0], list(bands), lsm, c["radius"], " TIDE 0" + w, inputs="joint",
+                            writes=[("K_depth", "K_depth.nc")])
+        with NC_LOCK:
+            A = -tier3_scenes.read_nc(os.path.join(rundir, "K_depth.nc"))
+        return job, {"H": H, "K_depth": A}, [l for l in log if "CONSISTENT" in l]
+    # The CONSISTENT runs first, as they are the slow ones.
+    jobs.sort(key=lambda j: not j[1].startswith("consistent"))
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(one, jobs))
+    table = []
+    for bands in map(tuple, bands_list):
+        maps = {}
+        for name, which in variants:
+            held = np.full(ref["calibration"].shape, np.nan)
+            Hf = held.copy()
+            for (b, run, f), out, _ in results:
+                if b != bands or run != runs[name]:
+                    continue
+                m = np.isfinite(folds[f][1])
+                held[m], Hf[m] = folds[f][1][m], out[which][m]
+            maps[name] = (held, Hf)
+        common = np.all([np.isfinite(Hf) for _, Hf in maps.values()], axis=0)
+        for name, _ in variants:
+            held, Hf = maps[name]
+            r, rc = scores(held, Hf), scores(np.where(common, held, np.nan), Hf)
+            table.append(dict(bands=list(bands), variant=name, out_of_fold=r, common=rc))
+            print("%-16s %-13s hits %.3f  with depth %.3f  rmse %.2f | common %d: hits %.3f rmse %.2f bias %+.2f  %s" % (
+                "-".join(map(str, bands)), name, r["hits"], r["with_depth"], r["rmse"], rc["n_reference"], rc["hits"],
+                rc["rmse"], rc["bias"], " ".join("%s %2.0f" % (k, 100*x["hits"]) for k, x in rc["by_depth"].items())))
+    logs = {"%s_%s_f%d" % ("-".join(map(str, b)), r, f): l for (b, r, f), _, l in results if l}
+    # The whole calibration half, scored on the test half, with the indices.
+    final = []
+    for bands in bands_list:
+        nb, ns = len(bands), meta["n_scenes"]
+        outs = ["K_depth", "K_bottom"] + ["K_index%d_s%d" % (i + 1, k + 1) for k in range(ns) for i in range(nb - 1)]
+        for run in ("free", "consistent"):
+            rundir = os.path.join(WORK, "consistent", "final_%s_%s" % ("-".join(map(str, bands)), run))
+            lsm, w = words[run]
+            o = outs + (["K_index%d" % (i + 1) for i in range(nb - 1)] if run == "consistent" else [])
+            H, log = run_photic(rundir, os.path.join(OUT, "calibration.xyz"), bands, lsm, c["radius"],
+                                " TIDE 0" + w + " INDICES", inputs="joint", writes=[(x, x + ".nc") for x in o])
+            with NC_LOCK:
+                A = -tier3_scenes.read_nc(os.path.join(rundir, "K_depth.nc"))
+            row = dict(bands=bands, run=run, test=dict(attenuation=scores(ref["test"], A), lyzenga=scores(ref["test"], H)),
+                       indices=index_checks(rundir, nb, ns, ref["calibration"], water),
+                       log=[l for l in log if "CONSISTENT" in l or "depth from the attenuation" in l])
+            final.append(row)
+            t = row["test"]["attenuation"]
+            print("test half, %s %-10s attenuation depth: hits %.3f with depth %.3f rmse %.2f bias %+.2f  %s" % (
+                "-".join(map(str, bands)), run, t["hits"], t["with_depth"], t["rmse"], t["bias"],
+                " ".join("%s %2.0f" % (k, 100*x["hits"]) for k, x in t["by_depth"].items())))
+            for ch in row["indices"]:
+                print("   index %d: r with depth %s; between scenes %.2f%s" % (
+                    ch["index"], " ".join("%+.2f" % x for x in ch["depth_correlation"]), ch["between_scenes_median"],
+                    "; one bottom: r with depth %+.2f, with each scene's %s" % (
+                        ch["one_bottom_depth_correlation"], " ".join("%.2f" % x for x in ch["scene_vs_one_bottom"]))
+                    if "one_bottom_depth_correlation" in ch else ""))
+    json.dump(dict(radius=c["radius"], folds=FOLDS, variants=table, final=final, logs=logs),
+              open(os.path.join(OUT, "consistent.json"), "w"), indent=1)
+
+
 def attenuation_maps(rundir, lon, lat, meta, c, names):
     """K (the median over the scenes) for each band, and the attenuation's depth and sigma
     (runs/gulf_lyzenga/attenuation/final/attenuation.png)."""
@@ -1165,9 +1292,11 @@ def points():
 if __name__ == "__main__":
     commands = {"prepare": prepare, "cv": cv, "fit": fit, "correlation": correlation, "points": points, "calibrate": calibrate, "errors": errors,
                 "ratio_filter": ratio_filter, "reference_maps": reference_maps,
-                "attenuation": attenuation}
+                "attenuation": attenuation, "consistent": consistent}
     if len(sys.argv) == 3 and sys.argv[1] == "attenuation":
         attenuation([int(b) for b in sys.argv[2].split(",")])
+    elif len(sys.argv) == 3 and sys.argv[1] == "consistent":
+        consistent([[int(b) for b in sys.argv[2].split(",")]])
     elif len(sys.argv) == 6 and sys.argv[1] == "fit":
         # fit composite|joint 443,483,561,655 /radius/ power|nopower
         fit((sys.argv[2], [int(b) for b in sys.argv[3].split(",")], int(sys.argv[4]), sys.argv[5] == "power"))

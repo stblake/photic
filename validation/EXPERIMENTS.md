@@ -2172,6 +2172,40 @@ Some ICESat-2 cells plainly disagree with the image: in Figure 1's calibration p
 - **Then re-chosen by cross-validation:** the top four settings are within 0.2 points (84.6–84.8%), and the choice moves within that tie to radius 3 without `POWER` (84.8%). Test half: **90.0%**, RMSE 1.20 m, bias −0.08 m. The analyses above used the earlier choice (radius 2, `POWER`) on the unfiltered training set, and are not rerun.
 - **Figures:** `runs/gulf_lyzenga/ratio_filter/ratio_filter.png` (the calibration half against the ratio, kept and dropped, and where the dropped cells are) and `runs/gulf_lyzenga/final/icesat2_reference.png` (every reference cell, and the training cells only).
 
+### One bottom in every scene (2026-10-21, `ATTENUATION ... CONSISTENT`, `gulf_lyzenga.py consistent`)
+
+The depth-invariant indices of the scenes disagree (median between-scene r 0.17–0.38), and index 2 still correlates with depth. The bottom is the same in every scene, so requiring it should remove whatever depth enters the indices differently in each scene.
+
+- **The condition:** each scene's indices use that scene's rotation, so the same bottom gives different indices when the water differs. The right condition is one bottom vector β_b(x) (any colour) for all scenes: X_sb = β_b + c_sb − g_sb(H + h_s). Removing each band's mean over the scenes removes β_b and ḡ_b H, and leaves only the scenes' differences of attenuation, γ_sb = g_sb − ḡ_b, times the depth.
+- **What it cannot identify.** A bottom that darkens uniformly with depth, β + vH, is the same data as every scene's attenuation shifted by −v, plus a constant per scene. Only the tides separate them, through v(x)·h_s; their sd at the Gulf is 0.35 m. So ḡ_b is kept from stage 1, and consistency fits only γ and the scene constants. Depth that enters every scene alike (index 2's near-shore against offshore split, the same in all six) is exactly this mode, and consistency cannot remove it.
+- **The fit:** γ bilinear on stage 1's nodes, fitted over the image's cells (100,000 at most, plus the soundings' cells, where H is fixed). H is free at every other cell. This is bilinear, so it is solved by Gauss–Newton with each cell's H eliminated (Schur complement) and a backtracking line search.
+  - There is no smoothing penalty. Any penalty that favours small γ collapses it along the near-gauge γ → λγ, H → H/λ, which only the soundings resist (seen in the prototype).
+  - Alternating least squares was too slow along that same direction.
+- **Synthetic** (prototype, 61 × 61 cells, 6 scenes with the Gulf's tides and sun angles, 3 bands, a patchy bottom of three colours, soundings only in the western half; noise 0.01 in ln):
+
+| Depth | RMSE | East, no soundings | Hits |
+|---|---|---|---|
+| Stage 1 K, flat bottom (stage 2) | 1.52 m | 1.84 m | 52% |
+| Stage 1 K, one bottom per band | 1.33 m | 1.77 m | 71% |
+| **Consistent fit** | **0.09 m** | **0.09 m** | **100%** |
+
+  - γ's error falls from 49% to 4.6%. Freeing ḡ as well gives nothing at noise 0.01 and diverges at 0.03.
+  - With a bottom that brightens with depth, the depth stays right and the trend moves into the bottom as −δḡ·H, as derived.
+  - `make test` (`tests/con_*`, three scenes, equal tides so that ḡ drops out) recovers γ to 9e-7 and the depth to 0.14 mm. The same data without `CONSISTENT` gives 1.66 m.
+- **At the Gulf** (out of fold on cv's folds, all held-out cells; `CONSISTENT` alone and with `PRIOR 1`, a pull towards stage 1 of one average parameter's data):
+
+| Hits % (common cells) | Flat | Consistent | Consistent, prior 1 | Lyzenga | Lyzenga, `CONSTRAIN GAIN` |
+|---|---|---|---|---|---|
+| Four bands | 61.3 (65.5) | 58.6 (64.4) | 58.3 (63.5) | **84.8** (90.1) | 80.7 (90.8) |
+| 443/483/561 | 62.5 (66.7) | 56.2 (60.4) | 46.2 (49.8) | 80.7 (85.6) | **83.2** (90.0) |
+
+- **No gain.** With four bands, consistency fixes 0–2 m (9 → 40%) and 2–5 m (62 → 76%) but loses 10–20 m (64 → 44%), and its bias is +1.0 m. Test half (fitted on the whole calibration half): 65.5% against 69.9% (four bands), 67.0% against 68.4% (three bands).
+- **The free fit does not settle.** After 50 iterations its parameters still move by 0.2–1.5 per iteration while the objective changes by 1e-5: a flat valley that the data do not determine.
+- **The premise holds only in part.** At the training soundings, where H is known, depth explains 50–64% of each band's between-scene variance, even with stage 1's γ fitted there. The rest (residual sd ≈ 0.15 in ln: atmosphere, adjacency, the water-dependent apparent reflectance) is as large as the depth signal. Away from the soundings the fit absorbs it as γ·H.
+- **The indices get worse, not better.** With the consistent K, each scene's indices agree less between scenes (median r 0.18/0.32/0.65 → 0.15/0.03/0.30, four bands). The one bottom's indices correlate less with depth (+0.15, +0.14, −0.25, against +0.24 to +0.48 for index 2), but they agree poorly with any single scene's (r −0.39 to 0.76), so this is not yet a bottom map.
+- **Lyzenga et al.'s calibration constraint** (the policy variant): with three bands, `CONSTRAIN GAIN` beats the free fit out of fold (83.2 against 80.7%). With four it loses coverage (88.9% of cells with a depth) and 4 points, though it is better on the common cells.
+- **Decision:** not taken further. `CONSISTENT [PRIOR w]` stays, off by default, tested, as the formalism for scenes whose differences are dominated by water, not atmosphere. That needs either better atmospheric correction or a model of each scene's smooth additive residual, which is partly confounded with γ·H where the depth is smooth.
+
 ### Phase B order (from Phase A)
 
 1. **B1. Bottom parameterisation and starts.** One albedo per region, bounded to [0, 1], plus n_b − 1 mixing fractions, replacing B × q. Start albedo mid-range, with several starts. Bounds on P, G and X replace `fabs()`.
