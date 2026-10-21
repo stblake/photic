@@ -38,6 +38,8 @@ ICESat-2 on a split reference.
             CONSTRAIN GAIN beside them, out of fold on cv's folds; then the whole calibration half
             scored on the test half, with the indices' depth and between-scene correlations
             (consistent.json; default 4 and 3 bands)
+  consistent_plots  the indices of consistent's final runs (443/483/561) as maps, with stage 1's and
+            CONSISTENT's attenuation and the one bottom's (bottom_indices_consistent.png)
 
 Every run passes ATTENUATION (each scene's tide and ACOLITE's sun and view zeniths), so photic
 also writes K and the attenuation's depth alongside Lyzenga's.
@@ -800,6 +802,69 @@ def index_checks(rundir, nb, ns, R, water):
     return out
 
 
+def consistent_index_plots(bands=(443, 483, 561)):
+    """The indices of consistent's final run (whole calibration half): each scene's, with the
+    consistent K, and the one bottom's (K_index<i>), as anomalies from their medians, beside each
+    scene's with stage 1's K (bottom_indices_consistent.png, in the consistent run's directory)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import tier3_scenes
+    lon, lat = grid()
+    meta = json.load(open(os.path.join(OUT, "meta.json")))
+    ref = np.load(os.path.join(OUT, "reference.npz"))
+    water = water_mask()
+    nb, ns = len(bands), meta["n_scenes"]
+    tag = "-".join(map(str, bands))
+    dirs = {r: os.path.join(WORK, "consistent", "final_%s_%s" % (tag, r)) for r in ("free", "consistent")}
+    dates = scene_dates()
+
+    def read(path):
+        with NC_LOCK:
+            y = tier3_scenes.read_nc(path)
+        y[~water] = np.nan
+        return y - np.nanmedian(y)
+    checks = {r: index_checks(d, nb, ns, ref["calibration"], water) for r, d in dirs.items()}
+    # Columns: for each index, stage 1's K, then the consistent K; rows: the scenes, then the one bottom.
+    fig, axes = plt.subplots(ns + 1, 2*(nb - 1), figsize=(3.6*2*(nb - 1) + 1, 2.3*(ns + 1) + 1.0),
+                             constrained_layout=True, squeeze=False)
+    extent = (lon[0], lon[-1], lat[0], lat[-1])
+    for i in range(nb - 1):
+        maps = {r: [read(os.path.join(d, "K_index%d_s%d.nc" % (i + 1, k + 1))) for k in range(ns)] for r, d in dirs.items()}
+        one = read(os.path.join(dirs["consistent"], "K_index%d.nc" % (i + 1)))
+        lim = np.nanpercentile(np.abs(np.array(maps["free"])), 98)*np.array([-1, 1])
+        for col, r in enumerate(("free", "consistent")):
+            ch = checks[r][i]
+            ax_col = 2*i + col
+            for k in range(ns + 1):
+                ax = axes[k, ax_col]
+                if k == ns and r == "free":
+                    ax.axis("off")
+                    continue
+                z = one if k == ns else maps[r][k]
+                im = ax.imshow(z, origin="lower", extent=extent, cmap="RdBu_r", vmin=lim[0], vmax=lim[1],
+                               interpolation="nearest")
+                ax.set_aspect(1.0/np.cos(np.radians(np.mean(lat))))
+                ax.tick_params(labelsize=6)
+                if k == 0:
+                    ax.set_title("index %d, %s\n(r with depth %+.2f to %+.2f; between scenes %.2f)" % (
+                        i + 1, "stage 1 K" if r == "free" else "consistent K", min(ch["depth_correlation"]),
+                        max(ch["depth_correlation"]), ch["between_scenes_median"]), fontsize=8)
+                if k == ns:
+                    ax.set_title("index %d of the one bottom (r with depth %+.2f)" % (
+                        i + 1, ch["one_bottom_depth_correlation"]), fontsize=8)
+                if ax_col == 0:
+                    ax.set_ylabel(dates[k], fontsize=8)
+        fig.colorbar(im, ax=axes[:, 2*i:2*i + 2], location="bottom", shrink=0.8, aspect=30,
+                     label="index %d, anomaly from the median (ln units)" % (i + 1))
+    fig.suptitle("Dubai to Abu Dhabi: depth-invariant bottom indices (%s nm), with stage 1's attenuation and with "
+                 "CONSISTENT's (one bottom in every scene)" % "/".join(map(str, bands)), fontsize=11)
+    out = os.path.join(dirs["consistent"], "bottom_indices_consistent.png")
+    fig.savefig(out, dpi=100, bbox_inches="tight", pad_inches=0.15)
+    plt.close(fig)
+    print(out)
+
+
 def consistent(bands_list=None):
     """CONSISTENT (one bottom in every scene; the scenes' differences of attenuation from every cell)
     against stage 2's flat bottom, with Lyzenga's free fit (the chosen settings) and its
@@ -1292,7 +1357,8 @@ def points():
 if __name__ == "__main__":
     commands = {"prepare": prepare, "cv": cv, "fit": fit, "correlation": correlation, "points": points, "calibrate": calibrate, "errors": errors,
                 "ratio_filter": ratio_filter, "reference_maps": reference_maps,
-                "attenuation": attenuation, "consistent": consistent}
+                "attenuation": attenuation, "consistent": consistent,
+                "consistent_plots": consistent_index_plots}
     if len(sys.argv) == 3 and sys.argv[1] == "attenuation":
         attenuation([int(b) for b in sys.argv[2].split(",")])
     elif len(sys.argv) == 3 and sys.argv[1] == "consistent":

@@ -66,7 +66,9 @@ Lyzenga's 1978 paper adds two things. Dividing the error by the local gain (its 
 $\sigma$ grow where the fit saturates: beyond 15\,m, 87\% of the test errors now lie within
 $\pm1\sigma$, against 23\%. Its depth-invariant bottom indices, computed with the local
 attenuation, remove most of the depth from the signal but not all, and do not yet give a
-consistent bottom map at the Gulf.
+consistent bottom map at the Gulf. Asking for one bottom in every scene (\code{CONSISTENT}) recovers
+the depth exactly on synthetic data, but not at the Gulf, where depth explains only about half of
+the scenes' differences.
 \end{abstract}
 
 \tableofcontents
@@ -220,7 +222,8 @@ The rest of this note follows the empirical side: the inputs and the reference
 (Section~\ref{sec:lyzenga}), the attenuation behind it in two stages
 (Sections~\ref{sec:physics}--\ref{sec:stage2}), results at the Gulf (Section~\ref{sec:results}),
 Lyzenga et al.'s calibration condition (Section~\ref{sec:calibration}), the depth-invariant bottom
-indices (Section~\ref{sec:indices}), and usage (Section~\ref{sec:usage}).
+indices (Section~\ref{sec:indices}), one bottom in every scene, a negative result
+(Section~\ref{sec:consistent}), and usage (Section~\ref{sec:usage}).
 
 %============================================================================================
 \section{Notation and inputs}
@@ -1032,6 +1035,95 @@ index's correlation with the ICESat-2 depth (six scenes) and between scenes (med
 \end{figure}
 
 %============================================================================================
+\section{One bottom in every scene: a negative result}
+\label{sec:consistent}
+
+The indices of Section~\ref{sec:indices} disagree between scenes, although the bottom is the same in
+all of them. \code{ATTENUATION ...\ CONSISTENT} asks for that directly, to remove whatever depth enters
+the indices differently in each scene.
+
+\paragraph{The condition.} Each scene's indices use that scene's rotation, so the same bottom gives
+different indices when the water differs. The right condition is one bottom vector $\beta_b(\bx)$,
+of any colour, shared by the scenes:
+\begin{equation}
+  X_{sb} = \beta_b(\bx) + c_{sb} - g_{sb}(\bx)\,(H + h_s), \qquad
+  g_{sb} = \bar g_b(\bx) + \gamma_{sb}(\bx), \quad \textstyle\sum_s \gamma_{sb} = 0,
+  \label{eq:consistent}
+\end{equation}
+for band $b$ of scene $s$. Removing each band's mean over the scenes removes $\beta_b$ and
+$\bar g_b H$, and leaves only the scenes' differences of attenuation $\gamma_{sb}$, times the depth.
+\begin{itemize}
+\item \textbf{What it cannot identify.} A bottom that darkens uniformly with depth,
+  $\beta_b + v_b H$, gives the same data as every scene's attenuation shifted by $-v_b$, plus a
+  constant per scene. Only the tides separate the two, and their spread at the Gulf is 0.35\,m.
+  So $\bar g_b$ stays from stage~1, and depth that enters every scene alike cannot be removed this
+  way. Index~2's near-shore against offshore split, the same in all six scenes, is that mode.
+\item \textbf{The fit.} $\gamma_{sb}$ is bilinear on stage~1's nodes, and the scenes' constants are
+  fitted with it, over up to $10^5$ of the image's cells. $H$ is fixed at the soundings' cells and
+  free at every other. The problem is bilinear, so it is solved by Gauss--Newton with each cell's
+  $H$ eliminated, and a line search. There is no smoothing penalty: one that favours a small
+  $\gamma$ collapses it along $\gamma \to \lambda\gamma$, $H \to H/\lambda$, which only the
+  soundings resist. Stage~2 then fits one bottom per band at every cell, and \code{INDICES} adds
+  the one bottom's indices.
+\end{itemize}
+
+\paragraph{Synthetic data.} Six scenes with the Gulf's tides and sun angles, three bands, a patchy
+bottom of three colours, noise 0.01 in $\ln$, and soundings only in the western half:
+\begin{itemize}
+\item the depth's rms error falls from 1.52\,m (stage~2's flat bottom) to 0.09\,m, and to 0.09\,m
+  in the east, where there are no soundings;
+\item $\gamma$'s error falls from 49\% to 5\%.
+\end{itemize}
+\code{make test} (\code{tests/con\_*}) recovers $\gamma$ to $10^{-6}$ and the depth to 0.14\,mm, against
+1.66\,m without \code{CONSISTENT}.
+
+\paragraph{At the Gulf} (Table~\ref{tab:consistent}) it does not help.
+\begin{table}[h]
+\centering
+\caption{Hits out of fold on the calibration half's folds (all held-out cells), the attenuation's
+depth with a flat bottom and with \code{CONSISTENT}, and Lyzenga's fit, free and with
+\code{CONSTRAIN GAIN}.}
+\label{tab:consistent}
+\begin{tabular}{lrrrr}
+\toprule
+ & Flat bottom & \code{CONSISTENT} & Lyzenga & \code{CONSTRAIN GAIN} \\
+\midrule
+Four bands & 61.3\% & 58.6\% & \textbf{84.8\%} & 80.7\% \\
+443/483/561\,nm & 62.5\% & 56.2\% & 80.7\% & \textbf{83.2\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+\begin{itemize}
+\item \textbf{Mixed by depth.} With four bands it fixes 0--2\,m (9 to 40\%) and 2--5\,m (62 to 76\%),
+  but loses 10--20\,m (64 to 44\%). A pull towards stage~1 (\code{PRIOR}) does not help.
+\item \textbf{The fit does not settle.} After 50 iterations its parameters still move while the
+  objective changes by $10^{-5}$: a flat valley that the data do not determine.
+\item \textbf{The model holds only in part.} At the training soundings, where the depth is known,
+  depth explains only 50--64\% of each band's differences between scenes. The rest (residual sd
+  about 0.15 in $\ln$: atmosphere, adjacency, the water-dependent apparent reflectance) is as large
+  as the depth signal, and away from the soundings the fit takes it for $\gamma H$.
+\item \textbf{The indices get worse} (Figure~\ref{fig:consistent}). With the consistent attenuation, each
+  scene's indices agree less between scenes (median $r$ 0.20 to 0.11 for index~1, 0.32 to 0.08 for
+  index~2), and scene~4 breaks into blocks the size of the nodes. The one bottom's indices are
+  smooth and correlate less with depth ($+0.15$ and $+0.14$, against up to $+0.48$), but they
+  match no single scene's, so they are not yet a bottom map.
+\end{itemize}
+\code{CONSISTENT [PRIOR w]} stays, off by default and tested, for scenes whose differences are
+dominated by the water rather than the atmosphere. It would need better atmospheric correction,
+or a smooth additive residual per scene, which is partly confounded with $\gamma H$ where the depth
+is smooth.
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth,height=0.86\textheight,keepaspectratio]{paper/empirical_figures/bottom_indices_consistent.png}
+\caption{The depth-invariant indices (443/483/561\,nm, fitted on the calibration half) of every
+scene, with stage~1's attenuation and with \code{CONSISTENT}'s, and the indices of
+\code{CONSISTENT}'s one bottom (bottom row), as anomalies from their medians. The titles give each
+index's correlation with the ICESat-2 depth (range over the scenes) and between scenes (median).}
+\label{fig:consistent}
+\end{figure}
+
+%============================================================================================
 \section{Usage}
 \label{sec:usage}
 
@@ -1041,7 +1133,7 @@ MODEL lyzenga_log_linear GRIDS g1 ... gn BATHYMETRY H [options, any order]
   TIDE h    HUBER k    BALANCE bin    POWER [ALL]    ERROR H_error [NOISE] [GAIN]
   ATTENUATION K SCENES S [TIDES h1 ... hS] [SUNZENITH t1 ... tS]
                          [VIEWZENITH t1 ... tS] [NODES deg] [SMOOTHING w]
-  CONSTRAIN GAIN [BRIGHTNESS]    NORMALISE    INDICES
+  CONSTRAIN GAIN [BRIGHTNESS]    NORMALISE    INDICES    CONSISTENT [PRIOR w]
                              (these, and ERROR ... GAIN, need ATTENUATION)
 \end{verbatim}
 
@@ -1049,7 +1141,8 @@ MODEL lyzenga_log_linear GRIDS g1 ... gn BATHYMETRY H [options, any order]
 \begin{itemize}
 \item \code{H} and \code{H\_error};
 \item with \code{ATTENUATION}, \code{K\_/grid/} for every grid, and \code{K\_depth},
-  \code{K\_depth\_sigma} and \code{K\_bottom}; with \code{INDICES}, \code{K\_index/i/\_s/scene/};
+  \code{K\_depth\_sigma} and \code{K\_bottom}; with \code{INDICES}, \code{K\_index/i/\_s/scene/}, and
+  with \code{CONSISTENT} also the one bottom's \code{K\_index/i/};
 \item the files \code{model.bam} (the fitted model as applied), \code{output.csv} (every sounding,
   its model depth and whether it was used) and \code{attenuation.csv}.
 \end{itemize}
@@ -1062,7 +1155,9 @@ follow the models exactly:
 \item \code{tests/lyz\_*}: the coefficients and every sounding's depth;
 \item \code{tests/att\_*}: $K$ at every node, to $3\times10^{-6}$, the depth at every cell, within
   5\,mm (the float precision of the band grids), and the depth-invariant indices, within
-  $2\times10^{-3}$; then both constraints of \code{NORMALISE CONSTRAIN GAIN BRIGHTNESS}, exactly.
+  $2\times10^{-3}$; then both constraints of \code{NORMALISE CONSTRAIN GAIN BRIGHTNESS}, exactly;
+\item \code{tests/con\_*}: with \code{CONSISTENT}, the scenes' differences of attenuation and the
+  depth at every cell, for a bottom whose colour changes from cell to cell.
 \end{itemize}
 
 \section*{References}
