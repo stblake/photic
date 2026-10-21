@@ -317,7 +317,8 @@ no depth bin is more than a point worse: Huber weighting already discounts these
 It is adopted for the training soundings from 21 October 2026 (Figure~\ref{fig:reference}b). With
 it, cross-validation's top four settings are within 0.2 points (84.6--84.8\%), and its choice moves
 within that tie to radius 3 without \code{POWER}, which scores 90.0\% on the test half (RMSE
-1.20\,m). Figure~\ref{fig:lyz} is that model. The analyses of Sections~\ref{sec:lyz_error},
+1.20\,m). Figure~\ref{fig:lyz} is that model against ICESat-2, and Figure~\ref{fig:sdb} is its
+bathymetry, with its error estimate (Section~\ref{sec:lyz_error}). The analyses of Sections~\ref{sec:lyz_error},
 \ref{sec:results} and~\ref{sec:calibration} used the earlier choice (radius 2, \code{POWER}) on the
 unfiltered training set.
 
@@ -507,6 +508,18 @@ test half is held out by pass. The calibration panel shows every calibration cel
 used only those the filter keeps. Hits here count cells with a depth. Counting every
 reference cell, the test-half score is 90.0\%.}
 \label{fig:lyz}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth,height=0.86\textheight,keepaspectratio]{paper/empirical_figures/sdb_map.png}
+\caption{The satellite-derived bathymetry at the Gulf: the joint Lyzenga model of
+Figure~\ref{fig:lyz} over all 724,111 water cells. (a) The depth below mean sea level. (b) Its
+1$\sigma$ error estimate, \code{ERROR NOISE GAIN} (Section~\ref{sec:lyz_error}): median 0.75\,m,
+90th percentile 4.3\,m. The depth reaches at most 16.5\,m, though ICESat-2 finds water to 28\,m.
+Towards the north-west the signal no longer responds to depth (the saturation of
+Section~\ref{sec:calibration}), and the error estimate rises past 3\,m to flag it.}
+\label{fig:sdb}
 \end{figure}
 
 %============================================================================================

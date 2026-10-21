@@ -1317,6 +1317,46 @@ def reference_maps():
     print(out)
 
 
+def sdb_maps():
+    """The chosen model's depth over every water cell, (a) the depth and (b) its 1-sigma error
+    estimate (ERROR ... NOISE GAIN), cropped to the water (runs/gulf_lyzenga/final/sdb_map.png)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import tier3_scenes
+    lon, lat = grid()
+    rundir = os.path.join(WORK, "final")
+    water = water_mask()
+    H = -tier3_scenes.read_nc(os.path.join(rundir, "H.nc"))
+    S = tier3_scenes.read_nc(os.path.join(rundir, "H_error.nc"))
+    H[~water], S[~water] = np.nan, np.nan
+    S[~np.isfinite(H)] = np.nan
+    c = json.load(open(os.path.join(OUT, "cv.json") if os.path.exists(os.path.join(OUT, "cv.json")) else CV_PALM))["chosen"]
+    fig, axes = plt.subplots(2, 1, figsize=(10, 11), constrained_layout=True)
+    extent = (lon[0], lon[-1], lat[0], lat[-1])
+    ii, jj = np.nonzero(np.isfinite(H))
+    pad = 20*CELL
+    panels = [("(a) Depth below MSL", H, "viridis_r", 0.0, 20.0, "depth below MSL (m)"),
+              ("(b) Its 1$\\sigma$ error estimate (ERROR NOISE GAIN)", S, "magma_r", 0.0, 3.0, "1$\\sigma$ error (m)")]
+    for ax, (title, z, cmap, lo, hi, label) in zip(axes, panels):
+        ax.set_facecolor("0.85")
+        im = ax.imshow(z, origin="lower", extent=extent, cmap=cmap, vmin=lo, vmax=hi, interpolation="nearest")
+        ax.set_aspect(1.0/np.cos(np.radians(np.mean(lat))))
+        ax.set_xlim(lon[jj.min()] - pad, lon[jj.max()] + pad)
+        ax.set_ylim(lat[ii.min()] - pad, lat[ii.max()] + pad)
+        ax.set_title(title, fontsize=11)
+        ax.set_xlabel("longitude")
+        ax.set_ylabel("latitude")
+        fig.colorbar(im, ax=ax, shrink=0.85, label=label, extend="max")
+    fig.suptitle("Dubai to Abu Dhabi: Lyzenga SDB (Landsat 8, %s, %s nm, radius %d; land grey)"
+                 % ("all scenes jointly" if c.get("inputs") == "joint" else "median composite",
+                    "/".join(map(str, c["bands"])), c["radius"]), fontsize=12)
+    out = os.path.join(rundir, "sdb_map.png")
+    fig.savefig(out, dpi=130, bbox_inches="tight")
+    print(out, int(np.isfinite(H).sum()), "cells; depth max %.2f m; error median, 90th, 99th %s m"
+          % (np.nanmax(H), np.round(np.nanpercentile(S, [50, 90, 99]), 2)))
+
+
 def points():
     """Every ICESat-2 reference photon (both halves), binned to POINTS_CELL cells (the median of at
     least 3 photons spreading at most 0.5 m), drawn by photic as the bathymetry map is."""
@@ -1356,7 +1396,7 @@ def points():
 
 if __name__ == "__main__":
     commands = {"prepare": prepare, "cv": cv, "fit": fit, "correlation": correlation, "points": points, "calibrate": calibrate, "errors": errors,
-                "ratio_filter": ratio_filter, "reference_maps": reference_maps,
+                "ratio_filter": ratio_filter, "reference_maps": reference_maps, "sdb_maps": sdb_maps,
                 "attenuation": attenuation, "consistent": consistent,
                 "consistent_plots": consistent_index_plots}
     if len(sys.argv) == 3 and sys.argv[1] == "attenuation":
